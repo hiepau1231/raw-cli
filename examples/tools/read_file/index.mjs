@@ -45,7 +45,8 @@ var SOURCE_BYTES = 16 * 1024 * 1024;
 var STAGED_BYTES = 64 * 1024 * 1024;
 
 // src/tools/write-changes.ts
-import { isAbsolute as isAbsolute2, relative as relative2 } from "path";
+import { homedir } from "os";
+import { isAbsolute as isAbsolute2, relative as relative2, sep as sep2 } from "path";
 
 // src/panels/contract.ts
 var PANEL_LIMITS = {
@@ -70,9 +71,10 @@ var PANEL_LIMITS = {
 var HOST_DIFF_BYTES = 64 * 1024;
 var ENTRY_DIFF_BYTES = 8 * 1024;
 var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
+var within = (inside) => !!inside && inside !== ".." && !inside.startsWith(`..${sep2}`) && !isAbsolute2(inside);
 function displayPath(path, cwd) {
   const inside = relative2(cwd, path);
-  return inside && !inside.startsWith("..") && !isAbsolute2(inside) ? inside : path;
+  return within(inside) ? inside : path;
 }
 
 // src/tools/primitives.ts

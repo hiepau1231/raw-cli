@@ -149,7 +149,8 @@ var SOURCE_BYTES = 16 * 1024 * 1024;
 var STAGED_BYTES = 64 * 1024 * 1024;
 
 // src/tools/write-changes.ts
-import { isAbsolute as isAbsolute2, relative as relative2 } from "path";
+import { homedir } from "os";
+import { isAbsolute as isAbsolute2, relative as relative2, sep as sep2 } from "path";
 
 // src/panels/contract.ts
 var PANEL_LIMITS = {
