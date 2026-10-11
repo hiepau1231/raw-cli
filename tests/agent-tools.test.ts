@@ -100,7 +100,7 @@ test("conditional policy paths incompatible with a selected schema fail before i
   await writeFile(configPath, JSON.stringify({ default_agent: "p", models: { m: {
     provider: "ollama", method: "openai-chat-completions", model_id: "fixture" } }, agents: { p: {
       model: "m", tools: { use: ["builtin/bash"], rules: [{ match: "builtin/bash", effect: "ask",
-        when: { source: "arguments", any: "commands[*].missing", regex: "rm" } }] },
+        when: { source: "arguments", any: "missing", regex: "rm" } }] },
     } } }));
   const runtime = await loadConfig({ configPath, env: {} });
   await assert.rejects(createRuntimeTools({ runtime, cwd }), /when\.any path.*schema/);

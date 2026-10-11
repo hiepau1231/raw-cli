@@ -37,7 +37,7 @@ const call = { ...projectToolCall("read_file", "builtin/read_file", { files: [{ 
 const result = { ...projectToolResult("read_file", "builtin/read_file", { isError: false, content: [{
   type: "json", value: { results: [{ index: 0, status: "ok", path: "src/example.ts", text: "export const answer = 42;\nconsole.log(answer);\n" }] },
 }] }, 38), id: "read-1" };
-const denied = { ...projectToolCall("bash", "builtin/bash", { commands: [{ command: "rm -rf scratch" }] }, false), id: "bash-2" };
+const denied = { ...projectToolCall("bash", "builtin/bash", { command: "rm -rf scratch" }, false), id: "bash-2" };
 const stats = { requests: 2, inputTokensKnown: 2400, inputCoverage: 2, outputTokensKnown: 180,
   outputCoverage: 2, cacheReadTokensKnown: 600, cacheReadCoverage: 2, cacheWriteTokensKnown: 0,
   cacheWriteCoverage: 0, cacheRatioCoverage: 2, cacheReadRatio: 0.25 };

@@ -233,10 +233,14 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
           if(row.kind==="foreground")return reply(processes.commands.output(sessionId,id,cursor,maxBytes));
           const result=await processControls.read(sessionId,id,{action:"output",id,cursor,max_bytes:maxBytes});
           if(result.isError)throw new DashboardError(result.code==="invalid_arguments"?400:403,result.code??"process_error",result.content.map(c=>c.type==="text"?c.text:"").join("\n"));
-          const block=result.content.find(c=>c.type==="json");
-          if(!block)throw new DashboardError(500,"process_error","process output unavailable");
-          const page=block.value as import("../processes/contract.js").ProcessOutput;
-          return reply({...page,chunks:page.chunks.map(chunk=>({...chunk,text:terminalText(chunk.text)}))});
+          const page=result.host?.page;
+          if(!page)throw new DashboardError(500,"process_error","process output unavailable");
+          // The page's bytes are the result's channel blocks; the cursor line has no channel.
+          const blocks=result.content.flatMap(c=>c.type==="text"&&c.channel?[{channel:c.channel,text:c.text}]:[]);
+          // Offsets count the unsanitized bytes from the page's first byte.
+          let start=page.cursor;
+          const chunks=blocks.map(b=>{const chunk={channel:b.channel,start,end:start+Buffer.byteLength(b.text),text:terminalText(b.text)};start=chunk.end;return chunk;});
+          return reply({id,chunks,cursor:page.total,nextCursor:page.next,earliestCursor:page.earliestCursor,droppedBytes:page.droppedBytes,truncated:page.truncated});
         }
         if(id&&commandRoute[3]==="stop"&&method==="POST")return reply(processControls.submit(sessionId,id,textField((await context.readJson(request)).clientRequestId,"clientRequestId",128)),202);
         if(id&&commandRoute[3]==="controls"&&commandRoute[4]&&method==="GET"){

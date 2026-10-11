@@ -72,7 +72,8 @@ function canReachString(node: unknown, path: readonly PathStep[], index: number,
       const items = [schema.items, ...(Array.isArray(schema.prefixItems) ? schema.prefixItems : [])];
       return items.some((item) => canReachString(item, path, index, false, root, active, depth + 1));
     }
-    if (index === path.length) return allowsType(schema, "string");
+    // A leaf is a string or a scalar flag; booleans and numbers match by their JSON text (`true`, `600000`).
+    if (index === path.length) return ["string", "boolean", "number", "integer"].some((type) => allowsType(schema, type));
     if (!allowsType(schema, "object") && !(schema.type === undefined && schema.properties !== undefined)) return false;
     const step = path[index]!;
     const properties = schemaObject(schema.properties);
@@ -94,7 +95,7 @@ export function bindWhenToSchema(when: CompiledWhen, definition: ToolDefinition,
       const path = when.path.map((step) => `${step.key}${step.each ? "[*]" : ""}`).join(".");
       throw new Error(`rule path ${path} does not exist in ${identity}; the argument is now ${renamed}`);
     }
-    throw new Error(`when.any path does not resolve to a string in ${definition.name} schema`);
+    throw new Error(`when.any path does not resolve to a string, number or boolean in ${definition.name} schema`);
   }
 }
 
@@ -112,5 +113,6 @@ export function matchesWhen(when: CompiledWhen, args: Record<string, unknown>, e
     values = next;
     if (!values.length) return false;
   }
-  return values.some((value) => typeof value === "string" && when.pattern.matcher(value).find());
+  return values.some((value) => (typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value)))
+    && when.pattern.matcher(String(value)).find());
 }

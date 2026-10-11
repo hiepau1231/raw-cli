@@ -44,6 +44,13 @@ export interface ToolRegistration extends ToolDefinition {
   normalizeArguments?: (args: Record<string, unknown>) => NormalizedArguments;
   /** One canonical call, shown when arguments are rejected. */
   example?: Readonly<Record<string, unknown>>;
+  /**
+   * Bundled tools only: a call this tool hands to another tool after its own gates pass (docs/tool-ux-design.md D10).
+   * The target runs through its full dispatch (policy, hooks, approval, limits); `finish` turns its result into this
+   * tool's result. When the target is not registered, not exposed or hidden by policy, this tool's handler runs instead
+   * and says so in its result, the way it does when it was loaded without delegation.
+   */
+  delegate?: (args: Record<string, unknown>, context: { cwd: string }) => ToolDelegation | undefined;
   canonicalName?: string;
   handler: (args: Record<string, unknown>, context: ToolContext) => Promise<ToolHandlerResult>;
   validateArgs?: (args: unknown) => string | undefined;
@@ -53,6 +60,12 @@ export interface ToolRegistration extends ToolDefinition {
   implicitPanels?: boolean;
   /** Output bound for host-owned content that must arrive whole; raises, never lowers, the call's max_output_bytes. */
   outputLimit?: number;
+}
+
+export interface ToolDelegation {
+  identity: string;
+  arguments: Record<string, unknown>;
+  finish: (result: ToolResult) => ToolResult;
 }
 
 export interface ToolPolicyRule { readonly match: string; readonly effect: "allow" | "ask" | "deny"; readonly when?: ToolPolicyWhen }
@@ -249,6 +262,15 @@ export class ToolRegistry {
       if (context.signal?.aborted) return finish(errorResult("aborted", "tool call aborted"));
       if (!allowed) return finish(errorResult("approval_denied", `approval denied for ${name}`));
     }
+    // Delegation (D10): after this tool's gates, an available target runs through its own full dispatch instead of the
+    // handler. It shares the call's ID, signal, approval and hook services, never the outer call's observers, so the
+    // call stays one call on every surface with its own arguments.
+    const delegation = tool.delegate?.(args as Record<string, unknown>, { cwd: context.cwd });
+    const targetName = delegation ? this.nameForIdentity(delegation.identity) : undefined;
+    const target = targetName === undefined ? undefined : this.tools.get(targetName);
+    const delegated = delegation !== undefined && target !== undefined && targetName !== undefined
+      && (context.whitelist === undefined || context.whitelist.includes(targetName)) && this.effect(target) !== "deny";
+    const modelNotes = ignored.map((key) => `[ignored unknown argument: ${key}]`);
     let invoked = false;
     let result: ToolHandlerResult;
     try {
@@ -256,7 +278,14 @@ export class ToolRegistry {
       context.onStart?.(name, args as Record<string, unknown>);
       if (context.signal?.aborted) return finish(errorResult("aborted", "tool call aborted"));
       invoked = true;
-      result = await tool.handler(args as Record<string, unknown>, { ...context, maxOutputBytes, ...(effects ? { effects } : {}) });
+      result = delegated
+        ? delegation.finish(await this.dispatch(targetName, delegation.arguments, { cwd: context.cwd, maxOutputBytes: context.maxOutputBytes,
+          ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}), ...(context.signal ? { signal: context.signal } : {}),
+          ...(context.whitelist ? { whitelist: context.whitelist } : {}), ...(context.approve ? { approve: context.approve } : {}),
+          ...(context.autoApprove !== undefined ? { autoApprove: context.autoApprove } : {}), ...(context.onHook ? { onHook: context.onHook } : {}),
+          ...(context.processes ? { processes: context.processes } : {}), ...(context.vars ? { vars: context.vars } : {}),
+          ...(context.bashPath ? { bashPath: context.bashPath } : {}) }))
+        : await tool.handler(args as Record<string, unknown>, { ...context, maxOutputBytes, ...(effects ? { effects } : {}) });
     } catch (error) {
       result = errorResult("tool_error", `${name} failed: ${(error as Error).message}`);
     }
@@ -267,10 +296,10 @@ export class ToolRegistry {
       try { context.onPanelUpdates?.(panels); } catch { /* an observer never changes the tool outcome */ }
       result = { ...result, content: result.content.filter((block) => block.type !== "panel") };
     }
-    // Only ignored-argument notes reach the model; the other normalization notes are host data (§4.3). The output is
-    // capped first with room left for the note, so a full-sized result still tells the model what was ignored.
-    if (ignored.length) {
-      const note = ignored.map((key) => `[ignored unknown argument: ${key}]`).join("\n");
+    // Only ignored-argument and fallback notes reach the model; the other normalization notes are host data (§4.3). The
+    // output is capped first with room left for the notes, so a full-sized result still tells the model about them.
+    if (modelNotes.length) {
+      const note = modelNotes.join("\n");
       const capped = capResult(result, Math.max(0, maxOutputBytes - Buffer.byteLength(note) - 1));
       result = { ...capped, content: [...capped.content, { type: "text", text: note }] };
     }

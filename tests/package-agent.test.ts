@@ -44,9 +44,9 @@ test("packed forks and copied agent execute outside the checkout with isolated s
       { path: "must-not-write.txt", mode: "replace_lines", start_line: 2, end_line: 1,
         content: "bad", expected_sha256: "0".repeat(64) },
     ] }, "invalid-write"), done("write rejected"),
-    call("fork_bash", { commands: [{ command: "touch must-not-run.txt" }, { command: "" }] }, "invalid-bash"), done("bash rejected"),
-    call("fork_bash", { commands: [{ command: "printf safe > safe.txt" }] }, "safe-bash"), done("safe done"),
-    call("fork_bash", { commands: [{ command: "rm protected.txt" }] }, "gated-bash"),
+    call("fork_bash", { command: "touch must-not-run.txt", timeout: 0 }, "invalid-bash"), done("bash rejected"),
+    call("fork_bash", { command: "printf safe > safe.txt" }, "safe-bash"), done("safe done"),
+    call("fork_bash", { command: "rm protected.txt" }, "gated-bash"),
     done("same generation"), done("new generation"),
     call("list_skills", {}, "list-a"), call("load_skill", { name: "project" }, "load-a"),
     call("project_note", {}, "note-a"), done("agent a"),
@@ -81,7 +81,7 @@ export async function handler() { return { content: [] }; }`);
     await writeFile(configPath, JSON.stringify({ default_agent: "forks", models: { fixture: {
       provider: "openai", method: "openai-chat-completions", model_id: "fixture", base_url: provider.url,
     } }, agents: { forks: { model: "fixture", tools: { use: ["local/fork_write", "local/fork_bash"],
-      rules: [{ match: "local/fork_bash", effect: "ask", when: { source: "arguments", any: "commands[*].command", regex: "(^|[;&|()\\n])\\s*(sudo\\s+)?(/usr/bin/|/bin/)?rm(\\s|$)",
+      rules: [{ match: "local/fork_bash", effect: "ask", when: { source: "arguments", any: "command", regex: "(^|[;&|()\\n])\\s*(sudo\\s+)?(/usr/bin/|/bin/)?rm(\\s|$)",
       } }],
     } } } }));
     const env = { ...process.env, OPENAI_API_KEY: "fixture", XDG_CONFIG_HOME: xdg, XDG_STATE_HOME: join(root, "state") };
@@ -97,7 +97,7 @@ export async function handler() { return { content: [] }; }`);
     assert.match(JSON.stringify(provider.requests[1]?.body), /invalid line range/);
     assert.equal((await run(bin, [...args, "bad bash"], consumer, env)).code, 0);
     await assert.rejects(access(join(consumer, "must-not-run.txt")));
-    assert.match(JSON.stringify(provider.requests[3]?.body), /nonempty string/);
+    assert.match(JSON.stringify(provider.requests[3]?.body), /timeout must be a positive integer/);
     assert.equal((await run(bin, [...args, "safe bash"], consumer, env)).code, 0);
     assert.equal(await readFile(join(consumer, "safe.txt"), "utf8"), "safe");
     await writeFile(join(consumer, "protected.txt"), "keep");

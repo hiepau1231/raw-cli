@@ -3,7 +3,7 @@ import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
 const call = (name: string, args: unknown) => ({ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "command", type: "function", function: { name, arguments: JSON.stringify(args) } }] }, "tool_calls"), openAiDone] });
 const section = (page: import("@playwright/test").Page) => page.locator('[data-panel="__commands"]');
 test.describe("Commands foreground", () => {
-  test.use({ scenario: { agent: { tools: { use: ["builtin/bash"] } }, responses: [call("bash", { commands: [{ command: "printf 'hello commands'; exit 7" }] }), answer] } });
+  test.use({ scenario: { agent: { tools: { use: ["builtin/bash"] } }, responses: [call("bash", { command: "printf 'hello commands'; exit 7" }), answer] } });
   test("foreground failure stays compact, does not steal focus and survives reload", async ({ page, raw }) => {
     await openChat(page, raw);
     await page.getByRole("textbox", { name: "Message" }).fill("run command");
@@ -19,6 +19,21 @@ test.describe("Commands foreground", () => {
     await page.reload();
     await page.getByRole("button", { name: "Side panel", exact: true }).click();
     await expect(section(page)).toHaveCount(1);
+  });
+});
+
+test.describe("Commands background from bash", () => {
+  test.use({ scenario: { agent: { tools: { use: ["builtin/bash", "builtin/process"] } }, responses: [call("bash", { command: "printf 'bash background'; sleep 60", run_in_background: true }), answer] } });
+  test("a background bash call starts one managed job in the Commands panel", async ({ page, raw }) => {
+    await openChat(page, raw);
+    await page.getByRole("textbox", { name: "Message" }).fill("start from bash");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
+    await expect(section(page)).toBeVisible();
+    await expect(section(page).getByRole("button", { name: "Stop", exact: true })).toHaveCount(1);
+    await section(page).getByRole("button", { name: "Output", exact: true }).click();
+    await expect(section(page).locator("pre")).toContainText("bash background");
+    await expect(section(page).getByText(/Completed commands/)).toHaveCount(0);
   });
 });
 

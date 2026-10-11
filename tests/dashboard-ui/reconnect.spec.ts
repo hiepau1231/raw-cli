@@ -17,7 +17,7 @@ test.use({
                   function: {
                     name: "bash",
                     arguments:
-                      '{"commands":[{"command":"printf x >> effect; sleep 1"}]}',
+                      '{"command":"printf x >> effect; sleep 1"}',
                   },
                 },
               ],

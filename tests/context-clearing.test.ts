@@ -216,14 +216,16 @@ test("3: a result is cleared only with a secured, byte-identical copy", () => {
   } finally { setSpillTotalBytesForTests(SPILL_TOTAL_BYTES); }
 });
 
-test("3b: a panel reminder protects a result it names by call ID, saved full output, or a batch row's saved output", () => {
-  const tool = (callId: string, extra: Partial<ToolResult> = {}, rows?: unknown[]): Extract<ModelMessage, { role: "tool" }> => ({ role: "tool", callId, name: "probe",
-    result: { isError: false, content: rows ? [{ type: "json", value: { results: rows } }] : [{ type: "text", text: "x" }], ...extra } });
-  const reminders = ["[Raw panel state]\nCurrent state of Notes: see call-7 and /tmp/raw/top.log and /tmp/raw/row-2.log"];
+test("3b: a panel reminder protects a result it names by call ID or saved full output, including one in host data", () => {
+  const tool = (callId: string, extra: Partial<ToolResult> = {}): Extract<ModelMessage, { role: "tool" }> => ({ role: "tool", callId, name: "probe",
+    result: { isError: false, content: [{ type: "text", text: "x" }], ...extra } });
+  const reminders = ["[Raw panel state]\nCurrent state of Notes: see call-7 and /tmp/raw/top.log and /tmp/raw/host.log"];
   assert.equal(namedByReminder(tool("call-7"), reminders), true);
   assert.equal(namedByReminder(tool("other", { fullOutputPath: "/tmp/raw/top.log" }), reminders), true);
-  assert.equal(namedByReminder(tool("other", {}, [{ full_output: "/tmp/raw/row-1.log" }, { full_output: "/tmp/raw/row-2.log" }]), reminders), true);
-  assert.equal(namedByReminder(tool("other", { fullOutputPath: "/tmp/raw/else.log" }, [{ full_output: "/tmp/raw/row-1.log" }]), reminders), false);
+  assert.equal(namedByReminder(tool("other", { host: { fullOutputPath: "/tmp/raw/host.log" } }), reminders), true);
+  assert.equal(namedByReminder(tool("other", { fullOutputPath: "/tmp/raw/else.log", host: { fullOutputPath: "/tmp/raw/other.log" } }), reminders), false);
+  // A batch row's own saved output is no longer a pointer; bash results carry it in host data.
+  assert.equal(namedByReminder(tool("other", { content: [{ type: "json", value: { results: [{ full_output: "/tmp/raw/host.log" }] } }] }), reminders), false);
   assert.equal(namedByReminder(tool("call-7"), []), false);
 });
 

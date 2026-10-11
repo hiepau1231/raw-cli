@@ -30,7 +30,7 @@ export async function seedLibrary(raw: Raw) {
     id: "local/guard",
     files: {
       "hook.json": JSON.stringify({ protocol_version: 2, name: "guard", command: "node", args: ["./index.mjs"], timeout_ms: 4000,
-        events: [{ name: "PreToolUse", match: "builtin/bash", when: { source: "arguments", any: "commands[*].command", regex: "(^|[;& ]+)rm[ ]" } }, { name: "Stop" }] }),
+        events: [{ name: "PreToolUse", match: "builtin/bash", when: { source: "arguments", any: "command", regex: "(^|[;& ]+)rm[ ]" } }, { name: "Stop" }] }),
       "index.mjs": "process.stdout.write('{}');\n",
     },
   });

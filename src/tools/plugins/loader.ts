@@ -122,7 +122,7 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
   }
   const result: ToolPlugin[] = [];
   for (const item of prepared) {
-    let entry: { handler?: unknown; validateArgs?: unknown; describeEffects?: unknown; normalizeArguments?: unknown; example?: unknown; renamedArguments?: unknown };
+    let entry: { handler?: unknown; validateArgs?: unknown; describeEffects?: unknown; normalizeArguments?: unknown; example?: unknown; renamedArguments?: unknown; delegate?: unknown };
     try { entry = await import(`${pathToFileURL(item.entryPath).href}?raw_source=${item.sourceDigest}`) as typeof entry; }
     catch { throw new Error(`selected tool entry failed to load: ${item.id}`); }
     if (typeof entry.handler !== "function" || (entry.validateArgs !== undefined && typeof entry.validateArgs !== "function")) {
@@ -135,6 +135,7 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
     const bundled = !options.packageTools?.[item.id] && item.id.startsWith("builtin/");
     const plainObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
     if (bundled && entry.normalizeArguments !== undefined && typeof entry.normalizeArguments !== "function") throw new Error(`invalid argument normalizer: ${item.id}`);
+    if (bundled && entry.delegate !== undefined && typeof entry.delegate !== "function") throw new Error(`invalid delegation: ${item.id}`);
     const registration: ToolRegistration = {
       name: options.packageTools?.[item.id]?.as ?? item.manifest.name,
       canonicalName: options.packageTools?.[item.id]?.canonicalIdentity ?? item.id,
@@ -147,6 +148,7 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
         ? { normalizeArguments: entry.normalizeArguments as NonNullable<ToolRegistration["normalizeArguments"]> } : {}),
       ...(bundled && plainObject(entry.example) ? { example: entry.example } : {}),
       ...(bundled && plainObject(entry.renamedArguments) ? { renamedArguments: entry.renamedArguments as Record<string, string> } : {}),
+      ...(bundled && typeof entry.delegate === "function" ? { delegate: entry.delegate as NonNullable<ToolRegistration["delegate"]> } : {}),
       ...(!options.packageTools?.[item.id] && hostContentTools.has(item.id) ? { outputLimit: HOST_CONTENT_BYTES } : {}),
       validateArgs(args) {
         let error: unknown;

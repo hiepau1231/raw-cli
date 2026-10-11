@@ -7,9 +7,9 @@ import type { SessionOperation } from "../src/sessions/operations.js";
 
 test("conditional Bash approval gates only matching arguments and first answer wins across tabs", async () => {
   const call = (id: string, command: string) => ({ frames: [openAiFrame({ tool_calls: [{ index: 0, id, type: "function",
-    function: { name: "bash", arguments: JSON.stringify({ commands: [{ command }] }) } }] }, "tool_calls"), openAiDone] });
+    function: { name: "bash", arguments: JSON.stringify({ command }) } }] }, "tool_calls"), openAiDone] });
   const f = await dashboardFixture({ agent: { tools: { use: ["builtin/bash"], rules: [
-    { match: "builtin/bash", effect: "ask", when: { source: "arguments", any: "commands[*].command", regex: "^rm\\b" } },
+    { match: "builtin/bash", effect: "ask", when: { source: "arguments", any: "command", regex: "^rm\\b" } },
   ] } }, responses: [call("safe", "printf safe"), call("gate", "rm not-present"), { frames: [openAiFrame({ content: "denied safely" }, "stop"), openAiDone] }] });
   try {
     const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root });
@@ -37,7 +37,7 @@ test("conditional Bash approval gates only matching arguments and first answer w
 for (const action of ["expire", "cancel"] as const) test(`pending approval can ${action} without a connected subscriber or tool effect`, async () => {
   // Approval expiry no longer follows request_timeout_ms; the environment can shorten it.
   const f = await dashboardFixture({ env: { RAW_APPROVAL_TIMEOUT_MS: "500" }, agent: { tools: { use: ["builtin/bash"], rules: [{ match: "builtin/bash", effect: "ask" }] } }, responses: [
-    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "pending", type: "function", function: { name: "bash", arguments: '{"commands":[{"command":"printf forbidden"}]}' } }] }, "tool_calls"), openAiDone] },
+    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "pending", type: "function", function: { name: "bash", arguments: '{"command":"printf forbidden"}' } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "not executed" }, "stop"), openAiDone] },
   ] });
   try {

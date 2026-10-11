@@ -181,8 +181,8 @@ async function artifactsFor(spec, fixture) {
         const assets = await createRuntimeTools({ runtime, cwd });
         try {
           const ctx = { cwd, maxOutputBytes: 8192, autoApprove: true };
-          const safe = await assets.registry.dispatch("bash", { commands: [{ command: "printf harmless" }] }, ctx);
-          const denied = await assets.registry.dispatch("bash", { commands: [{ command: "rm host-must-not-execute.txt" }] }, ctx);
+          const safe = await assets.registry.dispatch("bash", { command: "printf harmless" }, ctx);
+          const denied = await assets.registry.dispatch("bash", { command: "rm host-must-not-execute.txt" }, ctx);
           check(`${dir} conditional rm policy`, !safe.isError && denied.isError && /approval|ask/i.test(JSON.stringify(denied)));
         } finally { await assets.mcp.close(); }
       }

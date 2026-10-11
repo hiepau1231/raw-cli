@@ -8,7 +8,7 @@ import type { VariableContext } from "../vars/contract.js";
 import { open, mkdir, writeFile, readFile, appendFile, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
-import { runBashDetailed, type BashRender } from "./process.js";
+import { runBash } from "./process.js";
 import { elideMiddle, errorResult, indexedResult, indexedResultFits, utf8Prefix, type IndexedResult } from "./results.js";
 import { savedLabel, spillText } from "./spill.js";
 import type { ToolResult } from "./types.js";
@@ -312,90 +312,67 @@ export async function writeFileTool(args: { operations: WriteOperation[]; patch?
   return indexedResult(rows, context.maxOutputBytes, rows.some((row) => row.status !== "ok"));
 }
 
-export async function bashTool(args: { commands: Array<{ command: string; timeout_ms?: number; env_refs?: Record<string, string> }> }, context: ToolContext): Promise<ToolResult> {
-  const reserve = (index: number): IndexedResult => ({ index, status: "error", exit_code: 2147483647,
-    signal: "SIGKILL", timed_out: true, truncated: true, stdout: "", stderr: "", observed_bytes: 2147483647,
-    error: "x".repeat(80) });
-  const rows: IndexedResult[] = args.commands.map((_, index) => reserve(index));
-  if (!indexedResultFits(rows, context.maxOutputBytes)) {
-    return errorResult("output_budget_too_small", "bash batch outcomes exceed output budget");
-  }
-  for (const command of args.commands) if (command.env_refs && Object.keys(command.env_refs).length) {
-    if (!context.vars) return errorResult("vars_unavailable", "variable services are unavailable");
-    try { context.vars.validateEnvRefs(command.env_refs); }
-    catch (error) { return errorResult("var_env_refs_invalid", error instanceof Error ? error.message : "invalid variable references"); }
-  }
-  let stopped = false;
-  let stopReason = "prior_timeout";
-  for (const [index, command] of args.commands.entries()) {
-    if (stopped || context.signal?.aborted) {
-      rows[index] = { index, status: "skipped", error: context.signal?.aborted ? "aborted" : stopReason };
-      continue;
-    }
-    const serialized = Buffer.byteLength(JSON.stringify({ results: rows }), "utf8");
-    const share = Math.max(0, Math.floor((context.maxOutputBytes - serialized) / (args.commands.length - index)));
-    const reservedItemBytes = Buffer.byteLength(JSON.stringify(rows[index]), "utf8");
-    let result: ToolResult;
-    let render: BashRender | undefined;
-    let bindings: Record<string, string> | undefined;
+export const BASH_DEFAULT_TIMEOUT_MS = 120000;
+export const BASH_MAX_TIMEOUT_MS = 600000;
+/** Room kept beside the output for the status line and a clamp note. */
+const BASH_STATUS_RESERVE = 256;
+const BACKGROUND_IGNORED = "[ignored run_in_background: background jobs need the process tool; ran in the foreground]";
+
+export interface BashArgs { command: string; timeout?: number; description?: string; workdir?: string; run_in_background?: boolean;
+  env_refs?: Record<string, string> }
+
+function seconds(ms: number): string { return `${(ms / 1000).toFixed(1)}s`; }
+
+/**
+ * One Bash command (docs/tool-ux-design.md §4.2): the output in production order, then one status line such as
+ * `[exit 0 · 1.2s]`. A nonzero exit is not an error; a timeout or abort is, and stops the process group.
+ */
+export async function bashTool(args: BashArgs, context: ToolContext): Promise<ToolResult> {
+  const cwd = args.workdir === undefined ? context.cwd : resolve(context.cwd, args.workdir);
+  const requested = args.timeout ?? BASH_DEFAULT_TIMEOUT_MS;
+  const timeout = Math.min(requested, BASH_MAX_TIMEOUT_MS);
+  const summary = utf8Prefix(args.command.split("\n", 1)[0]!, 200).text;
+  const host = (status: NonNullable<NonNullable<ToolResult["host"]>["status"]>, extra: NonNullable<ToolResult["host"]> = {}): NonNullable<ToolResult["host"]> =>
+    ({ summary, status, ...(args.description ? { description: args.description } : {}), ...extra });
+  let bindings: Record<string, string> | undefined;
+  if (args.env_refs && Object.keys(args.env_refs).length) {
+    if (!context.vars) return { ...errorResult("vars_unavailable", "variable services are unavailable"), host: host("error") };
     try {
-      if (command.env_refs && Object.keys(command.env_refs).length) bindings = await context.vars!.resolveEnv(command.env_refs, { ...(context.signal ? { signal: context.signal } : {}) });
+      context.vars.validateEnvRefs(args.env_refs);
+      bindings = await context.vars.resolveEnv(args.env_refs, { ...(context.signal ? { signal: context.signal } : {}) });
     } catch (error) {
-      const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "var_error";
-      rows[index] = { index, status: context.signal?.aborted ? "aborted" : "error", error: code };
-      stopped = true; stopReason = "prior_var_error"; continue;
+      const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "var_env_refs_invalid";
+      return { ...errorResult(code, error instanceof Error ? error.message : "invalid variable references"), host: host("error") };
     }
-    let activity: ReturnType<CommandActivity["begin"]> | undefined;
-    try { activity = context.commandActivity?.begin(command.command, context.cwd); } catch { /* UI persistence cannot change Bash execution. */ }
-    try {
-      ({ result, render } = await runBashDetailed({ command: command.command, cwd: context.cwd, maxOutputBytes: share,
-        ...(activity ? { onOutput: activity.output } : {}),
-        ...(bindings ? { env: { ...process.env, ...bindings } } : {}),
-        ...(command.timeout_ms !== undefined ? { timeoutMs: command.timeout_ms } : {}),
-        ...(context.signal ? { signal: context.signal } : {}),
-        ...(context.bashPath ? { bashPath: context.bashPath } : {}),
-      }));
-    } catch (error) {
-      result = errorResult("bash_error", (error as Error).message);
-    }
-    try { activity?.finish(result); } catch { /* UI persistence cannot change the completed Bash outcome. */ }
-    let stdout = result.content.flatMap((item) => item.type === "text" && item.channel === "stdout" ? [item.text] : []).join("");
-    let stderr = result.content.flatMap((item) => item.type === "text" && item.channel === "stderr" ? [item.text] : []).join("");
-    const status = result.code === "aborted" || context.signal?.aborted ? "aborted"
-      : result.code === "timeout" || result.timedOut ? "timeout" : result.isError ? "error" : "ok";
-    let fullOutput = result.fullOutputPath;
-    let fullOutputCapped = result.fullOutputCapped === true;
-    const candidate = (): IndexedResult => ({ index, status, exit_code: result.exitCode ?? null,
-      signal: result.signal ?? null, timed_out: result.timedOut ?? false,
-      truncated: Boolean(result.truncated || stdout !== originalStdout || stderr !== originalStderr),
-      stdout, stderr, observed_bytes: result.observedBytes ?? 0,
-      ...(status === "error" ? { error: result.code ?? "bash_error" } : {}),
-      ...(fullOutput ? { full_output: fullOutput } : {}) });
-    const originalStdout = stdout;
-    const originalStderr = stderr;
-    const fits = () => {
-      const check = [...rows];
-      check[index] = candidate();
-      const addedBytes = Buffer.byteLength(JSON.stringify(check[index]), "utf8") - reservedItemBytes;
-      return addedBytes <= share && indexedResultFits(check, context.maxOutputBytes);
-    };
-    // JSON escaping can still overflow the share: rebuild both channels for a smaller budget, keeping start and end.
-    if (!fits() && !fullOutput) {
-      ({ path: fullOutput, capped: fullOutputCapped } = spillText("bash", `${originalStdout}${originalStderr ? `${originalStdout ? "\n" : ""}[stderr]\n${originalStderr}` : ""}`));
-    }
-    for (let limit = Buffer.byteLength(stdout) + Buffer.byteLength(stderr); !fits() && limit > 0;) {
-      limit = Math.floor(limit * 3 / 4);
-      const saved = savedLabel(fullOutput, fullOutputCapped);
-      if (render) ({ stdout, stderr } = render(limit, saved));
-      else {
-        stdout = elideMiddle(stdout, Math.floor(limit / 2), saved).text;
-        stderr = elideMiddle(stderr, limit - Buffer.byteLength(stdout), saved).text;
-      }
-    }
-    // A budget too small for the saved-output path still reports the command; the path is the first thing dropped.
-    if (!fits() && fullOutput) fullOutput = undefined;
-    rows[index] = fits() ? candidate() : { index, status: "error", error: "result_budget_exhausted" };
-    if (status === "aborted" || status === "timeout") stopped = true;
   }
-  return indexedResult(rows, context.maxOutputBytes, rows.some((row) => row.status !== "ok"));
+  let activity: ReturnType<CommandActivity["begin"]> | undefined;
+  try { activity = context.commandActivity?.begin(args.command, cwd); } catch { /* UI persistence cannot change Bash execution. */ }
+  const started = performance.now();
+  let result: ToolResult;
+  try {
+    result = await runBash({ command: args.command, cwd, maxOutputBytes: Math.max(0, context.maxOutputBytes - BASH_STATUS_RESERVE),
+      timeoutMs: timeout,
+      ...(activity ? { onOutput: activity.output } : {}),
+      ...(bindings ? { env: { ...process.env, ...bindings } } : {}),
+      ...(context.signal ? { signal: context.signal } : {}),
+      ...(context.bashPath ? { bashPath: context.bashPath } : {}),
+    });
+  } catch (error) {
+    result = errorResult("bash_error", (error as Error).message);
+  }
+  try { activity?.finish(result); } catch { /* UI persistence cannot change the completed Bash outcome. */ }
+  const durationMs = Math.round(performance.now() - started);
+  if (result.code === "bash_spawn_error" || result.code === "bash_error") return { ...result, host: host("error", { durationMs }) };
+  const aborted = result.code === "aborted" || context.signal?.aborted === true;
+  const status = aborted ? `[aborted after ${seconds(durationMs)}; process group stopped]`
+    : result.timedOut ? `[timed out after ${timeout / 1000}s; process group stopped]`
+      : result.exitCode === null || result.exitCode === undefined ? `[killed by ${result.signal ?? "signal"} · ${seconds(durationMs)}]`
+        : `[exit ${result.exitCode} · ${seconds(durationMs)}]`;
+  // Reached with run_in_background only when the call was not handed to the process tool.
+  const notes = [...(requested > BASH_MAX_TIMEOUT_MS ? [`[timeout clamped to ${BASH_MAX_TIMEOUT_MS} ms]`] : []),
+    ...(args.run_in_background === true ? [BACKGROUND_IGNORED] : [])];
+  return { ...result, content: [...result.content, { type: "text", text: [status, ...notes].join("\n") }],
+    host: host(aborted ? "cancelled" : result.timedOut ? "timeout" : "ok", { durationMs,
+      exitCode: result.exitCode ?? null, signal: result.signal ?? null,
+      ...(result.fullOutputPath ? { fullOutputPath: result.fullOutputPath, ...(result.fullOutputCapped ? { fullOutputCapped: true } : {}) } : {}) }) };
 }

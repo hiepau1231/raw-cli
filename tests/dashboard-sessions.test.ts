@@ -15,7 +15,7 @@ import { compactionInput, isCompactionRequest } from "./fixtures/compaction.js";
 test("HTTP duplicate submissions execute one real Bash effect and return the saved receipt", async () => {
   const f = await dashboardFixture({ agent: { tools: { use: ["builtin/bash"] } }, responses: [
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "effect", type: "function", function: { name: "bash",
-      arguments: JSON.stringify({ commands: [{ command: "printf x >> effect.txt" }] }) } }] }, "tool_calls"), openAiDone] },
+      arguments: JSON.stringify({ command: "printf x >> effect.txt" }) } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "done" }, "stop"), openAiDone] },
   ] });
   try {
@@ -179,7 +179,7 @@ for (const target of ["startup", "provider", "compact"] as const) test(`HTTP Sto
 
 test("HTTP Stop interrupts a real Bash child while another tab can still observe the terminal receipt", async () => {
   const f = await dashboardFixture({ agent: { tools: { use: ["builtin/bash"] } }, responses: [{ frames: [openAiFrame({ tool_calls: [
-    { index: 0, id: "sleep", type: "function", function: { name: "bash", arguments: '{"commands":[{"command":"sleep 30"}]}' } },
+    { index: 0, id: "sleep", type: "function", function: { name: "bash", arguments: '{"command":"sleep 30"}' } },
   ] }, "tool_calls"), openAiDone] }] });
   try {
     const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root });

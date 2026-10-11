@@ -32,7 +32,7 @@ export interface VisibleToolResult {
 
 const PREVIEW_CHARS = 2000;
 const PREVIEW_LINES = 9;
-const builtins = new Set(["builtin/read_file", "builtin/write_file", "builtin/bash"]);
+const builtins = new Set(["builtin/read_file", "builtin/write_file"]);
 
 export function projectToolCall(name: string, identity: string | undefined, args: Record<string, unknown>, started: boolean): VisibleToolCall {
   if (identity === "builtin/write_file") {
@@ -122,10 +122,11 @@ export function projectToolResult(name: string, identity: string | undefined, re
       }
     } else addLines(lines, "json", JSON.stringify(value));
   }
+  const exitCode = result.exitCode ?? result.host?.exitCode;
   return { name, ...(identity ? { identity } : {}), failed: result.isError
-      || (typeof result.exitCode === "number" && result.exitCode !== 0)
+      || (typeof exitCode === "number" && exitCode !== 0)
       || rows.some((row) => row.status !== "ok"),
-    ...(result.code ? { code: result.code } : {}), ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+    ...(result.code ? { code: result.code } : {}), ...(exitCode !== undefined ? { exitCode } : {}),
     truncated: result.truncated ?? false,
     ...(durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs: Math.round(durationMs) } : {}),
     rows, segments: bounded(lines), ...(result.host ? { host: structuredClone(result.host) } : {}) };

@@ -25,7 +25,7 @@ function config(url: string) { return { default_agent: "raw", models: { m: { pro
 test("real CLI resume reads current values while retaining prefix, key, history and reference arguments; SDK resumes same session", async () => {
   const root = mkdtempSync(join(tmpdir(), "raw-vars-session-")); const path = join(root, "config.json");
   const env = { ...process.env, XDG_CONFIG_HOME: join(root, "config"), XDG_STATE_HOME: join(root, "state"), OPENAI_API_KEY: "fixture", RAW_TEST_TOKEN: "unique-use-value-48271" };
-  const provider = await startMockProvider([call("list_vars", {}, "list"), call("read_var", { name: "live" }, "read"), call("bash", { commands: [{ command: 'printf %s "$TOKEN" > received', env_refs: { TOKEN: "token" } }] }, "bind"), answer,
+  const provider = await startMockProvider([call("list_vars", {}, "list"), call("read_var", { name: "live" }, "read"), call("bash", { command: 'printf %s "$TOKEN" > received', env_refs: { TOKEN: "token" } }, "bind"), answer,
     call("read_var", { name: "live" }, "read2"), answer]);
   try {
     const doc = config(provider.url); writeFileSync(path, JSON.stringify(doc)); writeFileSync(join(root, "live.txt"), "before");

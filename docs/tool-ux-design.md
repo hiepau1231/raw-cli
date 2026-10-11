@@ -2,7 +2,7 @@
 
 This design makes Raw's built-in tools easy for any model to call. It also makes every tool readable in the CLI and the dashboard, and brings the dashboard side panel up to the standard of common editor UIs.
 
-Status: proposed 2026-10-11. Phase 1 (normalization, host data, value-safe JSON capping) implemented; phases 2–9 not yet. No backward compatibility: the user decided (2026-10-11) that the old argument shapes, rule paths and panel owner are replaced, not kept. Update this file whenever a decision changes. User-facing behavior moves to `tools.md`, `dashboard.md`, `terminal-output.md` and `panels-design.md` as each phase lands.
+Status: proposed 2026-10-11. Phases 1 (normalization, host data, value-safe JSON capping) and 2 (single-command `bash` with background delegation, flat `process`) implemented; phases 3–9 not yet. No backward compatibility: the user decided (2026-10-11) that the old argument shapes, rule paths and panel owner are replaced, not kept. Update this file whenever a decision changes. User-facing behavior moves to `tools.md`, `dashboard.md`, `terminal-output.md` and `panels-design.md` as each phase lands.
 
 ## Contents
 
@@ -139,7 +139,7 @@ No harness uses a batch array of commands or files. Models run several commands 
 - `timeout` is in milliseconds, default 120000, maximum 600000. A value above the maximum is clamped, with a note. Seconds are accepted only through the explicit aliases `timeout_s` and `timeout_seconds`.
 - `description` is optional, at most 200 characters, and is shown as the call's title on every surface.
 - **`run_in_background`** (optional boolean; aliases `is_background` and `background`). Decided by the user (2026-10-11, D10): a background call starts a managed job through the existing process manager instead of running in the foreground.
-  - **Delegation.** The call is still a `bash` call for policy, hooks and approval, with `run_in_background: true` in its normalized arguments (also in the fallback case), so rules can condition on it. After the bash gates pass, the host dispatches `process {action: "start", command, cwd, label: description, env_refs, timeout_ms: timeout}` through the normal registry path, so the `builtin/process` policy, hooks, approval and limits apply too. The nested dispatch shares the outer call's ID, signal, approval and hook services, but not its lifecycle observers: there is one `bash` call on every surface, with its own arguments. `timeout` is passed only when the model gave one: a background job has no default timeout.
+  - **Delegation.** The call is still a `bash` call for policy, hooks and approval, with `run_in_background: true` in its normalized arguments (also in the fallback case), so rules can condition on it. After the bash gates pass, the host dispatches `process {action: "start", command, cwd, label: description, env_refs, timeout}` through the normal registry path, so the `builtin/process` policy, hooks, approval and limits apply too. The nested dispatch shares the outer call's ID, signal, approval and hook services, but not its lifecycle observers: there is one `bash` call on every surface, with its own arguments. `timeout` is passed only when the model gave one: a background job has no default timeout.
   - **Result.** `Started background job <id> (<command>).` followed by the two follow-up calls, `process {"action":"output","id":"<id>"}` and `process {"action":"stop","id":"<id>"}`. Host data carries the job ID. The job appears in the Commands panel like any `process` job. A refusal reached inside the `process` dispatch (a rejected approval, a blocking hook, limits, an unsupported platform) is returned as that error, and nothing runs in the foreground.
   - **Degrade.** When `builtin/process` is not selected for the agent, not exposed to the call, or hidden by an unconditional `deny` rule, the bash gates still run with the flag; then the flag is ignored with the note `[ignored run_in_background: background jobs need the process tool; ran in the foreground]` and the command runs in the foreground under its timeout.
 - `env_refs` is unchanged from today, for one command.
@@ -224,7 +224,8 @@ No harness uses a batch array of commands or files. Models run several commands 
 - Results become short text (`Started proc_3 · npm run dev`, a status table, an output page with `[next cursor: 18432]`). The structured value moves to host metadata.
 - **Aliases:**
   - `timeout_ms` maps to `timeout`;
-  - `process_id`, `shell_id` and `bash_id` map to `id`.
+  - `process_id`, `shell_id` and `bash_id` map to `id`;
+  - a field the chosen action does not use is dropped with a host note instead of failing the call.
 
 **`ask_user`**
 
@@ -289,7 +290,7 @@ No harness uses a batch array of commands or files. Models run several commands 
   - Optional fields:
     - `exitCode`, `signal`;
     - `fullOutputPath`, replacing the batch row's `full_output`;
-    - `page`: a process output page with its `cursor` and `next`;
+    - `page`: a process output page's position (`cursor` of its first byte, `next`, the job's `total` bytes, `earliestCursor`, `droppedBytes`, `truncated`); its bytes are the result's channel text blocks, so they are not stored twice;
     - `processId`: the job a background `bash` call or `process` start created;
     - `files`: `[{path, action: create|overwrite|edit|delete|rename, added, removed, destination?}]`;
     - `diff`: a unified diff, at most 64 KiB, otherwise omitted with `diffOmitted: true`.

@@ -108,7 +108,7 @@ test("expired replay resets to a paged UTF-8 live segment and cleans the spool a
 test("two tabs converge after disconnecting during a real tool with one sentinel effect", async () => {
   const f = await dashboardFixture({ agent: { tools: { use: ["builtin/bash"] } }, responses: [
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "once", type: "function", function: { name: "bash",
-      arguments: '{"commands":[{"command":"printf x >> sentinel; sleep 0.1"}]}' } }] }, "tool_calls"), openAiDone] },
+      arguments: '{"command":"printf x >> sentinel; sleep 0.1"}' } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "done" }, "stop"), openAiDone] },
   ] });
   try {

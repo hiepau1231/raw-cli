@@ -18,14 +18,18 @@ test("Commands projects background output and audited Stop while a model lease i
   try {
     const s = await f.json<SessionSummary>("/sessions", "POST", {cwd:f.root,agent:"raw"});
     const store = f.server.context.store!;
-    const process = await f.server.context.processes!.forSession(s.id).start({command:"printf '\\033[31mhello\\033[0m'; sleep 20",cwd:f.root});
+    const process = await f.server.context.processes!.forSession(s.id).start({command:"printf '\\033[31mhello\\033[0m'; sleep 0.1; printf 'é' >&2; sleep 20",cwd:f.root});
     await new Promise(resolve => setTimeout(resolve, 300));
     const owner = store.claimSession(s.id);
     try {
       const rows = await f.json<{items:CommandRecord[]}>(`/sessions/${s.id}/commands`);
       assert.equal(rows.items[0]?.kind, "background");
-      const page = await f.json<{chunks:Array<{text:string}>}>(`/sessions/${s.id}/commands/${process.id}/output`);
-      assert.equal(page.chunks.map(c=>c.text).join(""), "hello");
+      const page = await f.json<{chunks:Array<{channel:string;start:number;end:number;text:string}>;cursor:number;nextCursor:number}>(`/sessions/${s.id}/commands/${process.id}/output`);
+      assert.equal(page.chunks.map(c=>c.text).join(""), "helloé");
+      // Offsets count the unsanitized bytes: 14 for the colored hello, 2 for é.
+      assert.deepEqual(page.chunks.map(c=>[c.channel,c.start,c.end]), [["stdout",0,14],["stderr",14,16]]);
+      assert.deepEqual([page.cursor,page.nextCursor],[16,16]);
+      assert.deepEqual((await f.json<{chunks:unknown[];nextCursor:number}>(`/sessions/${s.id}/commands/${process.id}/output?cursor=14`)).chunks,[{channel:"stderr",start:14,end:16,text:"é"}]);
       const body = {clientRequestId:"stop-one"};
       const a = await f.json<ProcessControl>(`/sessions/${s.id}/commands/${process.id}/stop`, "POST", body);
       const b = await f.json<ProcessControl>(`/sessions/${s.id}/commands/${process.id}/stop`, "POST", body);
@@ -49,9 +53,9 @@ test("Stop cannot bypass selected Process policy or cross session ownership",asy
     assert.equal(f.server.context.processes!.forSession(a.id).status(p.id).state,"running");
   } finally {await f.close();}
 });
-test("foreground nonzero Bash is a failed durable command without changing batch transport",async()=>{
+test("foreground nonzero Bash is a failed durable command while the model result stays a reported exit",async()=>{
   const f=await dashboardFixture({agent:{tools:{use:["builtin/bash"]}},responses:[
-    {frames:[openAiFrame({tool_calls:[{index:0,id:"shell",type:"function",function:{name:"bash",arguments:JSON.stringify({commands:[{command:"printf foreground; exit 3"}]})}}]},"tool_calls"),openAiDone]},
+    {frames:[openAiFrame({tool_calls:[{index:0,id:"shell",type:"function",function:{name:"bash",arguments:JSON.stringify({command:"printf foreground; exit 3"})}}]},"tool_calls"),openAiDone]},
     {frames:[openAiFrame({content:"done"},"stop"),openAiDone]}]});
   try {
     const s=await f.json<SessionSummary>("/sessions","POST",{cwd:f.root,agent:"raw"});
@@ -59,8 +63,10 @@ test("foreground nonzero Bash is a failed durable command without changing batch
     await f.wait(op.id);
     const rows=await f.json<{items:CommandRecord[]}>(`/sessions/${s.id}/commands`);
     assert.equal(rows.items.length,1);assert.equal(rows.items[0]?.state,"failed");assert.equal(rows.items[0]?.exitCode,3);
-    const history=await f.json<{items:unknown[]}>(`/sessions/${s.id}/history`);
-    assert.ok(JSON.stringify(history).includes('\\"status\\":\\"ok\\"')||JSON.stringify(history).includes('"status":"ok"'));
+    const history=await f.json<{items:Array<{toolResult?:{code?:string;host?:{status?:string;exitCode?:number|null};segments:Array<{text:string}>}}>}>(`/sessions/${s.id}/history`);
+    const result=history.items.find(item=>item.toolResult)?.toolResult;
+    assert.equal(result?.code,undefined);assert.equal(result?.host?.status,"ok");assert.equal(result?.host?.exitCode,3);
+    assert.match(result!.segments.map(segment=>segment.text).join("\n"),/\[exit 3 · /);
     const output=await f.json<{chunks:Array<{text:string}>}>(`/sessions/${s.id}/commands/${rows.items[0]!.id}/output`);
     assert.equal(output.chunks.map(c=>c.text).join(""),"foreground");
   } finally {await f.close();}
@@ -83,10 +89,9 @@ test("deleting a session forgets foreground rows and cannot resurrect them at sh
 test("foreground UI observer failures do not change Bash side effects or outcomes",async()=>{
   const {bashTool}=await import("../src/tools/primitives.js");
   for(const fail of ["begin","finish"]){
-    const result=await bashTool({commands:[{command:"printf preserved; exit 7"}]},{cwd:process.cwd(),maxOutputBytes:4096,
+    const result=await bashTool({command:"printf preserved; exit 7"},{cwd:process.cwd(),maxOutputBytes:4096,
       commandActivity:{begin(){if(fail==="begin")throw new Error("disk full");return {output(){throw new Error("output observer");},finish(){throw new Error("disk full");}}}}});
-    const block=result.content.find(c=>c.type==="json");assert.ok(block);
-    const rows=(block.value as {results:Array<{status:string;exit_code:number;stdout:string}>}).results;
-    assert.equal(rows[0]?.status,"ok");assert.equal(rows[0]?.exit_code,7);assert.equal(rows[0]?.stdout,"preserved");
+    assert.equal(result.isError,false);assert.equal(result.host?.exitCode,7);
+    assert.match(result.content.map(c=>c.type==="text"?c.text:"").join(""),/^preserved\n?\[exit 7 · /);
   }
 });

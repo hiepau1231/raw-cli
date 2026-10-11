@@ -8,7 +8,7 @@ its `tool.json` (`id` must match the new folder), then select `local/<new-id>`
 in `tools.use`. These generated `.mjs` files run directly; rebuild Raw only
 when changing its TypeScript source. A fork runs with the user's full OS
 permissions, so inspect its handler and keep semantic `validateArgs` checks
-when changing a batch tool.
+when changing a tool.
 
 `examples/agents/project-helper/` is a complete copyable directory with
 `raw.json`, `prompt.md`, `tools/`, and `skills/`. Copy it anywhere, set the
@@ -22,8 +22,8 @@ standalone `index.mjs`. The manifest declares `api_version: 2`, `id`, `version`,
 `name`, `description`, `input_schema`, and `entry: "./index.mjs"`. The entry
 exports an async `handler(args, context)` and may export a synchronous
 `validateArgs(args)` that returns an error string or `undefined`. The host
-validates the full batch before approval or execution. The read, write, and
-Bash entries retain their semantic batch validators, including mode-specific
+validates the full call before approval or execution. The read, write, and
+Bash entries retain their semantic validators, including mode-specific
 write fields and ordered line ranges, even where JSON Schema alone is too
 broad. Results, abort behavior, and byte caps remain host-controlled.
 
@@ -102,7 +102,7 @@ The other two shipped plugins, `builtin/list_skills` and `builtin/load_skill`, e
 |---|---|---|---|
 | `read_file` | `files: array` (1–16 entries with `path: string`) | Per entry: `start_line`, `end_line`, `max_lines`, `max_bytes` | Read several UTF-8 files with an independent selection per file. |
 | `write_file` | `operations: array` (1–16 entries with `path` and `mode`) | Mode-specific fields below | Apply ordered UTF-8 writes and guarded edits. |
-| `bash` | `commands: array` (1–16 entries with `command`) | Per entry: `timeout_ms: positive integer` | Run commands sequentially using Bash. Default per-command deadline: 120000 ms. |
+| `bash` | `command: string` | `timeout` (ms, default 120000, at most 600000), `description`, `workdir`, `run_in_background`, `env_refs` | Run one command using Bash. |
 
 When the selected model declares `vision: true`, an agent may select `builtin/view_image` with `{ "path": string }`. It reads a local PNG or JPEG and returns a native image block to the selected model. Relative paths use the session cwd. Raw checks file structure and a separate 16 MiB decoded-file limit; the normal text result cap does not replace a valid image with a placeholder. Missing, invalid, or oversized images return a structured tool error without base64. `raw "Explain screenshot.png"` needs no image flag: the model can call `view_image` using the named path.
 
@@ -149,9 +149,13 @@ All file contents and output envelopes are staged before the first mutation. Inv
 
 Both input forms expose the same immutable intended effects before conditional policy, hooks and approval. For example, `{"source":"effects","any":"files[*].path","regex":"/protected/"}` protects operations and patches alike. Deletes expose `delete`; moves expose both `rename_source` and `rename_destination`; other writes expose `write`. Effect paths are absolute lexical paths, not realpath or a filesystem security boundary. Original arguments retain their exact spelling and shape. Failed preflight is not a completed write.
 
-`bash` accepts `{"commands":[{"command":"printf first"},{"command":"exit 7"},{"command":"printf third","timeout_ms":5000}]}`. Every `commands` entry is an object with a `command` field; an array of strings is invalid. Commands run one at a time in array order. A nonzero exit is an ordinary indexed outcome and later commands still run. Each row includes separate `stdout` and `stderr`, exit code, signal, timeout and truncation status. Output larger than the command's share of the result budget keeps its start (a fifth) and its end, where errors and summaries usually are, around a `…[N bytes omitted; full output: <path>]…` marker; the row's `full_output` names a file with the complete interleaved stdout/stderr (up to 64 MiB) that the model can read with `read_file` or search with `grep`. Saved outputs live in a private per-process temporary directory and are removed after seven days. A timeout or abort terminates the active process group, skips later commands, and reports their indices. Invalid input rejects the whole call before approval or spawning. The old single `{ "command": ... }` shape is unsupported; the error names the unexpected field and shows the required batch shape.
+`bash` runs one command per call: `{"command":"npm test","timeout":300000,"description":"Run the test suite"}`. For several commands make several calls, or join them with `&&`. `timeout` is in milliseconds, defaults to 120000 and is clamped to 600000 with the note `[timeout clamped to 600000 ms]`. `workdir` runs the command in that directory, resolved against the session cwd. `description` (at most 200 characters) is the call's title in the terminal and dashboard. Normalization reads the names other harnesses use: `cmd` and `script` as `command`, a `["bash","-lc","…"]` array as its command string, `timeout_ms` as `timeout`, `timeout_s` and `timeout_seconds` as seconds, `cwd`, `dir_path` and `directory` as `workdir`, and `is_background` and `background` as `run_in_background`. The batch shape `{"commands":[…]}` is rejected with an example of one call.
 
-All Bash rows share the one serialized `maxOutputBytes` cap. Raw reserves enough room for every status before allocating command output, so a noisy early command cannot hide later outcomes. Bash drains both pipes after its allocated output share. UTF-8 characters are never split. An over-limit external JSON tool result is a labeled text preview, never malformed JSON presented as structured data. Tool-result events and logs show image metadata, not base64.
+The result is text: stdout and stderr in the order the command produced them, then one status line such as `[exit 0 · 1.2s]`. A nonzero exit is reported in that line, not as a tool error. A timeout ends the process group and reports `[timed out after 120s; process group stopped]`; an abort reports `[aborted after 3.1s; process group stopped]`; a signal reports `[killed by SIGTERM · 0.4s]`. Output larger than the result budget keeps its start (a fifth) and its end, where errors and summaries usually are, around a `…[N bytes omitted; full output: <path>]…` marker; the named file holds the complete output (up to 64 MiB) that the model can read with `read_file` or search with `grep`. Saved outputs live in a private per-process temporary directory and are removed after seven days. UTF-8 characters are never split. Host data on the result (never sent to the model) carries the exit code, signal, duration, description and the saved-output path.
+
+`run_in_background: true` starts the command as a managed job through `builtin/process` instead of waiting: the call passes the `builtin/bash` rules and hooks with the flag in its arguments, then the `builtin/process` rules, hooks, approval and limits for the `start` it makes. The result is `Started background job <id> (<command>).` with the `process` calls that read its output and stop it; a refusal inside the `process` gates is returned as that error and nothing runs in the foreground. A background job has no default timeout; a given `timeout` is clamped to 600000 like a foreground one. When `builtin/process` is not selected, not exposed or hidden by an unconditional `deny`, or when a copy of the bash example runs as a local tool (delegation is for the bundled tool only), the command runs in the foreground with the note `[ignored run_in_background: background jobs need the process tool; ran in the foreground]`.
+
+An over-limit external JSON tool result is a labeled text preview, never malformed JSON presented as structured data. Tool-result events and logs show image metadata, not base64.
 
 Dispatch validates the tool name, schema, visibility and session whitelist before execution. CLI and ACP sessions execute exposed tools automatically, including headless runs. `-y` / `--auto-approve` is retained as a compatibility alias. Library callers can explicitly set `autoApprove: false` and supply an approval callback; denial has no side effect.
 
@@ -184,13 +188,13 @@ A panel may declare `actions` (menu items on the panel, a block or an item). `pr
 
 ## Agent rules
 
-An optional agent `tools.rules` array applies to built-ins, MCP tools and ACP-injected tools. Each rule is `{ "match": "<glob>", "effect": "allow" | "ask" | "deny" }`. `*` matches any number of characters and `?` matches one character; the pattern covers the whole canonical tool identity. Built-in identities are `builtin/read_file`, `builtin/write_file`, `builtin/bash`, and `builtin/view_image`; local plugin identities are `local/<id>` or `agent/<id>`; MCP identities are `mcp/<server>/<original-tool-name>`; ACP-injected identities are `acp:<registered-name>`. Rules run in array order and the last match wins. No match means `allow`.
+An optional agent `tools.rules` array applies to built-ins, MCP tools and ACP-injected tools. Each rule is `{ "match": "<glob>", "effect": "allow" | "ask" | "deny" }`. `*` matches any number of characters and `?` matches one character; the pattern covers the whole canonical tool identity. Built-in identities are `builtin/read_file`, `builtin/write_file`, `builtin/bash`, `builtin/process`, and `builtin/view_image`; local plugin identities are `local/<id>` or `agent/<id>`; MCP identities are `mcp/<server>/<original-tool-name>`; ACP-injected identities are `acp:<registered-name>`. Rules run in array order and the last match wins. No match means `allow`.
 
 `deny` removes the schema from the model and rejects direct dispatch. `ask` remains visible and requests permission once for each call through the CLI TTY or ACP `session/request_permission`; headless execution without an approval channel returns `approval_required`. `-y` never overrides an explicit `ask`. `allow` executes automatically. Policies are tool-name filters, not filesystem or process isolation: allowing `bash` grants the agent the user's full shell permissions even if `write_file` is denied.
 
-An `ask` rule may add `"when": {"source": "arguments", "any": "commands[*].command", "regex": "(^|[;&|()\\n])\\s*(sudo\\s+)?(/usr/bin/|/bin/)?rm(\\s|$)"}`. Raw checks each selected command string with an unanchored RE2JS match after validating the entire call. If any command matches, it asks once before running any command in the batch; other Bash calls run automatically. `when.any` follows dotted object fields and `[*]` array traversal to a string field, so the same form works for typed local, MCP, or ACP tools. Optional absent fields do not match. Conditional rules may only have effect `ask`. Rule order still matters: the last applicable allow/ask/deny wins, while an unconditional deny keeps the tool hidden until a later unconditional rule allows it. The regex sees command text, not shell semantics; use a broader pattern if your workflow needs broader review.
+An `ask` rule may add `"when": {"source": "arguments", "any": "command", "regex": "(^|[;&|()\\n])\\s*(sudo\\s+)?(/usr/bin/|/bin/)?rm(\\s|$)"}`. Raw matches the normalized command with an unanchored RE2JS search after validating the call, and asks before running it; other Bash calls run automatically. `when.any` follows dotted object fields and `[*]` array traversal to a string, number or boolean field, so the same form works for typed local, MCP, or ACP tools. A number or boolean is matched as its text: `{"source": "arguments", "any": "run_in_background", "regex": "^true$"}` asks before every background Bash job. A path that a tool renamed fails with the new argument name, for example `commands[*].command` on `builtin/bash` names `command`. Optional absent fields do not match. Conditional rules may only have effect `ask`. Rule order still matters: the last applicable allow/ask/deny wins, while an unconditional deny keeps the tool hidden until a later unconditional rule allows it. The regex sees command text, not shell semantics; use a broader pattern if your workflow needs broader review.
 
-The `bash` tool requires Bash on `PATH`, or an explicit `RAW_BASH_PATH`. Each invocation supervises one process group. Abort or deadline sends TERM to that group, then KILL if needed. Long-lived, deliberately detached jobs can escape the group and are outside this guarantee; use an MCP server designed for managed persistent processes when needed.
+The `bash` tool requires Bash on `PATH`, or an explicit `RAW_BASH_PATH`. Each invocation supervises one process group. Abort or deadline sends TERM to that group, then KILL if needed. Long-lived, deliberately detached jobs can escape the group and are outside this guarantee; start servers and watchers with `run_in_background` or `builtin/process` (see [processes](processes.md)).
 
 The development-only `npm run test:overhead` reports the exact canonical input and `o200k_base` token count for the production default prompt and built-in definitions. It measures combined overhead without imposing an arbitrary combined-token ceiling; essential tool guidance remains in the definitions. External tools, custom prompts, and provider framing add separate overhead.
 
@@ -204,15 +208,14 @@ readable value; `validateEnvRefs(refs)` checks names/types without I/O;
 `resolveEnv(refs,{signal})` returns scalar environment bindings for trusted tool
 code. Standalone handlers must report an unavailable service if refs require it.
 
-Bash accepts `env_refs` inside each `commands[]` row. The registry checks policy
-and approval before any resolution. The handler validates all reference metadata
-before starting the batch, then resolves each row immediately before its process.
-A resolution failure stops remaining rows; prior rows are not rolled back.
-Bindings override only that child's environment. Raw keeps references in original
+Bash accepts `env_refs` beside `command`. The registry checks policy and approval
+before any resolution. The handler validates the reference metadata, then resolves
+the values immediately before starting the process; a resolution failure returns
+an error and runs nothing. Bindings override only that child's environment. Raw keeps references in original
 arguments and never substitutes resolved values into shell command text.
 
 ```json
-{"commands":[{"command":"test -n \"$GH_TOKEN\"","env_refs":{"GH_TOKEN":"github_token"}}]}
+{"command":"test -n \"$GH_TOKEN\"","env_refs":{"GH_TOKEN":"github_token"}}
 ```
 
 `access: "use"` prevents Raw's read tool returning a value, but trusted commands

@@ -204,9 +204,9 @@ test("create_agent example is a complete portable config", async () => {
     const loaded = await createRuntimeTools({ runtime: copied, cwd: tmpdir() });
     try {
       const context = { cwd: moved, maxOutputBytes: 8192, autoApprove: true };
-      const safe = await loaded.registry.dispatch("bash", { commands: [{ command: "printf safe" }] }, context);
+      const safe = await loaded.registry.dispatch("bash", { command: "printf safe" }, context);
       assert.equal(safe.isError, false);
-      const gated = await loaded.registry.dispatch("bash", { commands: [{ command: "rm nonexistent" }] }, context);
+      const gated = await loaded.registry.dispatch("bash", { command: "rm nonexistent" }, context);
       assert.equal(gated.isError, true);
       assert.match(JSON.stringify(gated), /approval|ask/i);
     } finally { await loaded.mcp.close(); }
@@ -226,7 +226,7 @@ test("create_hook and configure_raw examples select and run a matching gate", as
     const hooks = await loadSelectedHooks({ selectedIds: runtime.hookIds, configPath,
       globalConfigRoot: runtime.globalConfigRoot, packageHooks: runtime.packageHooks });
     const decision = await runHook(hooks[0]!, { protocol_version: 2, event: "PreToolUse", cwd: root,
-      tool: { identity: "builtin/bash", name: "bash", arguments: { commands: [{ command: "rm old" }] } } });
+      tool: { identity: "builtin/bash", name: "bash", arguments: { command: "rm old" } } });
     assert.equal(decision.decision, "deny");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

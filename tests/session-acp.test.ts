@@ -315,7 +315,7 @@ test("ACP load replays complete raw tool input and output without dispatching th
   const storeOptions = { env: { ...process.env, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state } };
   const runtime = await loadConfig({ flags: { configPath: testConfig("ollama") }, env: {}, requireModel: true });
   const command = "printf " + "r".repeat(70_000);
-  const args = { commands: [{ command, extra: true }] };
+  const args = { command, timeout: "later" };
   let calls = 0;
   const makeServer = () => createAcpServer({ runtime, mcpServers: {}, storeOptions,
     providerFactory: () => ({ modelConfig: runtime.modelConfig!, generate: async () => {

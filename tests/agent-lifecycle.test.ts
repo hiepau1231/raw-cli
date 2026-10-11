@@ -91,7 +91,7 @@ test("abort during first active tool records real and cancelled results, then re
     requests++;
     if (requests === 1) return { text: "", finishReason: "tool_calls", toolCalls: [
       { id: "done", name: "write_file", arguments: { operations: [{ mode: "overwrite", path: "done", content: "real" }] } },
-      { id: "sleep", name: "bash", arguments: { commands: [{ command: "sleep 5" }] } },
+      { id: "sleep", name: "bash", arguments: { command: "sleep 5" } },
       { id: "pending", name: "write_file", arguments: { operations: [{ mode: "overwrite", path: "pending", content: "bad" }] } },
     ] };
     const calls = request.messages.filter((message) => message.role === "assistant").flatMap((message) => message.toolCalls.map((call) => call.id));
@@ -108,8 +108,8 @@ test("abort during first active tool records real and cancelled results, then re
   await assert.rejects(readFile(join(cwd, "pending")));
   const toolResults = agent.transcript.filter((message) => message.role === "tool");
   assert.deepEqual(toolResults.map((message) => message.callId), ["done", "sleep", "pending"]);
-  assert.equal(toolResults[1]?.result.content[0]?.type === "json"
-    ? (toolResults[1].result.content[0].value as { results: Array<{ status: string }> }).results[0]?.status : "", "aborted");
+  assert.equal(toolResults[1]?.result.host?.status, "cancelled");
+  assert.match(toolResults[1]!.result.content.map((block) => block.type === "text" ? block.text : "").join(""), /\[aborted after \d+\.\ds; process group stopped\]/);
   assert.equal(toolResults[2]?.result.code, "cancelled");
   assert.equal(events.filter((type) => type === "run_end").length, 1);
   assert.equal((await agent.run("recover")).status, "completed");
@@ -123,7 +123,7 @@ test("validation, unknown tool, denial and nonzero shell exit flow back without 
     { id: "bad", name: "write_file", arguments: {}, argumentError: "invalid JSON", rawArguments: "{oops" },
     { id: "missing", name: "unknown", arguments: {} },
     { id: "denied", name: "write_file", arguments: { operations: [{ mode: "overwrite", path: "denied", content: "bad" }] } },
-    { id: "nonzero", name: "bash", arguments: { commands: [{ command: "exit 7" }] } },
+    { id: "nonzero", name: "bash", arguments: { command: "exit 7" } },
   ] } : { text: "handled", toolCalls: [], finishReason: "stop" });
   const agent = createAgent({ ...options(cwd, provider), autoApprove: false, approve: ({ name }) => name !== "write_file" });
   const starts: string[] = [];
@@ -132,8 +132,9 @@ test("validation, unknown tool, denial and nonzero shell exit flow back without 
   assert.deepEqual(starts, ["bash"]);
   const results = agent.transcript.filter((message) => message.role === "tool");
   assert.deepEqual(results.map((message) => message.result.code), ["invalid_arguments", "tool_not_exposed", "approval_denied", undefined]);
-  assert.equal(results[3]?.result.content[0]?.type === "json"
-    ? (results[3].result.content[0].value as { results: Array<{ exit_code: number }> }).results[0]?.exit_code : undefined, 7);
+  assert.equal(results[3]?.result.isError, false);
+  assert.equal(results[3]?.result.host?.exitCode, 7);
+  assert.match(results[3]!.result.content.map((block) => block.type === "text" ? block.text : "").join(""), /\[exit 7 · /);
   await assert.rejects(readFile(join(cwd, "denied")));
 });
 

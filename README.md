@@ -94,7 +94,7 @@ MCP lives in the same config file. Only servers selected by the active agent are
 }
 ```
 
-Merge these fields into a complete config with `models` and `default_agent`. Local stdio and remote Streamable HTTP MCP transports are supported; see [MCP](docs/mcp.md). Agent `tools.rules` matches bundled, local, MCP (`mcp/server/tool`), and ACP (`acp:name`) identities with ordered `allow`, `ask`, and `deny` effects. A conditional `ask` can inspect `commands[*].command`, so only matching Bash `rm` calls prompt; see [tools](docs/tools.md).
+Merge these fields into a complete config with `models` and `default_agent`. Local stdio and remote Streamable HTTP MCP transports are supported; see [MCP](docs/mcp.md). Agent `tools.rules` matches bundled, local, MCP (`mcp/server/tool`), and ACP (`acp:name`) identities with ordered `allow`, `ask`, and `deny` effects. A conditional `ask` can inspect Bash's `command`, so only matching `rm` calls prompt; see [tools](docs/tools.md).
 
 The npm package includes forkable [tool examples](examples/tools/) and a complete [project helper agent](examples/agents/project-helper/) with `raw.json`, `prompt.md`, `tools/`, and `skills/`. Copy the agent directory anywhere, edit its model ID, endpoint, and credentials for the recipient, and run `raw --config /path/to/project-helper/raw.json --agent project "task"`. Its `agent/` references resolve beside the copied config. To fork a shipped tool globally, copy `examples/tools/bash/` to `~/.config/raw/tools/my_bash/`, change the manifest `id` and `name`, and select `local/my_bash` in an agent. See [configuration](docs/configuration.md), [tools](docs/tools.md), and [skills](docs/skills.md).
 
@@ -104,7 +104,7 @@ The installed [package examples](examples/packages/) include a complete mixed ag
 
 Raw ships seven English setup skills for configuring Raw, creating skills, creating tools, creating hooks, composing agents, adding MCP servers, and packaging components for sharing. `builtin/create_hook` covers events, filters, scripts, selection and verification; [agent hooks](docs/hooks.md) document the protocol. `builtin/create_package` guides export or manifest authoring, recipient inputs, validation, packing, installation checks and updates. The packaged [skill authoring cheatsheet](docs/skill-authoring.md) explains how to write descriptions, procedures, examples and verification criteria. Skill instructions guide the model; they do not enforce a fixed sequence or amount of work.
 
-The three built-ins each accept an ordered batch of up to 16 entries: `read_file({"files":[...]})`, `write_file({"operations":[...]})`, and `bash({"commands":[...]})`. Reads can select full files or 1-based line ranges. A large full read returns complete leading lines with `next_line` for paging. Writes support overwrite, append, unique text replacement, and SHA-256 guarded line replacement. Bash continues after a nonzero exit and stops on timeout or abort. All batch rows share the configured model-facing `maxOutputBytes` limit; terminal previews separately show at most 2,000 characters and 10 lines. See [tool contracts](docs/tools.md).
+`read_file({"files":[...]})` and `write_file({"operations":[...]})` each accept an ordered batch of up to 16 entries; `bash({"command":"npm test"})` runs one command per call. Reads can select full files or 1-based line ranges. A large full read returns complete leading lines with `next_line` for paging. Writes support overwrite, append, unique text replacement, and SHA-256 guarded line replacement. Bash returns its output and a status line such as `[exit 0 · 1.2s]`, and `run_in_background` starts a managed job through `builtin/process`. Results share the configured model-facing `maxOutputBytes` limit; terminal previews separately show at most 2,000 characters and 10 lines. See [tool contracts](docs/tools.md).
 
 ## Shared tool UI and editing
 
@@ -142,7 +142,7 @@ Tests use local provider/MCP/ACP fixtures. [Verification](docs/verification.md) 
 
 ## Runtime variables
 
-Agents can select named read-only values from config, environment, files or executable providers. Use `raw vars list` and `raw vars get now` without invoking a model. The starter raw agent includes current UTC time. Models can use list_vars/read_var or pass commands[].env_refs to Bash; use-only values need not be returned to the model. See [the variable contract](docs/vars.md) and the forkable [host-info provider](examples/providers/host-info/README.md).
+Agents can select named read-only values from config, environment, files or executable providers. Use `raw vars list` and `raw vars get now` without invoking a model. The starter raw agent includes current UTC time. Models can use list_vars/read_var or pass env_refs to Bash; use-only values need not be returned to the model. See [the variable contract](docs/vars.md) and the forkable [host-info provider](examples/providers/host-info/README.md).
 
 ## License
 

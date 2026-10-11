@@ -105,7 +105,7 @@ test("CLI evaluation keeps provider credentials in the host and gives actual Bas
   const root = mkdtempSync(join(tmpdir(), "raw-eval-integration-"));
   const command = `node -e 'const fs=require("node:fs"); const p="app-config.json"; const d=JSON.parse(fs.readFileSync(p)); d.retries=3; fs.writeFileSync(p,JSON.stringify(d)); console.log(JSON.stringify({home:process.env.HOME,secret:process.env.EVAL_PROVIDER_SECRET??null,other:process.env.EVAL_OTHER_SECRET??null}));'`;
   const server = await startMockProvider([
-    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "edit", type: "function", function: { name: "bash", arguments: JSON.stringify({ commands: [{ command }] }) } }] }, "tool_calls"), openAiDone] },
+    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "edit", type: "function", function: { name: "bash", arguments: JSON.stringify({ command }) } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "Changed retries to three." }, "stop"), openAiDone] },
   ]);
   try {

@@ -68,7 +68,7 @@ test("CLI streams provider thinking to stderr and shows bash arguments before ex
       openAiFrame({ reasoning: "Inspect " }),
       openAiFrame({ reasoning: "files." }),
       openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
-        name: "bash", arguments: JSON.stringify({ commands: [{ command: "printf sample", timeout_ms: 1000 }] }),
+        name: "bash", arguments: JSON.stringify({ command: "printf sample", timeout_ms: 1000 }),
       } }] }, "tool_calls"), openAiDone,
     ] },
     { frames: [openAiFrame({ content: "done" }, "stop"), openAiDone] },
@@ -79,33 +79,32 @@ test("CLI streams provider thinking to stderr and shows bash arguments before ex
     assert.equal(result.stdout, "done\n");
     assert.match(result.stderr, /raw: thinking\n/);
     assert.doesNotMatch(result.stderr, /Inspect files\./);
-    assert.match(result.stderr, /raw: bash \{"commands":\[\{"command":"printf sample","timeout_ms":1000\}\]\}/);
-    assert.match(result.stderr, /raw: ↳ bash result\nstatuses: 0:ok\(exit0\)\n\{"index":0,"status":"ok","exit_code":0/);
-    assert.match(result.stderr, /"stdout":"sample"/);
+    assert.match(result.stderr, /raw: bash \{"command":"printf sample","timeout":1000\}/);
+    assert.match(result.stderr, /raw: ↳ bash result \(exit 0\)\n\[stdout\]\nsample\n\[exit 0 · \d+\.\ds\]\n/);
     assert.doesNotMatch(result.stderr, /\x1b\[/);
     assert.doesNotMatch(result.stderr, /allow bash|\[y\/N\]/i);
     assert.match(JSON.stringify(fixture.requests[1]?.body), /sample/);
   } finally { await fixture.close(); }
 });
 
-test("CLI shows rejected bash arguments and the model receives the expected batch shape", async () => {
+test("CLI shows rejected bash arguments and the model receives the one-command shape", async () => {
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "bad-shell", type: "function", function: {
-      name: "bash", arguments: '{"command":"pwd"}',
+      name: "bash", arguments: '{"commands":[{"command":"pwd"}]}',
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "good-shell", type: "function", function: {
-      name: "bash", arguments: '{"commands":[{"command":"pwd"}]}',
+      name: "bash", arguments: '{"command":"pwd"}',
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "done" }, "stop"), openAiDone] },
   ]);
   try {
     const result = await raw(["--config", testConfig("local", "fixture", fixture.url), "inspect"]);
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stderr, /raw: ⚠ bash \{"command":"pwd"\}/);
-    assert.match(result.stderr, /unknown bash property "command"; use \{"commands":\[\{"command":"\.\.\."\}\]\}/);
-    assert.match(result.stderr, /raw: bash \{"commands":\[\{"command":"pwd"\}\]\}/);
+    assert.match(result.stderr, /raw: ⚠ bash \{"commands":\[\{"command":"pwd"\}\]\}/);
+    assert.match(result.stderr, /bash takes one command: \{"command":"npm test"\}; call bash once per command/);
+    assert.match(result.stderr, /raw: bash \{"command":"pwd"\}\nraw: ↳ bash result \(exit 0\)/);
     assert.equal((result.stderr.match(/raw: ⚠ bash/g) ?? []).length, 1);
-    assert.match(JSON.stringify(fixture.requests[1]?.body), /unknown bash property/);
+    assert.match(JSON.stringify(fixture.requests[1]?.body), /bash takes one command/);
   } finally { await fixture.close(); }
 });
 
@@ -130,7 +129,7 @@ test("TTY starts tool activity on a new line after unfinished assistant text", a
     { frames: [
       openAiFrame({ content: "I will inspect the repo." }),
       openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
-        name: "bash", arguments: JSON.stringify({ commands: [{ command: "pwd" }] }),
+        name: "bash", arguments: JSON.stringify({ command: "pwd" }),
       } }] }, "tool_calls"), openAiDone,
     ] },
     { frames: [openAiFrame({ content: "Done." }, "stop"), openAiDone] },
@@ -144,11 +143,11 @@ test("TTY starts tool activity on a new line after unfinished assistant text", a
   } finally { child.kill("SIGTERM"); await fixture.close(); }
 });
 
-test("tool result preview retains statuses and bounds body to 2000 characters and 9 lines", async () => {
+test("tool result preview retains the exit status and bounds body to 2000 characters and 9 lines", async () => {
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
-      name: "bash", arguments: JSON.stringify({ commands: [{ command:
-        "printf 'HEAD\\n'; for i in {1..20}; do printf 'line-%02d\\n' \"$i\"; done; printf '%03000d\\nTAIL\\n' 0" }] }),
+      name: "bash", arguments: JSON.stringify({ command:
+        "printf 'HEAD\\n'; for i in {1..20}; do printf 'line-%02d\\n' \"$i\"; done; printf '%03000d\\nTAIL\\n' 0" }),
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "Done" }, "stop"), openAiDone] },
   ]);
@@ -159,10 +158,10 @@ test("tool result preview retains statuses and bounds body to 2000 characters an
     const start = result.stderr.indexOf("raw: ↳ bash result");
     assert.ok(start >= 0);
     const lines = result.stderr.slice(start).split(/\n\[ok\] Done/, 1)[0]!.trimEnd().split("\n");
-    assert.ok(lines.length <= 11, `preview used ${lines.length} lines including status summary`);
-    assert.match(lines[1]!, /^statuses:/);
-    const preview = lines.slice(2).join("\n");
-    assert.ok(lines.length - 2 <= 9);
+    assert.ok(lines.length <= 10, `preview used ${lines.length} lines including the header`);
+    assert.match(lines[0]!, /\(exit 0\)$/);
+    const preview = lines.slice(1).join("\n");
+    assert.ok(lines.length - 1 <= 9);
     assert.ok(Array.from(preview).length <= 2000);
     assert.match(preview, /HEAD/);
     assert.match(preview, /TAIL/);
@@ -226,16 +225,16 @@ test("conditional Bash ask leaves safe headless commands automatic and gates rm 
   await writeFile(marker, "keep");
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "safe", type: "function", function: {
-      name: "bash", arguments: '{"commands":[{"command":"printf safe"}]}' } }] }, "tool_calls"), openAiDone] },
+      name: "bash", arguments: '{"command":"printf safe"}' } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "safe done" }, "stop"), openAiDone] },
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "danger", type: "function", function: {
-      name: "bash", arguments: '{"commands":[{"command":"rm -f protected.txt"}]}' } }] }, "tool_calls"), openAiDone] },
+      name: "bash", arguments: '{"command":"rm -f protected.txt"}' } }] }, "tool_calls"), openAiDone] },
   ]);
   try {
     const configPath = testConfig("openai", "fixture", fixture.url);
     const document = JSON.parse(await readFile(configPath, "utf8"));
     document.agents.fixture.tools.rules = [{ match: "builtin/bash", effect: "ask",
-      when: { source: "arguments", any: "commands[*].command", regex: String.raw`(^|[;&|()\n])\s*(sudo\s+)?(/usr/bin/|/bin/)?rm(\s|$)` } }];
+      when: { source: "arguments", any: "command", regex: String.raw`(^|[;&|()\n])\s*(sudo\s+)?(/usr/bin/|/bin/)?rm(\s|$)` } }];
     await writeFile(configPath, JSON.stringify(document));
     const env = { ...process.env, OPENAI_API_KEY: "key" };
     const safe = await raw(["--config", configPath, "-y", "safe"], { cwd: root, env });
@@ -384,7 +383,7 @@ test("T-08 review: queued REPL command follows an automatic tool call", async ()
 test("T-08b: Ctrl-C during an active PTY tool aborts it and exits 130", async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-pty-cancel-"));
   const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
-    name: "bash", arguments: JSON.stringify({ commands: [{ command: `sleep 0.5; printf late > ${join(root, "marker")}` }] }),
+    name: "bash", arguments: JSON.stringify({ command: `sleep 0.5; printf late > ${join(root, "marker")}` }),
   } }] }, "tool_calls"), openAiDone] }]);
   const { child, output } = ptyRaw(["--config", testConfig("openai", "fixture", fixture.url), "-y", "run shell"],
     { ...process.env, OPENAI_API_KEY: "key", NO_COLOR: "", TERM: "xterm-256color" });
@@ -402,7 +401,7 @@ test("T-08b: Ctrl-C during an active PTY tool aborts it and exits 130", async ()
 test("T-08b: REPL Ctrl-C aborts active work, then Ctrl-C while idle exits", async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-repl-cancel-"));
   const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
-    name: "bash", arguments: JSON.stringify({ commands: [{ command: `sleep 1.5; printf late > ${join(root, "marker")}` }] }),
+    name: "bash", arguments: JSON.stringify({ command: `sleep 1.5; printf late > ${join(root, "marker")}` }),
   } }] }, "tool_calls"), openAiDone] }]);
   const { child, output } = ptyRaw(["--config", testConfig("openai", "fixture", fixture.url), "--interactive", "-y"],
     { ...process.env, OPENAI_API_KEY: "key" });
@@ -428,7 +427,7 @@ test("T-08b: REPL Ctrl-C aborts active work, then Ctrl-C while idle exits", asyn
 test("T-08b: EOF during an active piped REPL turn aborts owned Bash", async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-repl-eof-"));
   const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
-    name: "bash", arguments: JSON.stringify({ commands: [{ command: `sleep 0.5; printf late > ${join(root, "marker")}` }] }),
+    name: "bash", arguments: JSON.stringify({ command: `sleep 0.5; printf late > ${join(root, "marker")}` }),
   } }] }, "tool_calls"), openAiDone] }]);
   const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), join(process.cwd(), "bin/raw.ts"),
     "--config", testConfig("openai", "fixture", fixture.url), "--interactive", "-y"],

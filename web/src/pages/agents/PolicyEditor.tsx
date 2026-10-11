@@ -14,7 +14,7 @@ export function PolicyEditor({
 }) {
   const [identity, setIdentity] = useState("builtin/bash"),
     [sample, setSample] = useState(
-      '{"commands":[{"command":"rm example.txt"}]}',
+      '{"command":"rm example.txt"}',
     ),
     [result, setResult] = useState<{ effect: string } | { error: string }>();
   const move = (index: number, by: -1 | 1) => {
@@ -131,7 +131,7 @@ export function PolicyEditor({
                 {
                   match: "builtin/bash",
                   effect: "ask",
-                  when: { source: "arguments", any: "commands[*].command", regex: "(^|[;& ]+)rm[ ]" },
+                  when: { source: "arguments", any: "command", regex: "(^|[;& ]+)rm[ ]" },
                 },
               ])
             }

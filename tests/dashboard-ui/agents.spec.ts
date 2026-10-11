@@ -402,17 +402,17 @@ test.describe("agent detail sections", () => {
     const policy = page.getByRole("tabpanel", { name: "Policy" });
     await policy.getByRole("button", { name: "Add rule" }).click();
     await policy.getByRole("button", { name: "Remove condition" }).click();
-    await policy.getByLabel("Rule 1 when.any").fill("commands[*].command");
+    await policy.getByLabel("Rule 1 when.any").fill("command");
     await policy.getByLabel("Rule 1 regex").fill("^rm ");
     await policy.getByLabel("Rule 1 effect").selectOption("allow");
     await policy.getByLabel("Rule 1 effect").selectOption("ask");
     await policy.getByLabel("Rule 1 regex").fill("^sudo ");
-    await policy.getByLabel("Rule 1 when.any").fill("commands[*].command");
+    await policy.getByLabel("Rule 1 when.any").fill("command");
     await policy.getByRole("button", { name: "Test rules" }).click();
     await expect(policy.getByRole("status").locator(".badge")).toBeVisible();
     await save(page);
     expect(saved(raw).tools.rules).toEqual([
-      { match: "builtin/bash", effect: "ask", when: { source: "arguments", regex: "^sudo ", any: "commands[*].command" } },
+      { match: "builtin/bash", effect: "ask", when: { source: "arguments", regex: "^sudo ", any: "command" } },
     ]);
   });
 

@@ -298,7 +298,7 @@ test("SIGINT keeps REPL ownership; SIGTERM releases it after a later prompt", as
 test("sessions show reproduces a complete rejected Bash argument after restart and compact", async () => {
   const { a, env } = fixture();
   const command = "printf " + "z".repeat(70_000);
-  const args = { commands: [{ command, extra: true }] };
+  const args = { command, timeout: "later" };
   const provider = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "bad-bash", type: "function",
       function: { name: "bash", arguments: JSON.stringify(args) } }] }, "tool_calls"), openAiDone] },

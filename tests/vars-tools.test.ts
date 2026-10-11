@@ -27,8 +27,8 @@ test("Process resolves selected variable references after approval and rejects i
     const rejected = await tools.registry.dispatch("process", { action: "start", command: "true", env_refs: { TOKEN: "unknown" } }, context);
     assert.equal(rejected.isError, true); assert.equal(processes.list().length, 0);
     const started = await tools.registry.dispatch("process", { action: "start", command: "printf '%s' \"$TOKEN\"", env_refs: { TOKEN: "token" } }, context);
-    assert.equal(started.isError, false); const block = started.content[0]!; if (block.type !== "json") assert.fail("start acknowledgement must be JSON");
-    const id = (block.value as { id: string }).id;
+    assert.equal(started.isError, false); const id = started.host!.processId!;
+    assert.match(JSON.stringify(started.content), new RegExp(`Started ${id}`)); assert.doesNotMatch(JSON.stringify(started), /literal;/);
     for (let i = 0; i < 200 && processes.status(id).state === "running"; i++) await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(processes.output(id).chunks.map(chunk => chunk.text).join(""), "literal; $(no) '");
     assert.equal(approvals, 2);
@@ -48,30 +48,31 @@ test("linked variable tools expose metadata only and enforce read/use without sc
     assert.equal((small.content[0] as { value: { value: unknown } }).value.value, false);
   } finally { await tools.mcp.close(); }
 });
-test("Bash binds literal env per command, leaves args intact, and validates the entire batch first", async () => {
+test("Bash binds literal env for its command only, leaves args intact, and validates references before spawning", async () => {
   const f = await fixture(); const tools = await f.load();
   try {
-    const args = { commands: [{ command: `printf '%s' "$TOKEN" > received`, env_refs: { TOKEN: "token" } }, { command: 'test -z "$TOKEN"' }] };
+    const args = { command: `printf '%s' "$TOKEN" > received`, env_refs: { TOKEN: "token" } };
     const saved = structuredClone(args);
     const result = await tools.registry.dispatch("bash", args, ctx(f.dir));
     assert.equal(result.isError, false); assert.deepEqual(args, saved);
     assert.equal(readFileSync(join(f.dir, "received"), "utf8"), "literal; $(no) '");
     assert.doesNotMatch(JSON.stringify(result), /literal;/);
-    const invalid = await tools.registry.dispatch("bash", { commands: [{ command: 'touch never' }, { command: 'true', env_refs: { X: 'absent' } }] }, ctx(f.dir));
+    const unbound = await tools.registry.dispatch("bash", { command: 'test -z "$TOKEN"' }, ctx(f.dir));
+    assert.equal(unbound.host?.exitCode, 0);
+    const invalid = await tools.registry.dispatch("bash", { command: 'touch never', env_refs: { X: 'absent' } }, ctx(f.dir));
     assert.equal(invalid.isError, true); assert.equal(existsSync(join(f.dir, "never")), false);
-    const partial = await tools.registry.dispatch("bash", { commands: [{ command: 'touch first' }, { command: 'touch middle', env_refs: { X: 'failure' } }, { command: 'touch last' }] }, ctx(f.dir));
-    assert.equal(partial.isError, true); assert.equal(existsSync(join(f.dir, "first")), true);
-    assert.equal(existsSync(join(f.dir, "middle")), false); assert.equal(existsSync(join(f.dir, "last")), false);
-    assert.match(JSON.stringify(partial), /prior_var_error/);
+    const failing = await tools.registry.dispatch("bash", { command: 'touch middle', env_refs: { X: 'failure' } }, ctx(f.dir));
+    assert.equal(failing.isError, true); assert.equal(existsSync(join(f.dir, "middle")), false);
+    assert.doesNotMatch(JSON.stringify(failing), /literal;/);
   } finally { await tools.mcp.close(); }
 });
 test("conditional Bash asks only for matching commands and denial never executes", async () => {
-  const f = await fixture([{ match: "builtin/bash", effect: "ask", when: { source: "arguments", any: "commands[*].command", regex: "rm" } }]);
+  const f = await fixture([{ match: "builtin/bash", effect: "ask", when: { source: "arguments", any: "command", regex: "rm" } }]);
   const tools = await f.load(); let asks = 0;
   try {
     const context = { ...ctx(f.dir), approve: () => { asks++; return false; } };
-    await tools.registry.dispatch("bash", { commands: [{ command: "true" }] }, context); assert.equal(asks, 0);
-    const result = await tools.registry.dispatch("bash", { commands: [{ command: "rm marker", env_refs: { X: "failure" } }] }, context);
+    await tools.registry.dispatch("bash", { command: "true" }, context); assert.equal(asks, 0);
+    const result = await tools.registry.dispatch("bash", { command: "rm marker", env_refs: { X: "failure" } }, context);
     assert.equal(result.code, "approval_denied"); assert.equal(asks, 1); assert.equal(existsSync(join(f.dir, "provider-count")), false);
   } finally { await tools.mcp.close(); }
 });

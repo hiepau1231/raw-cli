@@ -118,9 +118,10 @@ try {
   for (const item of await loadToolPlugins({ selectedIds: ["builtin/process"], configPath: "ignored.json" })) registry.register(item.registration);
   const context = { cwd: process.cwd(), maxOutputBytes: 8192, autoApprove: true, processes: processes.forSession("installed") };
   const started = await registry.dispatch("process", { action: "start", command: "sleep 30" }, context);
-  if (started.isError || started.content[0].type !== "json") throw new Error(JSON.stringify(started));
-  const stopped = await registry.dispatch("process", { action: "stop", id: started.content[0].value.id }, context);
-  if (stopped.isError || stopped.content[0].value.state !== "stopped") throw new Error(JSON.stringify(stopped));
+  const id = started.host?.processId;
+  if (started.isError || !id || started.content[0].text !== "Started " + id + " · sleep 30") throw new Error(JSON.stringify(started));
+  const stopped = await registry.dispatch("process", { action: "stop", id }, context);
+  if (stopped.isError || !stopped.content[0].text.startsWith("Stopped " + id + " · stopped")) throw new Error(JSON.stringify(stopped));
 } finally { await processes.close(); }
 `], consumer, { ...process.env });
   assert.equal(installedAsk.code, 0, installedAsk.stderr);
@@ -186,7 +187,7 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
   const variableCall = (name: string, args: unknown, id: string) => ({ frames: [openAiFrame({ tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }] }, "tool_calls"), openAiDone] });
   const varsProvider = await startMockProvider([
     variableCall("list_vars", {}, "catalog"), variableCall("read_var", { name: "hostname" }, "hostname"),
-    variableCall("bash", { commands: [{ command: 'test "$TOKEN" = "$RAW_EXAMPLE_TOKEN" && printf verified > vars-verified', env_refs: { TOKEN: "token" } }] }, "consume"),
+    variableCall("bash", { command: 'test "$TOKEN" = "$RAW_EXAMPLE_TOKEN" && printf verified > vars-verified', env_refs: { TOKEN: "token" } }, "consume"),
     { frames: [openAiFrame({ content: "vars-ready" }, "stop"), openAiDone] },
   ]);
   try {
@@ -271,7 +272,7 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
         name: "read_file", arguments: '{"files":[{"path":"installed-sentinel.txt"}]}',
       } },
       { index: 2, id: "shell", type: "function", function: {
-        name: "bash", arguments: '{"commands":[{"command":"cat installed-sentinel.txt"}]}',
+        name: "bash", arguments: '{"command":"cat installed-sentinel.txt"}',
       } },
     ] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "installed-task-done" }, "stop"), openAiDone] },
@@ -300,8 +301,9 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
     const replay = (fixture.requests[1]?.body as { messages: Array<{ role: string; tool_call_id?: string; content?: string }> }).messages
       .filter((message) => message.role === "tool");
     assert.deepEqual(replay.map((message) => message.tool_call_id), ["write", "read", "shell"]);
-    assert.deepEqual(replay.map((message) => (JSON.parse(message.content!) as { results: Array<{ status: string }> }).results[0]?.status),
-      ["ok", "ok", "ok"]);
+    assert.deepEqual(replay.slice(0, 2).map((message) => (JSON.parse(message.content!) as { results: Array<{ status: string }> }).results[0]?.status),
+      ["ok", "ok"]);
+    assert.match(replay[2]!.content!, /^installed-write\n?\[exit 0 · \d+\.\ds\]$/);
 
     const document = JSON.parse(await readFile(configPath, "utf8"));
     document.mcp = { servers: { pkg: { transport: "stdio", command: process.execPath,

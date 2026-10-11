@@ -28,7 +28,7 @@ test("history uses current theme for saved assistant Markdown and path-tagged re
 test("orphan result, rejected call and ACP-origin update remain readable", () => {
   const ui = resolveUiOptions({ icons: "ascii", color: "never" });
   const caps = terminalCapabilities(false, { TERM: "dumb" }, ui);
-  const call = projectToolCall("bash", "builtin/bash", { commands: [{ command: "rm -rf scratch" }] }, false);
+  const call = projectToolCall("bash", "builtin/bash", { command: "rm -rf scratch" }, false);
   assert.match(renderTerminalHistory(item("tool_call", { display: { ...call, id: "call" } }), ui, caps, 40).replace(/\n/g, ""), /rm -rf scratch/);
   const result = projectToolResult("bash", "builtin/bash", { isError: true, content: [{ type: "text", text: "denied" }], code: "denied" });
   assert.match(renderTerminalHistory(item("tool_result", { display: { ...result, id: "call" } }), ui, caps, 40), /\[error\] bash[\s\S]*denied/);

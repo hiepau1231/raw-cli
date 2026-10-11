@@ -22,7 +22,7 @@ Every conditional predicate declares its source explicitly:
 {"source":"effects","any":"files[*].path","regex":"protected\\.txt$"}
 ```
 
-`any` binds to a string field in the selected source schema. Unsupported sources, undeclared effects and missing source fields are validation errors. Optional fields absent from a valid value do not match. Rule ordering and last-match behavior apply normally. Policies and hook subscriptions share the same binder and evaluator. Command conditions use `source: "arguments"` and `commands[*].command`.
+`any` binds to a string field in the selected source schema. Unsupported sources, undeclared effects and missing source fields are validation errors. Optional fields absent from a valid value do not match. Rule ordering and last-match behavior apply normally. Policies and hook subscriptions share the same binder and evaluator. Command conditions use `source: "arguments"` and `command`. A number or boolean field is matched as its text, for example `run_in_background` as `true`.
 
 ## Approval and hooks
 

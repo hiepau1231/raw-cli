@@ -13,9 +13,9 @@ test("packaged bundled plugins preserve exact definitions and semantic batch pre
   const registry = new ToolRegistry();
   for (const plugin of plugins) registry.register(plugin);
   assert.deepEqual(registry.definitions(), createTestToolRegistry([], true).definitions());
-  // Intentional revision: bash describes start/end truncation and the saved full_output file.
+  // Intentional revision: bash takes one command in the trained shape (docs/tool-ux-design.md §4.2).
   assert.equal(createHash("sha256").update(JSON.stringify(registry.definitions())).digest("hex"),
-    "2032d32c1d252a6a5a82532d89743dc6d2100aeb0701dc3302c43a49a5be9c68");
+    "4242f7d65cc3f7e03418c394baf4cffeb4c8d53288bbcb1bae50558d8f1a0284");
 
   const cwd = await mkdtemp(join(tmpdir(), "raw-bundled-"));
   const marker = join(cwd, "side-effect");
@@ -27,10 +27,10 @@ test("packaged bundled plugins preserve exact definitions and semantic batch pre
   ] }, ctx);
   assert.equal(invalidWrite.code, "invalid_arguments");
   assert.match(JSON.stringify(invalidWrite), /operations\[1\].*invalid line range/);
-  const invalidBash = await registry.dispatch("bash", { commands: [
-    { command: `touch '${marker}'` }, { command: "true", timeout_ms: 0 },
-  ] }, ctx);
+  const invalidBash = await registry.dispatch("bash", { command: `touch '${marker}'`, timeout: 0 }, ctx);
   assert.equal(invalidBash.code, "invalid_arguments");
+  const batchBash = await registry.dispatch("bash", { commands: [{ command: `touch '${marker}'` }] }, ctx);
+  assert.equal(batchBash.code, "invalid_arguments");
   const invalidRead = await registry.dispatch("read_file", { files: [
     { path: marker }, { path: marker, start_line: 3, end_line: 2 },
   ] }, ctx);
@@ -60,17 +60,19 @@ test("registry has only three built-ins and rejects invalid/hidden calls before 
   for (const [name, args] of [
     ["write_file", { operations: [{ path: marker, mode: "overwrite", content: "bad", extra: 1 }] }],
     ["write_file", { operations: [{ path: marker, mode: "overwrite", content: 1 }] }],
-    ["bash", { commands: [{ command: "true", timeout_ms: 0 }] }],
+    ["bash", { command: "true", timeout: 0 }],
+    ["bash", { command: "" }],
     ["read_file", { "": 0, files: [{ path: marker }] }],
     ["write_file", { "": 0, operations: [{ path: marker, mode: "overwrite", content: "bad" }] }],
     ["bash", { "": 0, commands: [{ command: "true" }] }],
+    ["bash", { "": 0, command: 3 }],
     ["missing", {}],
   ] as const) {
     assert.equal((await registry.dispatch(name, args, ctx)).isError, true);
   }
-  const stringCommand = await registry.dispatch("bash", { commands: ["pwd"] }, ctx);
-  assert.equal(stringCommand.code, "invalid_arguments");
-  assert.match(JSON.stringify(stringCommand), /commands\[0\] must be an object.*command/);
+  const batchCommand = await registry.dispatch("bash", { commands: ["pwd"] }, ctx);
+  assert.equal(batchCommand.code, "invalid_arguments");
+  assert.match(JSON.stringify(batchCommand), /bash takes one command: \{\\"command\\":\\"npm test\\"\}; call bash once per command/);
   assert.equal(approvals, 0);
   assert.equal((await registry.dispatch("write_file", { operations: [{ mode: "overwrite", path: marker, content: "bad" }] }, { ...ctx, whitelist: [] })).code, "tool_not_exposed");
   assert.equal(approvals, 0);
@@ -79,8 +81,12 @@ test("registry has only three built-ins and rejects invalid/hidden calls before 
   await assert.rejects(access(marker));
   assert.throws(() => registry.register({ name: "bash", description: "duplicate", inputSchema: { type: "object", properties: {}, additionalProperties: false }, handler: async () => ({ isError: false, content: [] }) }));
   const prototypeArgs = JSON.parse('{"command":"true","__proto__":1}') as unknown;
-  assert.equal((await registry.dispatch("bash", prototypeArgs, ctx)).code, "invalid_arguments");
-  assert.equal((await registry.dispatch("bash", { commands: [{ command: "true", timeout_ms: 2147483648 }] }, ctx)).code, "invalid_arguments");
+  // A normalized tool drops an unknown top-level key, __proto__ included, and tells the model; nothing is polluted.
+  const prototypeCall = await registry.dispatch("bash", prototypeArgs, { ...ctx, autoApprove: true });
+  assert.equal(prototypeCall.isError, false);
+  assert.match(JSON.stringify(prototypeCall.content), /\[ignored unknown argument: __proto__\]/);
+  assert.equal(({} as Record<string, unknown>).command, undefined);
+  assert.equal((await registry.dispatch("bash", { command: "true", timeout: 1.5 }, ctx)).code, "invalid_arguments");
   const capped = await registry.dispatch("x".repeat(100), {}, { cwd, maxOutputBytes: 5, autoApprove: true });
   assert.equal(capped.truncated, true);
   assert.ok((capped.retainedBytes ?? Infinity) <= 5);

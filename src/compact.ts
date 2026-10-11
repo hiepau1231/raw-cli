@@ -583,12 +583,9 @@ export function textTokens(text: string, calibration = 1): number {
 
 export function emptyFacts(): WorkingFacts { return { written: [], read: [], outputs: [] }; }
 
-/** The saved full outputs a tool result names: its own, and those of the rows of a batch result. */
+/** The saved full outputs a tool result names. */
 export function savedOutputPaths(result: ToolResult): string[] {
-  const results = record(result.content.find((block) => block.type === "json")?.value)?.results;
-  const rows = Array.isArray(results) ? results.map(record) : [];
-  return [...(result.fullOutputPath ? [result.fullOutputPath] : []),
-    ...rows.flatMap((row) => typeof row?.full_output === "string" ? [row.full_output] : [])];
+  return [...new Set([result.fullOutputPath, result.host?.fullOutputPath].filter((path): path is string => typeof path === "string"))];
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -607,7 +604,7 @@ export function collectFacts(messages: readonly ModelMessage[], facts: WorkingFa
     next.written.push({ path, tool });
   };
   const add = (list: string[], value: string) => { if (!list.includes(value)) list.push(value); };
-  const bash = new Map<string, string>();
+  const bash = new Map<string, unknown>();
   const writes = new Set<string>();
   for (const message of messages) {
     if (message.role === "assistant") {
@@ -617,10 +614,7 @@ export function collectFacts(messages: readonly ModelMessage[], facts: WorkingFa
         if (tool === "builtin/write_file") writes.add(call.id);
         else if (tool === "builtin/read_file" && Array.isArray(args.files)) {
           for (const file of args.files.map(record)) if (typeof file?.path === "string") add(next.read, file.path);
-        } else if (tool === "builtin/bash" && Array.isArray(args.commands)) {
-          const command = record(args.commands.at(-1))?.command;
-          if (typeof command === "string") bash.set(call.id, command);
-        }
+        } else if (tool === "builtin/bash") bash.set(call.id, args.command);
       }
     } else if (message.role === "tool") {
       for (const path of savedOutputPaths(message.result)) add(next.outputs, path);
@@ -633,10 +627,11 @@ export function collectFacts(messages: readonly ModelMessage[], facts: WorkingFa
         if (row?.status === "ok" && typeof row.path === "string") touch(destination ?? row.path, tool);
         else if (row?.destination_created === true && destination) touch(destination, tool);
       }
-      const command = bash.get(message.callId);
-      if (command !== undefined) {
-        const last = rows.at(-1);
-        next.lastBash = { command, exitCode: typeof last?.exit_code === "number" ? last.exit_code : message.result.exitCode ?? null };
+      // The normalized call names the command an alias carried; a background job has no exit yet.
+      const command = bash.has(message.callId) ? message.arguments?.command ?? bash.get(message.callId) : undefined;
+      if (typeof command === "string" && !message.result.host?.processId) {
+        const exitCode = message.result.host?.exitCode;
+        next.lastBash = { command, exitCode: typeof exitCode === "number" ? exitCode : message.result.exitCode ?? null };
       }
     }
   }

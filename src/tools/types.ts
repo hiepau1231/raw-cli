@@ -51,13 +51,16 @@ export interface HostFileChange {
  */
 export interface HostData {
   summary?: string;
+  /** The model's own short description of the call (bash `description`). */
+  description?: string;
   status?: "ok" | "error" | "timeout" | "cancelled";
   durationMs?: number;
   exitCode?: number | null;
   signal?: string | null;
   fullOutputPath?: string;
   fullOutputCapped?: boolean;
-  page?: { cursor: number; next: number };
+  /** A process output page's position; its bytes are the result's channel blocks. */
+  page?: { cursor: number; next: number; total: number; earliestCursor: number; droppedBytes: number; truncated: boolean };
   files?: HostFileChange[];
   diff?: string;
   diffOmitted?: boolean;

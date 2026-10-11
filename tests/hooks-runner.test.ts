@@ -13,7 +13,7 @@ async function fixture(source: string, timeoutMs = 1500): Promise<SelectedHook> 
     args: [join(folder, "run.mjs")], timeoutMs, events: [{ name: "PreToolUse" }] };
 }
 const request = { protocol_version: 2 as const, event: "PreToolUse" as const, cwd: process.cwd(),
-  tool: { identity: "builtin/bash", name: "bash", arguments: { commands: [{ command: "rm x" }] } } };
+  tool: { identity: "builtin/bash", name: "bash", arguments: { command: "rm x" } } };
 
 test("hook runner accepts empty success and structured denial, with exit 2 taking precedence", async () => {
   const empty = await fixture("process.stdin.resume(); process.stdin.on('end', () => process.exit(0));");

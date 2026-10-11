@@ -1,3 +1,6 @@
+// src/tools/bundled/bash/index.ts
+import { isAbsolute, relative as relative2, resolve as resolve3 } from "path";
+
 // src/tools/primitives.ts
 import { constants as fsConstants } from "fs";
 
@@ -106,12 +109,6 @@ var OutputSpill = class {
     this.fd = void 0;
   }
 };
-function spillText(label, text) {
-  const spill = new OutputSpill(label);
-  spill.write(text);
-  spill.close();
-  return { ...spill.path ? { path: spill.path } : {}, capped: spill.capped };
-}
 function savedLabel(path, capped = false) {
   return path && capped ? `${path} (first ${SPILL_MAX_BYTES} bytes only)` : path;
 }
@@ -142,31 +139,8 @@ function utf8Suffix(value, limit) {
   }
   return { text: scalars.slice(start).join(""), bytes, truncated: start > 0 };
 }
-function elideMiddle(value, limit, fullOutputPath) {
-  const total = Buffer.byteLength(value);
-  if (total <= limit) return { text: value, bytes: total, truncated: false };
-  return elideParts(value, value, total, limit, fullOutputPath);
-}
-function elideParts(head, tail, total, limit, fullOutputPath) {
-  const marker = (omitted) => `
-\u2026[${omitted} bytes omitted${fullOutputPath ? `; full output: ${fullOutputPath}` : ""}]\u2026
-`;
-  const room = limit - Buffer.byteLength(marker(total));
-  if (room <= 0) return { ...utf8Prefix(head, limit), truncated: true };
-  const start = utf8Prefix(head, Math.floor(room / 5));
-  const end = utf8Suffix(tail, room - start.bytes);
-  const text = start.text + marker(total - start.bytes - end.bytes) + end.text;
-  return { text, bytes: Buffer.byteLength(text), truncated: true };
-}
 function errorResult(code, message) {
   return { isError: true, code, content: [{ type: "text", text: message }] };
-}
-function indexedResultFits(results, maxOutputBytes) {
-  return Buffer.byteLength(JSON.stringify({ results }), "utf8") <= maxOutputBytes;
-}
-function indexedResult(results, maxOutputBytes, isError) {
-  if (!indexedResultFits(results, maxOutputBytes)) return errorResult("output_budget_too_small", "batch status exceeds output budget");
-  return { isError, content: [{ type: "json", value: { results } }] };
 }
 
 // src/tools/file-patch.ts
@@ -204,44 +178,85 @@ import { dirname as dirname2, resolve as resolve2 } from "path";
 // src/tools/process.ts
 import { spawn } from "child_process";
 import { StringDecoder } from "string_decoder";
-var ChannelCapture = class {
+var OrderedCapture = class {
   constructor(headCap, tailCap) {
     this.headCap = headCap;
     this.tailCap = tailCap;
   }
   headCap;
   tailCap;
-  head = "";
+  head = [];
   headBytes = 0;
   tail = [];
   tailBytes = 0;
   total = 0;
   dropped = false;
-  push(text) {
+  push(channel, text) {
     if (!text) return;
     this.total += Buffer.byteLength(text);
     let rest = text;
-    if (this.headBytes < this.headCap) {
+    if (!this.tail.length && this.headBytes < this.headCap) {
       const prefix = utf8Prefix(rest, this.headCap - this.headBytes);
-      this.head += prefix.text;
+      if (prefix.text) this.head.push({ channel, text: prefix.text });
       this.headBytes += prefix.bytes;
       rest = rest.slice(prefix.text.length);
       if (!rest) return;
     }
-    this.tail.push(rest);
+    this.tail.push({ channel, text: rest });
     this.tailBytes += Buffer.byteLength(rest);
-    while (this.tail.length > 1 && this.tailBytes - Buffer.byteLength(this.tail[0]) >= this.tailCap) {
-      this.tailBytes -= Buffer.byteLength(this.tail.shift());
+    while (this.tail.length > 1 && this.tailBytes - Buffer.byteLength(this.tail[0].text) >= this.tailCap) {
+      this.tailBytes -= Buffer.byteLength(this.tail.shift().text);
       this.dropped = true;
     }
   }
-  /** Whole text when nothing was dropped and it fits; otherwise start + marker + end within `limit`. */
-  text(limit, fullOutputPath) {
-    const tail = this.tail.join("");
-    if (!this.dropped) return elideMiddle(this.head + tail, limit, fullOutputPath);
-    return elideParts(this.head, tail, this.total, limit, fullOutputPath);
+  /** Everything when nothing was dropped and it fits; otherwise start + marker + end within `limit`. */
+  render(limit, fullOutputPath) {
+    const all = [...this.head, ...this.tail];
+    if (!this.dropped && this.total <= limit) return { segments: merge(all), truncated: false };
+    const marker = (omitted) => `
+\u2026[${omitted} bytes omitted${fullOutputPath ? `; full output: ${fullOutputPath}` : ""}]\u2026
+`;
+    const room = limit - Buffer.byteLength(marker(this.total));
+    if (room <= 0) return { segments: merge(take(all, limit)), truncated: true };
+    const start = take(all, Math.floor(room / 5));
+    const startBytes = start.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0);
+    const end = takeEnd(this.dropped ? this.tail : all, room - startBytes);
+    const endBytes = end.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0);
+    return { segments: merge([...start, { text: marker(this.total - startBytes - endBytes) }, ...end]), truncated: true };
   }
 };
+function take(segments, limit) {
+  const kept = [];
+  let remaining = limit;
+  for (const segment of segments) {
+    if (remaining <= 0) break;
+    const prefix = utf8Prefix(segment.text, remaining);
+    if (prefix.text) kept.push({ ...segment, text: prefix.text });
+    remaining -= prefix.bytes;
+    if (prefix.truncated) break;
+  }
+  return kept;
+}
+function takeEnd(segments, limit) {
+  const kept = [];
+  let remaining = limit;
+  for (let index = segments.length - 1; index >= 0 && remaining > 0; index--) {
+    const suffix = utf8Suffix(segments[index].text, remaining);
+    if (suffix.text) kept.unshift({ ...segments[index], text: suffix.text });
+    remaining -= suffix.bytes;
+    if (suffix.truncated) break;
+  }
+  return kept;
+}
+function merge(segments) {
+  const merged = [];
+  for (const segment of segments) {
+    const last = merged.at(-1);
+    if (last && last.channel === segment.channel) last.text += segment.text;
+    else merged.push({ ...segment });
+  }
+  return merged;
+}
 function spawnShell(options, platform = process.platform) {
   return spawn(options.bashPath ?? process.env.RAW_BASH_PATH ?? "bash", ["-c", options.command], {
     cwd: options.cwd,
@@ -257,8 +272,8 @@ function signalShellGroup(child, signal, platform = process.platform) {
     if (error.code !== "ESRCH") throw error;
   }
 }
-async function runBashDetailed(options) {
-  if (options.signal?.aborted) return { result: errorResult("aborted", "bash aborted before execution") };
+async function runBash(options) {
+  if (options.signal?.aborted) return errorResult("aborted", "bash aborted before execution");
   const timeoutMs = options.timeoutMs ?? 12e4;
   const child = spawnShell(options);
   let observedBytes = 0;
@@ -266,7 +281,7 @@ async function runBashDetailed(options) {
   let aborted = false;
   let spawnError;
   const max = Math.max(0, options.maxOutputBytes);
-  const captures = { stdout: new ChannelCapture(Math.floor(max / 5), max), stderr: new ChannelCapture(Math.floor(max / 5), max) };
+  const capture = new OrderedCapture(Math.floor(max / 5), max);
   let pending = [];
   let spill;
   const outDecoder = new StringDecoder("utf8");
@@ -276,8 +291,8 @@ async function runBashDetailed(options) {
   let reapTimer;
   let deadline;
   let resolveCancelled;
-  const cancellationWatchdog = new Promise((resolve3) => {
-    resolveCancelled = resolve3;
+  const cancellationWatchdog = new Promise((resolve4) => {
+    resolveCancelled = resolve4;
   });
   let escalation;
   const signalGroup = (signal) => signalShellGroup(child, signal);
@@ -286,10 +301,10 @@ async function runBashDetailed(options) {
     if (reason === "abort") aborted = true;
     else timedOut = true;
     signalGroup("SIGTERM");
-    escalation = new Promise((resolve3) => {
+    escalation = new Promise((resolve4) => {
       killTimer = setTimeout(() => {
         signalGroup("SIGKILL");
-        resolve3();
+        resolve4();
       }, 500);
     });
     drainTimer = setTimeout(() => {
@@ -309,7 +324,7 @@ async function runBashDetailed(options) {
       options.onOutput?.(channel, text);
     } catch {
     }
-    captures[channel].push(text);
+    capture.push(channel, text);
     if (spill) spill.write(chunk);
     else {
       pending.push(chunk);
@@ -323,22 +338,22 @@ async function runBashDetailed(options) {
   child.stdout?.on("data", (chunk) => append("stdout", chunk));
   child.stderr?.on("data", (chunk) => append("stderr", chunk));
   let exited = { code: null, signal: null };
-  const exitedPromise = new Promise((resolve3) => {
+  const exitedPromise = new Promise((resolve4) => {
     child.once("exit", (code, signal) => {
       exited = { code, signal };
-      resolve3();
+      resolve4();
     });
   });
-  const closedPromise = new Promise((resolve3) => {
+  const closedPromise = new Promise((resolve4) => {
     child.once("error", (error) => {
       spawnError = error;
     });
-    child.once("close", () => resolve3());
+    child.once("close", () => resolve4());
   });
   const outcome = await Promise.race([closedPromise.then(() => "closed"), cancellationWatchdog.then(() => "watchdog")]);
   if (outcome === "watchdog") {
-    await Promise.race([exitedPromise, new Promise((resolve3) => {
-      reapTimer = setTimeout(resolve3, 1300);
+    await Promise.race([exitedPromise, new Promise((resolve4) => {
+      reapTimer = setTimeout(resolve4, 1300);
     })]);
     if (reapTimer) clearTimeout(reapTimer);
   }
@@ -352,25 +367,14 @@ async function runBashDetailed(options) {
       options.onOutput?.(channel, tail);
     } catch {
     }
-    captures[channel].push(tail);
+    capture.push(channel, tail);
   }
   spill?.close();
   if (killTimer) clearTimeout(killTimer);
-  if (spawnError) return { result: errorResult("bash_spawn_error", `cannot start Bash: ${spawnError.message}`) };
-  const render = (limit, fullOutputPath = savedLabel(spill?.path, spill?.capped)) => {
-    const small = captures.stdout.total <= captures.stderr.total ? "stdout" : "stderr";
-    const smallBudget = Math.min(captures[small].total, Math.floor(limit / 2));
-    const largeBudget = limit - smallBudget;
-    const out = captures.stdout.text(small === "stdout" ? smallBudget : largeBudget, fullOutputPath);
-    const err = captures.stderr.text(small === "stderr" ? smallBudget : largeBudget, fullOutputPath);
-    return { stdout: out.text, stderr: err.text, truncated: out.truncated || err.truncated };
-  };
-  const { stdout, stderr, truncated } = render(max);
-  const retainedBytes = Buffer.byteLength(stdout) + Buffer.byteLength(stderr);
-  const content = [];
-  if (stdout) content.push({ type: "text", channel: "stdout", text: stdout });
-  if (stderr) content.push({ type: "text", channel: "stderr", text: stderr });
-  return { render, result: {
+  if (spawnError) return errorResult("bash_spawn_error", `cannot start Bash: ${spawnError.message}`);
+  const { segments, truncated } = capture.render(max, savedLabel(spill?.path, spill?.capped));
+  const content = segments.map((segment) => segment.channel ? { type: "text", channel: segment.channel, text: segment.text } : { type: "text", text: segment.text });
+  return {
     isError: aborted || timedOut,
     ...aborted ? { code: "aborted" } : timedOut ? { code: "timeout" } : {},
     content,
@@ -378,152 +382,180 @@ async function runBashDetailed(options) {
     signal: exited.signal,
     timedOut,
     truncated,
-    retainedBytes,
+    retainedBytes: segments.reduce((sum, segment) => sum + Buffer.byteLength(segment.text), 0),
     observedBytes,
     ...truncated && spill?.path ? { fullOutputPath: spill.path, ...spill.capped ? { fullOutputCapped: true } : {} } : {}
-  } };
+  };
 }
 
 // src/tools/primitives.ts
+var BASH_DEFAULT_TIMEOUT_MS = 12e4;
+var BASH_MAX_TIMEOUT_MS = 6e5;
+var BASH_STATUS_RESERVE = 256;
+var BACKGROUND_IGNORED = "[ignored run_in_background: background jobs need the process tool; ran in the foreground]";
+function seconds(ms) {
+  return `${(ms / 1e3).toFixed(1)}s`;
+}
 async function bashTool(args, context) {
-  const reserve2 = (index) => ({
-    index,
-    status: "error",
-    exit_code: 2147483647,
-    signal: "SIGKILL",
-    timed_out: true,
-    truncated: true,
-    stdout: "",
-    stderr: "",
-    observed_bytes: 2147483647,
-    error: "x".repeat(80)
-  });
-  const rows = args.commands.map((_, index) => reserve2(index));
-  if (!indexedResultFits(rows, context.maxOutputBytes)) {
-    return errorResult("output_budget_too_small", "bash batch outcomes exceed output budget");
-  }
-  for (const command of args.commands) if (command.env_refs && Object.keys(command.env_refs).length) {
-    if (!context.vars) return errorResult("vars_unavailable", "variable services are unavailable");
+  const cwd = args.workdir === void 0 ? context.cwd : resolve2(context.cwd, args.workdir);
+  const requested = args.timeout ?? BASH_DEFAULT_TIMEOUT_MS;
+  const timeout = Math.min(requested, BASH_MAX_TIMEOUT_MS);
+  const summary = utf8Prefix(args.command.split("\n", 1)[0], 200).text;
+  const host = (status2, extra = {}) => ({ summary, status: status2, ...args.description ? { description: args.description } : {}, ...extra });
+  let bindings;
+  if (args.env_refs && Object.keys(args.env_refs).length) {
+    if (!context.vars) return { ...errorResult("vars_unavailable", "variable services are unavailable"), host: host("error") };
     try {
-      context.vars.validateEnvRefs(command.env_refs);
+      context.vars.validateEnvRefs(args.env_refs);
+      bindings = await context.vars.resolveEnv(args.env_refs, { ...context.signal ? { signal: context.signal } : {} });
     } catch (error) {
-      return errorResult("var_env_refs_invalid", error instanceof Error ? error.message : "invalid variable references");
+      const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "var_env_refs_invalid";
+      return { ...errorResult(code, error instanceof Error ? error.message : "invalid variable references"), host: host("error") };
     }
   }
-  let stopped = false;
-  let stopReason = "prior_timeout";
-  for (const [index, command] of args.commands.entries()) {
-    if (stopped || context.signal?.aborted) {
-      rows[index] = { index, status: "skipped", error: context.signal?.aborted ? "aborted" : stopReason };
-      continue;
-    }
-    const serialized = Buffer.byteLength(JSON.stringify({ results: rows }), "utf8");
-    const share = Math.max(0, Math.floor((context.maxOutputBytes - serialized) / (args.commands.length - index)));
-    const reservedItemBytes = Buffer.byteLength(JSON.stringify(rows[index]), "utf8");
-    let result;
-    let render;
-    let bindings;
-    try {
-      if (command.env_refs && Object.keys(command.env_refs).length) bindings = await context.vars.resolveEnv(command.env_refs, { ...context.signal ? { signal: context.signal } : {} });
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "var_error";
-      rows[index] = { index, status: context.signal?.aborted ? "aborted" : "error", error: code };
-      stopped = true;
-      stopReason = "prior_var_error";
-      continue;
-    }
-    let activity;
-    try {
-      activity = context.commandActivity?.begin(command.command, context.cwd);
-    } catch {
-    }
-    try {
-      ({ result, render } = await runBashDetailed({
-        command: command.command,
-        cwd: context.cwd,
-        maxOutputBytes: share,
-        ...activity ? { onOutput: activity.output } : {},
-        ...bindings ? { env: { ...process.env, ...bindings } } : {},
-        ...command.timeout_ms !== void 0 ? { timeoutMs: command.timeout_ms } : {},
-        ...context.signal ? { signal: context.signal } : {},
-        ...context.bashPath ? { bashPath: context.bashPath } : {}
-      }));
-    } catch (error) {
-      result = errorResult("bash_error", error.message);
-    }
-    try {
-      activity?.finish(result);
-    } catch {
-    }
-    let stdout = result.content.flatMap((item) => item.type === "text" && item.channel === "stdout" ? [item.text] : []).join("");
-    let stderr = result.content.flatMap((item) => item.type === "text" && item.channel === "stderr" ? [item.text] : []).join("");
-    const status = result.code === "aborted" || context.signal?.aborted ? "aborted" : result.code === "timeout" || result.timedOut ? "timeout" : result.isError ? "error" : "ok";
-    let fullOutput = result.fullOutputPath;
-    let fullOutputCapped = result.fullOutputCapped === true;
-    const candidate = () => ({
-      index,
-      status,
-      exit_code: result.exitCode ?? null,
-      signal: result.signal ?? null,
-      timed_out: result.timedOut ?? false,
-      truncated: Boolean(result.truncated || stdout !== originalStdout || stderr !== originalStderr),
-      stdout,
-      stderr,
-      observed_bytes: result.observedBytes ?? 0,
-      ...status === "error" ? { error: result.code ?? "bash_error" } : {},
-      ...fullOutput ? { full_output: fullOutput } : {}
+  let activity;
+  try {
+    activity = context.commandActivity?.begin(args.command, cwd);
+  } catch {
+  }
+  const started = performance.now();
+  let result;
+  try {
+    result = await runBash({
+      command: args.command,
+      cwd,
+      maxOutputBytes: Math.max(0, context.maxOutputBytes - BASH_STATUS_RESERVE),
+      timeoutMs: timeout,
+      ...activity ? { onOutput: activity.output } : {},
+      ...bindings ? { env: { ...process.env, ...bindings } } : {},
+      ...context.signal ? { signal: context.signal } : {},
+      ...context.bashPath ? { bashPath: context.bashPath } : {}
     });
-    const originalStdout = stdout;
-    const originalStderr = stderr;
-    const fits = () => {
-      const check = [...rows];
-      check[index] = candidate();
-      const addedBytes = Buffer.byteLength(JSON.stringify(check[index]), "utf8") - reservedItemBytes;
-      return addedBytes <= share && indexedResultFits(check, context.maxOutputBytes);
-    };
-    if (!fits() && !fullOutput) {
-      ({ path: fullOutput, capped: fullOutputCapped } = spillText("bash", `${originalStdout}${originalStderr ? `${originalStdout ? "\n" : ""}[stderr]
-${originalStderr}` : ""}`));
-    }
-    for (let limit = Buffer.byteLength(stdout) + Buffer.byteLength(stderr); !fits() && limit > 0; ) {
-      limit = Math.floor(limit * 3 / 4);
-      const saved2 = savedLabel(fullOutput, fullOutputCapped);
-      if (render) ({ stdout, stderr } = render(limit, saved2));
-      else {
-        stdout = elideMiddle(stdout, Math.floor(limit / 2), saved2).text;
-        stderr = elideMiddle(stderr, limit - Buffer.byteLength(stdout), saved2).text;
-      }
-    }
-    if (!fits() && fullOutput) fullOutput = void 0;
-    rows[index] = fits() ? candidate() : { index, status: "error", error: "result_budget_exhausted" };
-    if (status === "aborted" || status === "timeout") stopped = true;
+  } catch (error) {
+    result = errorResult("bash_error", error.message);
   }
-  return indexedResult(rows, context.maxOutputBytes, rows.some((row) => row.status !== "ok"));
+  try {
+    activity?.finish(result);
+  } catch {
+  }
+  const durationMs = Math.round(performance.now() - started);
+  if (result.code === "bash_spawn_error" || result.code === "bash_error") return { ...result, host: host("error", { durationMs }) };
+  const aborted = result.code === "aborted" || context.signal?.aborted === true;
+  const status = aborted ? `[aborted after ${seconds(durationMs)}; process group stopped]` : result.timedOut ? `[timed out after ${timeout / 1e3}s; process group stopped]` : result.exitCode === null || result.exitCode === void 0 ? `[killed by ${result.signal ?? "signal"} \xB7 ${seconds(durationMs)}]` : `[exit ${result.exitCode} \xB7 ${seconds(durationMs)}]`;
+  const notes = [
+    ...requested > BASH_MAX_TIMEOUT_MS ? [`[timeout clamped to ${BASH_MAX_TIMEOUT_MS} ms]`] : [],
+    ...args.run_in_background === true ? [BACKGROUND_IGNORED] : []
+  ];
+  return {
+    ...result,
+    content: [...result.content, { type: "text", text: [status, ...notes].join("\n") }],
+    host: host(aborted ? "cancelled" : result.timedOut ? "timeout" : "ok", {
+      durationMs,
+      exitCode: result.exitCode ?? null,
+      signal: result.signal ?? null,
+      ...result.fullOutputPath ? { fullOutputPath: result.fullOutputPath, ...result.fullOutputCapped ? { fullOutputCapped: true } : {} } : {}
+    })
+  };
 }
 
 // src/tools/bundled/bash/index.ts
+var example = { command: "npm test", timeout: 3e5, description: "Run the test suite" };
+var renamedArguments = { commands: "command" };
+var BATCH = 'bash takes one command: {"command":"npm test"}; call bash once per command';
+function rename2(args, notes, from, to, convert = (value) => value) {
+  if (!Object.hasOwn(args, from)) return;
+  if (args[to] !== void 0) return;
+  args[to] = convert(args[from]);
+  delete args[from];
+  notes.push(`read ${from} as ${to}`);
+}
+var integer = (value) => typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
+var seconds2 = (value) => {
+  const number = integer(value);
+  return typeof number === "number" && Number.isFinite(number) ? Math.round(number * 1e3) : value;
+};
+function commandText(value) {
+  if (!Array.isArray(value) || !value.length || !value.every((item) => typeof item === "string")) return value;
+  const words = value;
+  if (words.length === 3 && /^(?:\/(?:usr\/)?bin\/)?(?:ba)?sh$/.test(words[0]) && /^-l?c$/.test(words[1])) return words[2];
+  return words.map((word) => /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`).join(" ");
+}
+function normalizeArguments(input) {
+  if (Object.hasOwn(input, "commands")) return { args: input, rejected: BATCH };
+  const args = { ...input };
+  const notes = [];
+  rename2(args, notes, "cmd", "command");
+  rename2(args, notes, "script", "command");
+  if (Array.isArray(args.command)) {
+    args.command = commandText(args.command);
+    notes.push("read the command array as one shell command");
+  }
+  if (typeof args.timeout === "string") args.timeout = integer(args.timeout);
+  rename2(args, notes, "timeout_ms", "timeout", integer);
+  rename2(args, notes, "timeout_s", "timeout", seconds2);
+  rename2(args, notes, "timeout_seconds", "timeout", seconds2);
+  for (const alias of ["cwd", "dir_path", "directory"]) rename2(args, notes, alias, "workdir");
+  rename2(args, notes, "is_background", "run_in_background");
+  rename2(args, notes, "background", "run_in_background");
+  if (typeof args.description === "string" && [...args.description].length > 200) {
+    args.description = [...args.description].slice(0, 200).join("");
+    notes.push("cut description to 200 characters");
+  }
+  return { args, notes };
+}
 function validateArgs(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "arguments must be an object";
   const args = value;
-  const unexpected = Object.keys(args).find((key) => key !== "commands");
-  if (unexpected !== void 0) return `unknown bash property ${JSON.stringify(unexpected)}; use {"commands":[{"command":"..."}]}`;
-  if (!Array.isArray(args.commands) || args.commands.length < 1 || args.commands.length > 16) return "commands must contain 1 to 16 entries";
-  for (const [index, raw] of args.commands.entries()) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return `commands[${index}] must be an object with a command field, e.g. {"command":"pwd"}; strings are invalid`;
-    const command = raw;
-    if (Object.keys(command).some((key) => !["command", "timeout_ms", "env_refs"].includes(key))) return `commands[${index}] has an unknown property`;
-    if (typeof command.command !== "string" || !command.command) return `commands[${index}].command must be a nonempty string`;
-    if (command.env_refs !== void 0) {
-      if (!command.env_refs || typeof command.env_refs !== "object" || Array.isArray(command.env_refs) || Object.entries(command.env_refs).some(([key, value2]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value2 !== "string" || !value2)) return `commands[${index}].env_refs must map environment identifiers to variable names`;
-    }
-    if (command.timeout_ms !== void 0 && (!Number.isSafeInteger(command.timeout_ms) || command.timeout_ms < 1 || command.timeout_ms > 2147483647)) return `commands[${index}].timeout_ms must be a positive integer`;
+  if (Object.hasOwn(args, "commands")) return BATCH;
+  if (typeof args.command !== "string" || !args.command.trim()) return "command must be a nonempty string";
+  if (args.timeout !== void 0 && (!Number.isSafeInteger(args.timeout) || args.timeout < 1)) return "timeout must be a positive integer number of milliseconds";
+  if (args.description !== void 0 && (typeof args.description !== "string" || [...args.description].length > 200)) return "description must be a string of at most 200 characters";
+  if (args.workdir !== void 0 && (typeof args.workdir !== "string" || !args.workdir)) return "workdir must be a nonempty path";
+  if (args.run_in_background !== void 0 && typeof args.run_in_background !== "boolean") return "run_in_background must be true or false";
+  if (args.env_refs !== void 0 && (!args.env_refs || typeof args.env_refs !== "object" || Array.isArray(args.env_refs) || Object.entries(args.env_refs).some(([key, item]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof item !== "string" || !item))) {
+    return "env_refs must map environment identifiers to variable names";
   }
   return void 0;
 }
 async function handler(args, context) {
   return bashTool(args, context);
 }
+function delegate(args, context) {
+  if (args.run_in_background !== true) return void 0;
+  const command = String(args.command);
+  const workdir = typeof args.workdir === "string" ? relative2(context.cwd, resolve3(context.cwd, args.workdir)) : "";
+  const summary = command.split("\n", 1)[0].slice(0, 200);
+  const clamped = typeof args.timeout === "number" && args.timeout > BASH_MAX_TIMEOUT_MS;
+  return {
+    identity: "builtin/process",
+    arguments: {
+      action: "start",
+      command,
+      ...workdir && !isAbsolute(workdir) ? { cwd: workdir } : {},
+      ...typeof args.description === "string" && args.description ? { label: args.description } : {},
+      ...args.env_refs ? { env_refs: args.env_refs } : {},
+      ...typeof args.timeout === "number" ? { timeout: Math.min(args.timeout, BASH_MAX_TIMEOUT_MS) } : {}
+    },
+    finish(result) {
+      const description = typeof args.description === "string" && args.description ? { description: args.description } : {};
+      const id = result.host?.processId;
+      if (result.isError || !id) return { ...result, host: { ...result.host, summary, status: "error", ...description } };
+      return {
+        isError: false,
+        content: [{ type: "text", text: `Started background job ${id} (${summary}).
+Read output: process {"action":"output","id":"${id}"}
+Stop: process {"action":"stop","id":"${id}"}` + (clamped ? `
+[timeout clamped to ${BASH_MAX_TIMEOUT_MS} ms]` : "") }],
+        host: { summary, status: "ok", processId: id, ...description }
+      };
+    }
+  };
+}
 export {
+  delegate,
+  example,
   handler,
+  normalizeArguments,
+  renamedArguments,
   validateArgs
 };

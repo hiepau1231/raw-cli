@@ -28,7 +28,7 @@ Copy examples/agents/project-helper/ for a forkable layout. This example selects
       "model": "local",
       "system_prompt_file": "prompt.md",
       "tools": { "use": ["builtin/read_file", "builtin/write_file", "builtin/bash", "builtin/list_skills", "builtin/load_skill"],
-        "rules": [{ "match": "builtin/bash", "effect": "ask", "when": { "source": "arguments", "any": "commands[*].command", "regex": "(^|[;&|()\\n])\\s*rm(\\s|$)" } }] },
+        "rules": [{ "match": "builtin/bash", "effect": "ask", "when": { "source": "arguments", "any": "command", "regex": "(^|[;&|()\\n])\\s*rm(\\s|$)" } }] },
       "skills": { "use": ["builtin/configure_raw"] },
       "hooks": { "use": ["agent/guard"] },
       "max_steps": 25,
@@ -60,7 +60,7 @@ Required `tools.use` is ordered and may be empty. Select exact `builtin/<id>`, `
 
 To make a new plugin or skill, use its creation skill only when needed. For existing assets, copying and checking exact IDs is enough. MCP definitions belong to top-level `mcp.servers`; select actual original tool names, not the model-facing aliases. `add_mcp` covers new connection setup.
 
-Policy belongs in this agent's `tools.rules`. Ordered allow/ask/deny rules match canonical IDs, last match wins, unmatched calls run. Conditional ask may inspect a schema-bound string path with an RE2 search pattern. The example uses `commands[*].command` and a direct `rm` pattern; it is textual matching, not complete shell analysis. Ask without an approval channel fails closed. Preserve selective Bash approval rather than prompting for every command. Tools retain full OS permissions.
+Policy belongs in this agent's `tools.rules`. Ordered allow/ask/deny rules match canonical IDs, last match wins, unmatched calls run. Conditional ask may inspect a schema-bound string path with an RE2 search pattern. The example uses Bash's `command` and a direct `rm` pattern; it is textual matching, not complete shell analysis. Ask without an approval channel fails closed. Preserve selective Bash approval rather than prompting for every command. Tools retain full OS permissions.
 
 Optional controls: positive integers `max_steps`, `max_output_bytes`, `request_timeout_ms`; `request` for provider-specific reasoning/output; `cache` for supported hints; `compact` for retention/summarization. Automatic compact is on by default when the model declares `context_window_tokens`; `compact.trigger_tokens` sets a threshold leaving output reserve, or `false` keeps it manual; `compact.instructions` adds text to every checkpoint prompt. Consult `configure_raw` for nontrivial provider-specific fields instead of copying another provider's controls blindly.
 
@@ -77,4 +77,4 @@ Report agent/config/model, selected assets, checks and prerequisites. `raw --res
 
 Root vars/var_providers define values and executable sources; agent.vars selects exact names, omitted means none. Add builtin/list_vars/read_var to tools.use when discovery/reading is needed. Example: root vars.now={description:"Current UTC time",access:"read",source:{kind:"provider",name:"system.time"}}, agent.vars=["now"]. configure_raw covers the full schema; create_tool covers executable providers.
 
-Keep provider scripts/data beside the shared config; command paths, file sources and provider cwd resolve from config, unlike Bash's session cwd. Recipients supply environment values and executable dependencies. Use references for consumption-only values, e.g. commands[].env_refs; do not copy them into the prompt. List/get via raw --config PATH --agent NAME vars needs no model. Repeat after relocating. Runtime values stay out of the initial prefix; old readings are historical on resume. Providers execute on demand, not during listing.
+Keep provider scripts/data beside the shared config; command paths, file sources and provider cwd resolve from config, unlike Bash's session cwd. Recipients supply environment values and executable dependencies. Use references for consumption-only values, e.g. Bash env_refs; do not copy them into the prompt. List/get via raw --config PATH --agent NAME vars needs no model. Repeat after relocating. Runtime values stay out of the initial prefix; old readings are historical on resume. Providers execute on demand, not during listing.

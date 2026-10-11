@@ -740,6 +740,29 @@ test("R6: working state lists only completed writes, from operations and patches
   assert.deepEqual(facts.written, [{ path: "ok.txt", tool: "write_file replace" }, { path: "new.ts", tool: "write_file patch" }]);
 });
 
+test("R6b: the last bash command and its saved output come from the normalized call and host data", () => {
+  const call = (id: string, args: Record<string, unknown>): ModelMessage => ({ role: "assistant", text: "", toolCalls: [{ id, name: "bash", arguments: args }] });
+  const facts = collectFacts([
+    call("b1", { command: "npm test" }),
+    { role: "tool", callId: "b1", name: "bash", result: { isError: false, content: [{ type: "text", text: "[exit 1 · 2.0s]" }],
+      host: { exitCode: 1, fullOutputPath: "/tmp/raw/test.log" } } },
+    // An aliased call: the stored tool message carries the normalized command.
+    call("b2", { cmd: "npm run lint" }),
+    { role: "tool", callId: "b2", name: "bash", arguments: { command: "npm run lint" }, result: { isError: false,
+      content: [{ type: "text", text: "[exit 0 · 1.0s]" }], host: { exitCode: 0 } } },
+    // A background job has no exit yet and does not replace the last command.
+    call("b3", { command: "npm run dev", run_in_background: true }),
+    { role: "tool", callId: "b3", name: "bash", result: { isError: false, content: [{ type: "text", text: "Started background job p1 (npm run dev)." }],
+      host: { processId: "p1" } } },
+  ]);
+  assert.deepEqual(facts.lastBash, { command: "npm run lint", exitCode: 0 });
+  assert.deepEqual(facts.outputs, ["/tmp/raw/test.log"]);
+  const timedOut = collectFacts([call("t", { command: "sleep 9" }),
+    { role: "tool", callId: "t", name: "bash", result: { isError: true, content: [{ type: "text", text: "[timed out after 1s; process group stopped]" }],
+      host: { exitCode: null, status: "timeout" } } }]);
+  assert.deepEqual(timedOut.lastBash, { command: "sleep 9", exitCode: null });
+});
+
 test("R8: a summary retry never doubles past the room the new context has", async () => {
   const requests: number[] = [];
   const provider: ProviderAdapter = { modelConfig: { agentName: "fixture", provider: "ollama", method: "openai-chat-completions", model: "fixture", maxOutputTokens: 100000 },

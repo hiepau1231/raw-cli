@@ -10,7 +10,7 @@ const strip = (text: string) => text.replace(/\u001b\[[0-9;]+m/g, "");
 test("builtin actions have distinct type icons and status is independent", () => {
   const ui = resolveUiOptions({ color: "always" });
   const read = projectToolCall("read_file", "builtin/read_file", { files: [{ path: "src/index.ts" }] }, true);
-  const command = projectToolCall("bash", "builtin/bash", { commands: [{ command: "pwd" }] }, true);
+  const command = projectToolCall("bash", "builtin/bash", { command: "pwd" }, true);
   assert.match(strip(formatToolStart(read, ui, caps, 80)), /↳ read_file.*src\/index.ts/);
   assert.match(strip(formatToolStart(command, ui, caps, 80)), /\$ bash.*pwd/);
   const failed = projectToolResult("bash", "builtin/bash", { isError: true,
@@ -20,15 +20,18 @@ test("builtin actions have distinct type icons and status is independent", () =>
   assert.match(result, /permission denied/);
 });
 
-test("normal and compact density preserve failed batch states and generic tool identity", () => {
-  const value = { results: [{ index: 0, status: "ok", stdout: "one" }, { index: 1, status: "error", error: "failed" }] };
-  const result = projectToolResult("bash", "builtin/bash", { isError: false, content: [{ type: "json", value }] });
+test("normal and compact density preserve failed batch states, bash exit codes and generic tool identity", () => {
+  const value = { results: [{ index: 0, status: "ok", path: "a.txt", text: "one" }, { index: 1, status: "error", path: "b.txt", error: "failed" }] };
+  const result = projectToolResult("read_file", "builtin/read_file", { isError: false, content: [{ type: "json", value }] });
+  const exited = projectToolResult("bash", "builtin/bash", { isError: false,
+    content: [{ type: "text", channel: "stdout", text: "out" }, { type: "text", text: "[exit 3 · 0.1s]" }], host: { exitCode: 3, status: "ok" } });
   for (const density of ["compact", "normal", "verbose"] as const) {
     const ui = resolveUiOptions({ density, color: "always" });
     const rendered = strip(formatToolResult(result, ui, caps, 40));
     assert.match(rendered, /0:ok/);
     assert.match(rendered, /1:error/);
-    assert.match(rendered, /✗ bash/);
+    assert.match(rendered, /✗ read_file/);
+    assert.match(strip(formatToolResult(exited, ui, caps, 40)), /✗ bash.*exit 3/);
   }
   const custom = projectToolCall("read_file", "mcp/server/read_file", { query: "test" }, true);
   assert.match(strip(formatToolStart(custom, resolveUiOptions({}), caps, 80)), /↗ read_file.*query/);
@@ -37,7 +40,7 @@ test("normal and compact density preserve failed batch states and generic tool i
 
 test("tool-provided control bytes cannot erase terminal output", () => {
   const ui = resolveUiOptions({ color: "always" });
-  const call = projectToolCall("bash", "builtin/bash", { commands: [{ command: "printf '\u001b[2J'" }] }, true);
+  const call = projectToolCall("bash", "builtin/bash", { command: "printf '\u001b[2J'" }, true);
   const result = projectToolResult("bash", "builtin/bash", { isError: false, content: [{ type: "text", text: "\u001b[2Jdanger" }] });
   const shown = formatToolStart(call, ui, caps, 80) + formatToolResult(result, ui, caps, 80);
   assert.doesNotMatch(shown, /\u001b\[2J/);

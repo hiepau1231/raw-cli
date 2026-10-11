@@ -156,12 +156,12 @@ test("passive components never import code, per-file conflicts and usages preven
 test("policy samples use ordered canonical rules with conditional RE2 and never execute", async () => {
   const f = await dashboardFixture();
   try {
-    const rules = [{ match: "builtin/bash", effect: "ask", when: { source: "arguments", any: "commands[*].command", regex: "(^|[;& ]+)rm[ ]" } }];
+    const rules = [{ match: "builtin/bash", effect: "ask", when: { source: "arguments", any: "command", regex: "(^|[;& ]+)rm[ ]" } }];
     for (const [command, expected] of [["pwd", "allow"], ["rm file", "ask"]]) {
-      const result = await f.json<any>("/policy/test", "POST", { identity: "builtin/bash", rules, args: { commands: [{ command }] } });
+      const result = await f.json<any>("/policy/test", "POST", { identity: "builtin/bash", rules, args: { command } });
       assert.equal(result.effect, expected);
     }
-    const hidden = await f.json<any>("/policy/test", "POST", { identity: "builtin/bash", rules: [{ match: "builtin/bash", effect: "deny" }, ...rules], args: { commands: [{ command: "rm file" }] } });
+    const hidden = await f.json<any>("/policy/test", "POST", { identity: "builtin/bash", rules: [{ match: "builtin/bash", effect: "deny" }, ...rules], args: { command: "rm file" } });
     assert.equal(hidden.effect, "deny"); assert.equal(hidden.exposed, false);
     assert.equal((await f.api("/policy/test", "POST", { identity: "builtin/bash", rules: [{ match: "*", effect: "ask", when: { source: "arguments", any: "command", regex: ".*", invented: true } }], args: {} })).status, 422);
     assert.equal(f.provider.requests.length, 0);

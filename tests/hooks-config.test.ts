@@ -26,7 +26,7 @@ async function fixture() {
 }
 
 const manifest = (name: string) => ({ protocol_version: 2, name, events: [{ name: "PreToolUse", match: "builtin/bash",
-  when: { source: "arguments", any: "commands[*].command", regex: "rm\\s" } }], command: "node", args: ["./run.mjs"] });
+  when: { source: "arguments", any: "command", regex: "rm\\s" } }], command: "node", args: ["./run.mjs"] });
 
 test("agent config selects exact ordered hook IDs; unselected broken hook remains inert", async () => {
   const f = await fixture();
@@ -71,7 +71,7 @@ test("a loaded hook retains its script bytes until the next attachment", async (
   const first = (await load())[0]!;
   await writeFile(join(folder, "run.mjs"), "process.stdin.resume(); process.stdin.on('end',()=>process.stdout.write(JSON.stringify({message:'second'})));\n");
   const request = { protocol_version: 2 as const, event: "PreToolUse" as const, cwd: f.root,
-    tool: { identity: "builtin/bash", name: "bash", arguments: { commands: [{ command: "rm old" }] } } };
+    tool: { identity: "builtin/bash", name: "bash", arguments: { command: "rm old" } } };
   assert.equal((await runHook(first, request)).message, "first");
   assert.equal((await runHook((await load())[0]!, request)).message, "second");
 });

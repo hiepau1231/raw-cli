@@ -25,7 +25,7 @@ const raw = await dashboardFixture({
                 type: "function",
                 function: {
                   name: "bash",
-                  arguments: '{"commands":[{"command":"pwd"}]}',
+                  arguments: '{"command":"pwd"}',
                 },
               },
             ],

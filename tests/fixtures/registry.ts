@@ -5,7 +5,8 @@ import bashManifest from "../../src/tools/bundled/bash/tool.json" with { type: "
 import imageManifest from "../../src/tools/bundled/view_image/tool.json" with { type: "json" };
 import { handler as read, validateArgs as validateRead } from "../../src/tools/bundled/read_file/index.js";
 import { handler as write, validateArgs as validateWrite, describeEffects as writeEffects } from "../../src/tools/bundled/write_file/index.js";
-import { handler as bash, validateArgs as validateBash } from "../../src/tools/bundled/bash/index.js";
+import { handler as bash, validateArgs as validateBash, normalizeArguments as normalizeBash, example as bashExample,
+  renamedArguments as bashRenamed } from "../../src/tools/bundled/bash/index.js";
 import { handler as image, validateArgs as validateImage } from "../../src/tools/bundled/view_image/index.js";
 
 export { ToolRegistry, BUILTIN_TOOL_DEFINITIONS } from "../../src/tools/registry.js";
@@ -22,6 +23,8 @@ export function createTestToolRegistry(rules: readonly ToolPolicyRule[] = [], vi
     description: manifest.description, inputSchema: manifest.input_schema as ToolRegistration["inputSchema"],
     ...(manifest.id === "write_file" ? { conditionSources: ["effects"], effectsSchema: writeManifest.effects_schema,
       describeEffects: writeEffects } : { conditionSources: ["arguments"] }),
+    // Bash normalizes the way the production loader forwards it; background delegation needs the process tool.
+    ...(manifest.id === "bash" ? { normalizeArguments: normalizeBash, example: bashExample, renamedArguments: bashRenamed } : {}),
     handler, validateArgs,
   });
   return registry;

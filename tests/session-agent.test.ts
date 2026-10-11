@@ -423,7 +423,7 @@ test("successful compact retains full CLI Bash arguments and ACP raw result in d
     if (ordinary === 1) {
       request.onReasoningDelta?.("visible reasoning");
       return { text: "", toolCalls: [{ id: "bad-bash", name: "bash",
-        arguments: { commands: [{ command: bashArgument }] }, argumentError: "invalid fixture command" }], finishReason: "tool_calls" };
+        arguments: { command: bashArgument }, argumentError: "invalid fixture command" }], finishReason: "tool_calls" };
     }
     return { text: "finished", toolCalls: [], finishReason: "stop" };
   });
@@ -438,7 +438,7 @@ test("successful compact retains full CLI Bash arguments and ACP raw result in d
     const displayedArgs = (history.find((item) => item.kind === "tool_call")?.payload.display as {
       arguments: Record<string, unknown>;
     }).arguments;
-    assert.deepEqual(displayedArgs, { commands: [{ command: bashArgument }] });
+    assert.deepEqual(displayedArgs, { command: bashArgument });
     assert.ok(history.some((item) => item.kind === "tool_result"));
     assert.ok(history.some((item) => item.kind === "reasoning" && item.payload.text === "visible reasoning"));
     const resumed = createAgent({ cwd: root, provider: runtime, system: "system", persistence: { store, sessionId: id, surface: "cli" } });

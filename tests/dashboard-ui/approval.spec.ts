@@ -13,7 +13,7 @@ test.use({
           {
             match: "builtin/bash",
             effect: "ask",
-            when: { source: "arguments", any: "commands[*].command", regex: "^rm\\b" },
+            when: { source: "arguments", any: "command", regex: "^rm\\b" },
           },
         ],
       },
@@ -30,7 +30,7 @@ test.use({
                   type: "function",
                   function: {
                     name: "bash",
-                    arguments: '{"commands":[{"command":"rm not-present"}]}',
+                    arguments: '{"command":"rm not-present"}',
                   },
                 },
               ],
@@ -65,7 +65,7 @@ test("pending permission remains visible from Settings and denying does not edit
       {
         match: "builtin/bash",
         effect: "ask",
-        when: { source: "arguments", any: "commands[*].command", regex: "^rm\\b" },
+        when: { source: "arguments", any: "command", regex: "^rm\\b" },
       },
     ],
   });

@@ -33,7 +33,7 @@ Optional:
 - `hooks.use`: ordered unique exact string IDs: `local/<name>`, `agent/<name>` or `pkg/<alias>/hooks/<export>`; empty/omitted means none. The folder has `hook.json` and owned scripts. Read `references/hooks.md` for every field and value type; `create_hook` covers authoring and tests.
 - `vars`: ordered unique existing root variable names; omitted means none. Add `builtin/list_vars`/`builtin/read_var` to tools.use for discovery/reading.
 - Positive integers `max_steps` (10000), `max_output_bytes` (65536), `request_timeout_ms` (600000, the longest a model stream may stay silent). Precedence: flags, RAW_* env, agent.
-- `tools.rules`: ordered `{match:string,effect:"allow"|"ask"|"deny"}`. Match canonical IDs/globs (`*`, `?`); last matching rule wins; unmatched runs automatically. Only ask permits `when:{any:string,regex:string}`, a schema-bound string path and RE2 search. Bash uses `commands[*].command`. `-y` cannot bypass ask; no approval channel fails closed. Not a shell parser/sandbox.
+- `tools.rules`: ordered `{match:string,effect:"allow"|"ask"|"deny"}`. Match canonical IDs/globs (`*`, `?`); last matching rule wins; unmatched runs automatically. Only ask permits `when:{any:string,regex:string}`, a schema-bound string, number or boolean path and RE2 search. Bash uses `command`; `run_in_background` matches `true`. `-y` cannot bypass ask; no approval channel fails closed. Not a shell parser/sandbox.
 
 `request.max_output_tokens`: positive, within model/context reserve. Other fields only for matching pairs:
 
@@ -64,7 +64,7 @@ Type defaults: env/text/time string, literal inferred, others json. Env consumpt
 
 Providers receive `{protocol_version:1,name,params}` on stdin, return `{value,observed_at?}` JSON on stdout, exit 0. Errors fail without stale fallback.
 
-`raw [--config PATH] [--agent NAME] vars list|get NAME` needs no model/MCP/session. List is metadata; get requires read access. Bash `commands[].env_refs` passes named vars as environment values.
+`raw [--config PATH] [--agent NAME] vars list|get NAME` needs no model/MCP/session. List is metadata; get requires read access. Bash `env_refs` passes named vars as environment values.
 
 Values cache per runtime; resume starts empty. Vars changes preserve the prefix/key.
 

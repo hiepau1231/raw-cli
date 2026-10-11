@@ -11,14 +11,18 @@ import { createProvider } from "../src/llm/client.js";
 import { testConfig } from "./fixtures/config.js";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
 
-function toolRows(body: unknown): Map<string, Array<Record<string, unknown>>> {
+function toolContent(body: unknown): Map<string, string> {
   const messages = (body as { messages: Array<{ role: string; tool_call_id?: string; content?: string }> }).messages;
-  return new Map(messages.filter((message) => message.role === "tool").map((message) => [
-    message.tool_call_id!, (JSON.parse(message.content!) as { results: Array<Record<string, unknown>> }).results,
-  ]));
+  return new Map(messages.filter((message) => message.role === "tool").map((message) => [message.tool_call_id!, message.content!]));
 }
 
-test("real CLI and OpenAI adapter replay three indexed batches with stable schema and bounded display", async () => {
+function toolRows(body: unknown): Map<string, Array<Record<string, unknown>>> {
+  return new Map([...toolContent(body)].flatMap(([id, content]) => {
+    try { return [[id, (JSON.parse(content) as { results: Array<Record<string, unknown>> }).results] as const]; } catch { return []; }
+  }));
+}
+
+test("real CLI and OpenAI adapter replay indexed batches and single bash calls with stable schema and bounded display", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "raw-batch-integration-"));
   await writeFile(join(cwd, "first.txt"), "one\n");
   await writeFile(join(cwd, "second.txt"), "alpha\nbeta\n");
@@ -32,8 +36,8 @@ test("real CLI and OpenAI adapter replay three indexed batches with stable schem
           { path: "created.txt", mode: "replace_text", old_text: "absent", new_text: "x" },
           { path: "created.txt", mode: "append", content: "last\n" },
         ] }) } },
-      { index: 2, id: "bash-batch", type: "function", function: { name: "bash",
-        arguments: JSON.stringify({ commands: [{ command: "exit 7" }, { command: "cat created.txt" }] }) } },
+      { index: 2, id: "bash-exit", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "exit 7" }) } },
+      { index: 3, id: "bash-cat", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "cat created.txt" }) } },
     ] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "batch done" }, "stop"), openAiDone] },
   ]);
@@ -54,12 +58,13 @@ test("real CLI and OpenAI adapter replay three indexed batches with stable schem
     const after = fixture.requests[1]!.body as { messages: unknown[]; tools: unknown };
     assert.deepEqual(after.messages[0], before.messages[0]);
     assert.deepEqual(after.tools, before.tools);
+    const contents = toolContent(after);
+    assert.deepEqual([...contents.keys()], ["read-batch", "write-batch", "bash-exit", "bash-cat"]);
     const batches = toolRows(after);
-    assert.deepEqual([...batches.keys()], ["read-batch", "write-batch", "bash-batch"]);
     assert.deepEqual(batches.get("read-batch")?.map((row) => row.text), ["one\n", "beta\n"]);
     assert.deepEqual(batches.get("write-batch")?.map((row) => row.status), ["ok", "error", "ok"]);
-    assert.deepEqual(batches.get("bash-batch")?.map((row) => row.exit_code), [7, 0]);
-    assert.equal(batches.get("bash-batch")?.[1]?.stdout, "first\nlast\n");
+    assert.match(contents.get("bash-exit")!, /^\[exit 7 · \d+\.\ds\]$/);
+    assert.match(contents.get("bash-cat")!, /^first\nlast\n\n?\[exit 0 · \d+\.\ds\]$/);
     assert.match(stderr, /statuses: 0:ok 1:error 2:ok/);
     assert.doesNotMatch(stderr, /"content":"first\\n"|"content":"last\\n"/);
   } finally { await fixture.close(); }

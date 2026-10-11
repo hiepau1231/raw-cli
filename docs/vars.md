@@ -131,10 +131,10 @@ Both return whole results regardless of the agent's max_output_bytes; only a
 result over the 1 MiB safety bound returns an output-budget error instead of a
 partial value.
 
-Bash uses references per command, retaining its existing batch shape:
+Bash takes references beside its one command:
 
 ```json
-{"commands":[{"command":"test -n \"$TOKEN\"","env_refs":{"TOKEN":"token"}}]}
+{"command":"test -n \"$TOKEN\"","env_refs":{"TOKEN":"token"}}
 ```
 
 Environment names match `[A-Za-z_][A-Za-z0-9_]*`. Values may be strings, finite
@@ -144,12 +144,11 @@ child only. Raw does not substitute values into shell source or mutate the
 model's original arguments.
 
 The registry validates and approves the call first; no extra blanket Bash
-prompt is added. Reference metadata for all commands is checked before batch
-I/O. Each row resolves its values immediately before starting Bash. A provider
-failure stops remaining rows with prior_var_error; prior completed rows are
-not rolled back. An actual-type failure for type json is necessarily discovered
-at resolution. Existing nonzero-exit continuation and timeout/abort behavior
-remain; provider and Bash deadlines are separate, sharing the call's abort signal.
+prompt is added. Reference metadata is checked before any I/O, and the values
+resolve immediately before Bash starts. A provider failure returns that error
+and runs nothing. An actual-type failure for type json is necessarily discovered
+at resolution. `process` start and background `bash` resolve references the same
+way. Provider and Bash deadlines are separate, sharing the call's abort signal.
 
 ## Custom tool / library API
 

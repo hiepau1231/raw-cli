@@ -4,10 +4,10 @@
 
 `hook.json` requires `name`: a string equal to its lowercase folder name and matching `[a-z][a-z0-9_-]*`; `events`: 1..32 objects with a required event `name`; `command`: a nonempty PATH command or a contained `./` executable. Optional `args` is an array of up to 64 literal strings, default `[]`; `./` arguments resolve inside the folder. Optional `timeout_ms` is an integer 1..600000, default 60000; interrupting the run cuts a running observing hook to a 2-second cleanup window. Unknown fields are invalid. Command and args run without shell expansion from the session cwd, inheriting Raw's environment and OS permissions.
 
-Event `name` is `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop` or `SessionEnd`. Tool events alone may add `match`: a bounded canonical tool ID glob using `*` or `?`, and `when:{"any":"schema-bound string path","regex":"RE2 pattern"}`. Both filters must match before spawn. For Bash, `commands[*].command` is the schema path. Example:
+Event `name` is `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop` or `SessionEnd`. Tool events alone may add `match`: a bounded canonical tool ID glob using `*` or `?`, and `when:{"any":"schema-bound string, number or boolean path","regex":"RE2 pattern"}`. Both filters must match before spawn. For Bash, `command` is the schema path. Example:
 
 ```json
-{"protocol_version": 2, "name":"guard","events":[{"name":"PreToolUse","match":"builtin/bash","when":{"source": "arguments", "any":"commands[*].command","regex":"(^|[;&|()\\n])\\s*rm(\\s|$)"}}],"command":"node","args":["./index.mjs"],"timeout_ms":5000}
+{"protocol_version": 2, "name":"guard","events":[{"name":"PreToolUse","match":"builtin/bash","when":{"source": "arguments", "any":"command","regex":"(^|[;&|()\\n])\\s*rm(\\s|$)"}}],"command":"node","args":["./index.mjs"],"timeout_ms":5000}
 ```
 
 `raw.hook/2` sends JSON on stdin with `protocol_version:2`, event, cwd and event payload. The command returns empty stdout or one JSON object. `UserPromptSubmit` and `PreToolUse` are gates: exit 0 plus `{"decision":"continue"}` continues; `{"decision":"deny","reason":"..."}` or exit 2 denies. Other events are notifications; they may return a short `message` but cannot change a completed result. Malformed output, nonzero exit, timeout, spawn error or overflow blocks gates and warns on notifications. A continue result cannot override an existing ask/deny tool rule. `docs/hooks.md` and `create_hook` explain testing, dashboard editing and package sharing.

@@ -16,10 +16,7 @@ function typeIcon(identity: string | undefined): IconRole {
 
 function shortArguments(call: VisibleToolCall): string {
   const args = call.arguments;
-  if (call.identity === "builtin/bash" && Array.isArray(args.commands)) {
-    return args.commands.map((item) => item && typeof item === "object" && "command" in item
-      ? String(item.command) : JSON.stringify(item)).join(" ; ");
-  }
+  if (call.identity === "builtin/bash" && typeof args.command === "string") return args.command;
   if (call.identity === "builtin/read_file" && Array.isArray(args.files)) {
     return args.files.map((item) => item && typeof item === "object" && "path" in item
       ? String(item.path) : JSON.stringify(item)).join(" · ");

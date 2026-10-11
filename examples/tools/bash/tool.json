@@ -3,49 +3,48 @@
   "id": "bash",
   "version": "1.0.0",
   "name": "bash",
-  "description": "Run 1-16 Bash commands sequentially in array order. The commands array contains objects, never strings. Call with {\"commands\":[{\"command\":\"pwd\"},{\"command\":\"ls -la\"}]}; do not pass command at the top level. Results correspond to commands by zero-based index. Each command starts a separate Bash process in the session cwd. Filesystem changes persist; shell variables and cd do not carry to the next command. timeout_ms is an optional per-command deadline in milliseconds (default 120000). Each result reports status, exit_code, signal, timed_out, truncated, stdout, and stderr. Status ok means the command finished; inspect exit_code to determine success. A nonzero exit does not stop later commands. Timeout or abort stops the active process group and marks remaining commands skipped. All output shares one bounded result budget. Oversized stdout or stderr keeps its start and end around a \"…[N bytes omitted; full output: <path>]…\" marker, and the row's full_output names a file holding the complete output; read it with read_file or search it with grep when the omitted part matters. Invalid arguments reject the entire batch before any command starts. Optional per-command env_refs maps environment names to selected Raw variable names. Raw resolves read/use variables after approval, immediately before that command, and passes scalar values in its environment without rewriting command text. Reference metadata is checked for the entire batch before execution. Resolution failure stops remaining commands; earlier completed commands remain completed. Values printed by commands are ordinary output.",
+  "description": "Run one Bash command with bash -c in the session cwd. The result is its output, stdout and stderr in the order produced, then a status line such as [exit 0 · 1.2s]; a nonzero exit is reported, not an error. Example: {\"command\":\"npm test\",\"timeout\":300000,\"description\":\"Run the test suite\"}. timeout is in milliseconds (default 120000, maximum 600000). For several commands make several calls, or join them with &&. Set run_in_background for servers and watchers, then use the process tool to read output or stop them. Long output keeps its start and end and names a file holding all of it.",
   "input_schema": {
     "type": "object",
     "properties": {
-      "commands": {
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 16,
-        "description": "Array of command objects, not strings; Bash runs them one at a time in this order.",
-        "items": {
-          "type": "object",
-          "description": "One command object with a required command string and optional timeout_ms.",
-          "properties": {
-            "command": {
-              "type": "string",
-              "description": "Nonempty Bash -c command to run in the session cwd."
-            },
-            "timeout_ms": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "Positive deadline for this command in milliseconds; defaults to 120000."
-            },
-            "env_refs": {
-              "type": "object",
-              "description": "Map child environment identifiers to selected Raw variable names; values are references, not literal values.",
-              "propertyNames": {
-                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-              },
-              "additionalProperties": {
-                "type": "string",
-                "minLength": 1
-              }
-            }
-          },
-          "required": [
-            "command"
-          ],
-          "additionalProperties": false
+      "command": {
+        "type": "string",
+        "minLength": 1,
+        "description": "The Bash command to run."
+      },
+      "timeout": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Deadline in milliseconds; default 120000, maximum 600000."
+      },
+      "description": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "A few words saying what the command does, shown as its title."
+      },
+      "workdir": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Directory to run in, relative to the session cwd."
+      },
+      "run_in_background": {
+        "type": "boolean",
+        "description": "Start the command as a background job and return its ID instead of waiting."
+      },
+      "env_refs": {
+        "type": "object",
+        "description": "Map child environment names to selected Raw variable names; values are references, not literal values.",
+        "propertyNames": {
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
     "required": [
-      "commands"
+      "command"
     ],
     "additionalProperties": false
   },

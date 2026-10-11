@@ -40,28 +40,32 @@ test("files resolve per session, create parents, accept empty content and surfac
     ? (bom.content[0].value as { results: Array<{ text: string }> }).results[0]?.text : "", "\uFEFFabc");
 });
 
+const text = (result: { content: Array<{ type: string; text?: string }> }) => result.content.map((block) => block.type === "text" ? block.text : "").join("");
+
 test("bash preserves output channels, exit status and bounded UTF-8 while draining large pipes", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "raw-bash-"));
   const registry = createTestToolRegistry();
-  const result = await registry.dispatch("bash", { commands: [{ command: "printf hi; printf err >&2; exit 7" }] }, context(cwd));
-  const first = result.content[0]?.type === "json" ? (result.content[0].value as { results: Array<Record<string, unknown>> }).results[0] : undefined;
-  assert.equal(first?.exit_code, 7);
+  const result = await registry.dispatch("bash", { command: "printf hi; printf err >&2; exit 7" }, context(cwd));
+  assert.equal(result.host?.exitCode, 7);
   assert.equal(result.isError, false);
-  assert.deepEqual([first?.stdout, first?.stderr], ["hi", "err"]);
-  const exact = await registry.dispatch("bash", { commands: [{ command: "printf abcde" }] }, context(cwd));
-  const exactRow = exact.content[0]?.type === "json" ? (exact.content[0].value as { results: Array<Record<string, unknown>> }).results[0] : undefined;
-  assert.equal(exactRow?.truncated, false);
-  assert.equal(exactRow?.stdout, "abcde");
-  const huge = await registry.dispatch("bash", { commands: [{ command: "node -e 'process.stdout.write(\"😀\"+\"x\".repeat(200000))'" }] }, context(cwd, 512));
-  const hugeRow = huge.content[0]?.type === "json" ? (huge.content[0].value as { results: Array<Record<string, unknown>> }).results[0] : undefined;
-  assert.equal(hugeRow?.exit_code, 0);
-  assert.equal(hugeRow?.truncated, true);
-  assert.equal(hugeRow?.observed_bytes, 200004);
-  assert.ok(Buffer.byteLength(JSON.stringify((huge.content[0] as { type: "json"; value: unknown }).value)) <= 512);
-  const timeout = await registry.dispatch("bash", { commands: [{ command: "sleep 5", timeout_ms: 20 }] }, context(cwd));
-  const timeoutRow = timeout.content[0]?.type === "json" ? (timeout.content[0].value as { results: Array<Record<string, unknown>> }).results[0] : undefined;
-  assert.equal(timeoutRow?.timed_out, true);
-  assert.notEqual(timeoutRow?.exit_code, 0);
+  assert.deepEqual(result.content.filter((block) => block.type === "text" && block.channel).map((block) => block.type === "text" ? [block.channel, block.text] : []),
+    [["stdout", "hi"], ["stderr", "err"]]);
+  assert.match(text(result), /\[exit 7 · \d+\.\ds\]$/);
+  const exact = await registry.dispatch("bash", { command: "printf abcde" }, context(cwd));
+  assert.equal(exact.truncated ?? false, false);
+  assert.equal(exact.host?.fullOutputPath, undefined);
+  assert.match(text(exact), /^abcde\n?\[exit 0 · /);
+  const huge = await registry.dispatch("bash", { command: "node -e 'process.stdout.write(\"😀\"+\"x\".repeat(200000))'" }, context(cwd, 512));
+  assert.equal(huge.host?.exitCode, 0);
+  assert.ok(huge.host?.fullOutputPath, "the oversized output names its saved copy");
+  assert.ok(Buffer.byteLength(text(huge)) <= 512);
+  assert.ok(text(huge).startsWith("😀"), "the head keeps whole UTF-8 characters");
+  assert.ok(!text(huge).includes("\uFFFD"));
+  assert.equal(Buffer.byteLength(await readFile(huge.host.fullOutputPath, "utf8")), 200004);
+  const timeout = await registry.dispatch("bash", { command: "sleep 5", timeout: 20 }, context(cwd));
+  assert.equal(timeout.host?.status, "timeout");
+  assert.match(text(timeout), /\[timed out after 0\.02s; process group stopped\]$/);
+  assert.notEqual(timeout.host?.exitCode, 0);
 });
 
 test("abort kills owned shell descendants and leaves unrelated processes running", async () => {
@@ -71,7 +75,7 @@ test("abort kills owned shell descendants and leaves unrelated processes running
   const other = spawn(process.execPath, ["-e", "setTimeout(() => require('node:fs').writeFileSync(process.argv[1], 'ok'), 900)", unrelated], { stdio: "ignore" });
   const otherExited = new Promise((resolve) => other.once("exit", resolve));
   const controller = new AbortController();
-  const task = createTestToolRegistry().dispatch("bash", { commands: [{ command: `node ${JSON.stringify(new URL("./fixtures/process-tree.cjs", import.meta.url).pathname)} ${JSON.stringify(marker)}` }] }, { ...context(cwd), signal: controller.signal });
+  const task = createTestToolRegistry().dispatch("bash", { command: `node ${JSON.stringify(new URL("./fixtures/process-tree.cjs", import.meta.url).pathname)} ${JSON.stringify(marker)}` }, { ...context(cwd), signal: controller.signal });
   let ownedPid = 0;
   for (let i = 0; i < 100; i++) {
     try { ownedPid = Number(await readFile(marker + ".ready", "utf8")); break; }
@@ -80,8 +84,8 @@ test("abort kills owned shell descendants and leaves unrelated processes running
   assert.ok(ownedPid > 0, "descendant started before abort");
   controller.abort();
   const result = await task;
-  assert.equal(result.content[0]?.type === "json"
-    ? (result.content[0].value as { results: Array<{ status: string }> }).results[0]?.status : "", "aborted");
+  assert.equal(result.host?.status, "cancelled");
+  assert.match(text(result), /\[aborted after \d+\.\ds; process group stopped\]$/);
   await otherExited;
   await new Promise((resolve) => setTimeout(resolve, 250));
   let ownedRunning = false;
@@ -100,7 +104,7 @@ test("abort kills owned shell descendants and leaves unrelated processes running
   assert.equal(await readFile(unrelated, "utf8"), "ok");
   const pre = new AbortController();
   pre.abort();
-  assert.equal((await createTestToolRegistry().dispatch("bash", { commands: [{ command: `touch ${JSON.stringify(marker)}` }] }, { ...context(cwd), signal: pre.signal })).code, "aborted");
+  assert.equal((await createTestToolRegistry().dispatch("bash", { command: `touch ${JSON.stringify(marker)}` }, { ...context(cwd), signal: pre.signal })).code, "aborted");
 });
 
 test("timeout settles even when an escaped descendant holds inherited output pipes", async () => {
@@ -109,12 +113,11 @@ test("timeout settles even when an escaped descendant holds inherited output pip
   const started = Date.now();
   const timersBefore = process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
   try {
-    const result = await createTestToolRegistry().dispatch("bash", { commands: [{
+    const result = await createTestToolRegistry().dispatch("bash", {
       command: `node ${JSON.stringify(new URL("./fixtures/escaped-pipes.cjs", import.meta.url).pathname)} ${JSON.stringify(pidFile)}`,
-      timeout_ms: 300,
-    }] }, context(cwd));
-    assert.equal(result.content[0]?.type === "json"
-      ? (result.content[0].value as { results: Array<{ timed_out: boolean }> }).results[0]?.timed_out : false, true);
+      timeout: 300,
+    }, context(cwd));
+    assert.equal(result.host?.status, "timeout");
     assert.ok(Date.now() - started < 2500, "settles inside cancellation budget");
   } finally {
     try { process.kill(Number(await readFile(pidFile, "utf8")), "SIGKILL"); } catch { /* fixture may not have started */ }

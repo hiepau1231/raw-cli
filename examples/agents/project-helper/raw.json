@@ -27,7 +27,7 @@
             "match": "builtin/bash",
             "effect": "ask",
             "when": {
-              "any": "commands[*].command",
+              "any": "command",
               "regex": "(^|[;&|()\\n])\\s*(sudo\\s+)?(/usr/bin/|/bin/)?rm(\\s|$)",
               "source": "arguments"
             }

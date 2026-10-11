@@ -18,10 +18,11 @@ test("model-facing tool definitions explain the required workflows", () => {
   assert.match(tools.write_file!.description, /expected_sha256/);
   assert.match(tools.write_file!.description, /replace_text/);
   assert.match(tools.write_file!.description, /replace_lines/);
-  assert.match(tools.bash!.description, /exit_code/);
+  assert.match(tools.bash!.description, /\[exit 0 · 1\.2s\]/);
   assert.match(tools.bash!.description, /timeout/);
-  assert.match(tools.bash!.description, /\{"commands":\[\{"command":"pwd"\},\{"command":"ls -la"\}\]\}/);
-  assert.match(tools.bash!.description, /objects, never strings/);
+  assert.match(tools.bash!.description, /\{"command":"npm test","timeout":300000,"description":"Run the test suite"\}/);
+  assert.match(tools.bash!.description, /several calls/);
+  assert.match(tools.bash!.description, /run_in_background.*process tool/);
   for (const tool of Object.values(tools)) {
     const root = tool!.inputSchema as Record<string, unknown>;
     const properties = root.properties as Record<string, Record<string, unknown>>;

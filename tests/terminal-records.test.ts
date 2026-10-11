@@ -64,7 +64,7 @@ test("character cap keeps both ends across nine medium-sized preview lines", () 
 
 test("display calls retain Bash commands and omit write payload values", () => {
   const command = "printf 'a'.repeat(200)";
-  const bash = projectToolCall("bash", "builtin/bash", { commands: [{ command }] }, false);
+  const bash = projectToolCall("bash", "builtin/bash", { command }, false);
   assert.match(JSON.stringify(bash), /printf/);
   const write = projectToolCall("write_file", "builtin/write_file", { operations: [{ path: "src/a.ts", mode: "overwrite", content: "private-value" }] }, true);
   assert.match(JSON.stringify(write), /src\/a.ts/);

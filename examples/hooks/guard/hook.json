@@ -5,7 +5,7 @@
       "name": "PreToolUse",
       "match": "builtin/bash",
       "when": {
-        "any": "commands[*].command",
+        "any": "command",
         "regex": "(^|[;&|()\\n])\\s*rm(\\s|$)",
         "source": "arguments"
       }

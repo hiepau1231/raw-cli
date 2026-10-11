@@ -32,13 +32,13 @@ test("deny hides schema and blocks direct dispatch while ordered last match wins
 
 test("explicit ask cannot be bypassed by autoApprove and headless request fails closed", async () => {
   const registry = createTestToolRegistry([{ match: "builtin/bash", effect: "ask" }]);
-  const input = { commands: [{ command: "printf should-not-run" }] };
+  const input = { command: "printf should-not-run" };
   const missing = await registry.dispatch("bash", input, ctx);
   assert.equal(missing.code, "approval_required");
   const denied = await registry.dispatch("bash", input, { ...ctx, approve: async () => false });
   assert.equal(denied.code, "approval_denied");
   const calls: string[] = [];
-  const allowed = await registry.dispatch("bash", { commands: [{ command: "printf yes" }] }, { ...ctx,
+  const allowed = await registry.dispatch("bash", { command: "printf yes" }, { ...ctx,
     approve: async ({ name }) => { calls.push(name); return true; } });
   assert.equal(allowed.isError, false);
   assert.deepEqual(calls, ["bash"]);
@@ -58,14 +58,14 @@ test("wildcards cover embedded and trailing line breaks across entire canonical 
   assert.equal(ran, 0);
 });
 
-test("matching Bash command in a later batch slot asks once before any command runs", async () => {
+test("matching Bash command later in a compound command asks once before anything runs", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "raw-conditional-bash-"));
   const marker = join(cwd, "marker");
   const registry = createTestToolRegistry([{ match: "builtin/bash", effect: "ask",
-    when: { source: "arguments", any: "commands[*].command", regex: rmPattern } }]);
-  const safe = await registry.dispatch("bash", { commands: [{ command: "printf ok" }] }, { ...ctx, cwd });
+    when: { source: "arguments", any: "command", regex: rmPattern } }]);
+  const safe = await registry.dispatch("bash", { command: "printf ok" }, { ...ctx, cwd });
   assert.equal(safe.isError, false);
-  const input = { commands: [{ command: "touch marker" }, { command: "rm -f marker" }] };
+  const input = { command: "touch marker && rm -f marker" };
   let approvals = 0;
   const denied = await registry.dispatch("bash", input, { ...ctx, cwd,
     approve: async () => { approvals++; return false; } });
@@ -77,6 +77,12 @@ test("matching Bash command in a later batch slot asks once before any command r
   assert.equal(allowed.isError, false);
   assert.equal(approvals, 2);
   assert.equal(existsSync(marker), false);
+});
+
+test("a Bash rule on the replaced batch path fails to bind and names the new argument", () => {
+  assert.throws(() => createTestToolRegistry([{ match: "builtin/bash", effect: "ask",
+    when: { source: "arguments", any: "commands[*].command", regex: rmPattern } }]),
+  /rule path commands\[\*\]\.command does not exist in builtin\/bash; the argument is now command/);
 });
 
 test("conditional ask binds a nested typed string path and ordered allow can override it", async () => {
@@ -109,11 +115,11 @@ test("conditional ask binds a nested typed string path and ordered allow can ove
 
 test("RE2 conditional pattern bounds hostile input and unconditional deny stays hidden", async () => {
   const registry = createTestToolRegistry([{ match: "builtin/bash", effect: "ask",
-    when: { source: "arguments", any: "commands[*].command", regex: "(a+)+$" } }]);
-  const result = await registry.dispatch("bash", { commands: [{ command: "printf " + "a".repeat(20_000) + "!" }] }, ctx);
+    when: { source: "arguments", any: "command", regex: "(a+)+$" } }]);
+  const result = await registry.dispatch("bash", { command: "printf " + "a".repeat(20_000) + "!" }, ctx);
   assert.equal(result.isError, false);
   const hidden = createTestToolRegistry([{ match: "builtin/bash", effect: "deny" }, { match: "builtin/bash", effect: "ask",
-    when: { source: "arguments", any: "commands[*].command", regex: "rm" } }]);
+    when: { source: "arguments", any: "command", regex: "rm" } }]);
   assert.ok(!hidden.definitions().some((tool) => tool.name === "bash"));
-  assert.equal((await hidden.dispatch("bash", { commands: [{ command: "rm x" }] }, ctx)).code, "tool_denied");
+  assert.equal((await hidden.dispatch("bash", { command: "rm x" }, ctx)).code, "tool_denied");
 });

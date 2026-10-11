@@ -211,7 +211,7 @@ test.describe("component detail", () => {
       id: "local/guard",
       files: {
         "hook.json": JSON.stringify({ protocol_version: 2, name: "guard", command: "node", args: ["./index.mjs"], timeout_ms: 4000,
-          events: [{ name: "PreToolUse", match: "builtin/bash", when: { source: "arguments", any: "commands[*].command", regex: "rm " } }, { name: "Stop" }] }),
+          events: [{ name: "PreToolUse", match: "builtin/bash", when: { source: "arguments", any: "command", regex: "rm " } }, { name: "Stop" }] }),
         "index.mjs": "process.stdout.write('{}');\n",
       },
     });
@@ -220,7 +220,7 @@ test.describe("component detail", () => {
     await expect(events.getByRole("row")).toHaveCount(3);
     await expect(events.getByRole("row").nth(1)).toContainText("PreToolUse");
     await expect(events.getByRole("row").nth(1)).toContainText("builtin/bash");
-    await expect(events.getByRole("row").nth(1)).toContainText("commands[*].command");
+    await expect(events.getByRole("row").nth(1)).toContainText("command");
     await expect(events.getByRole("row").nth(2)).toContainText("Any tool");
     expect(await events.textContent()).not.toMatch(/[{}]/);
     await expect(page.getByText("4000 ms")).toBeVisible();

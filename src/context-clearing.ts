@@ -66,7 +66,7 @@ export function secureCopy(result: ToolResult): string | undefined {
   return readableCopy(saved.path, bytes) ? saved.path : undefined;
 }
 
-/** Whether a panel reminder names the result: its call ID, its saved full output, or a saved output of one of its rows. */
+/** Whether a panel reminder names the result: its call ID or its saved full output. */
 export function namedByReminder(message: ToolMessage, reminders: readonly string[]): boolean {
   const names = [message.callId, ...savedOutputPaths(message.result)];
   return reminders.some((text) => names.some((name) => text.includes(name)));

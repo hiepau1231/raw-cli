@@ -21,7 +21,7 @@ test.describe("Files changed accumulated successes", () => {
       { path: "failed.txt", mode: "replace_text", old_text: "missing", new_text: "replacement" },
       { path: "gamma.txt", mode: "overwrite", content: "gamma success\n" },
     ] }), answer,
-    call("bash", "bash", { commands: [{ command: "printf untracked > shell-only.txt" }] }), answer,
+    call("bash", "bash", { command: "printf untracked > shell-only.txt" }), answer,
   ] } });
   test("patch and legacy writes accumulate only successful paths, preserve diffs on reload and exclude shell changes", async ({ page, raw }) => {
     await openChat(page, raw);
