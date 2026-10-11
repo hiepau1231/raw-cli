@@ -1116,13 +1116,19 @@ summary::-webkit-details-marker {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 10px;
-  font-size: 12px;
+  padding: 7px 10px;
+  font-size: 13px;
+  min-height: 34px;
+  cursor: pointer;
 }
-.tool-card > summary strong {
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-  font-weight: 550;
+.tool-icon {
+  display: inline-flex;
+  color: var(--muted);
+  flex: none;
+}
+.tool-card > summary .tool-title {
+  font-weight: 600;
+  white-space: nowrap;
 }
 .tool-summary {
   color: var(--muted);
@@ -1131,20 +1137,199 @@ summary::-webkit-details-marker {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+  font-size: 12px;
+}
+code.tool-summary {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 .tool-status {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  color: var(--muted);
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.5;
   white-space: nowrap;
+  color: var(--muted);
 }
-.tool-card.failed .tool-status {
+.tool-status.tone-ok {
+  color: var(--success);
+}
+.tool-status.tone-error {
   color: var(--error);
+}
+.tool-status.tone-warning {
+  color: var(--warning);
+}
+.tool-duration {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .tool-content {
   padding: 0 12px 12px;
+}
+.tool-content > .tool-notes {
+  margin: 6px 0;
+}
+.tool-arguments > summary,
+.json-tree summary {
+  cursor: pointer;
+}
+.tool-arguments > summary {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.terminal-frame {
+  --terminal-bg: #0d0b12;
+  --terminal-text: #e8e6ef;
+  --terminal-muted: #a9a4b8;
+  margin: 10px 0;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--terminal-bg);
+  color: var(--terminal-text);
+  border: 1px solid #2a2338;
+}
+.terminal-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 0 12px;
+  font-size: 11px;
+  color: var(--terminal-muted);
+  border-bottom: 1px solid #2a2338;
+}
+.terminal-bar .icon-button {
+  color: var(--terminal-text);
+  min-width: 28px;
+  min-height: 28px;
+  padding: 5px;
+}
+.terminal-bar .icon-button:hover:not(:disabled) {
+  background: #211b2e;
+}
+.terminal-frame pre {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.terminal-frame code,
+.tool-text,
+.code-file code,
+.diff-view code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre;
+}
+.tool-text {
+  margin: 10px 0;
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--code);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.code-block.code-file pre,
+.code-block.diff-view pre {
+  padding: 8px 0;
+  max-height: 400px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.code-line {
+  display: block;
+  padding-right: 12px;
+}
+.line-number {
+  display: inline-block;
+  min-width: 4ch;
+  padding: 0 12px 0 8px;
+  text-align: right;
+  color: var(--muted);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.code-gap,
+.code-note {
+  color: var(--muted);
+}
+.diff-line {
+  display: block;
+  padding: 0 12px;
+}
+.diff-add {
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+.diff-remove {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+.diff-hunk {
+  color: var(--accent-text);
+}
+.diff-meta {
+  color: var(--muted);
+  font-weight: 600;
+}
+.tool-markdown {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--canvas);
+}
+.json-tree,
+.json-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.json-tree {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--code);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 400px;
+  overflow: auto;
+}
+.json-tree ul {
+  padding-left: 16px;
+}
+.json-key {
+  color: var(--accent-text);
+}
+.json-string {
+  color: var(--success);
+}
+.json-number,
+.json-boolean {
+  color: var(--warning);
+}
+.json-null,
+.json-count,
+.json-empty {
+  color: var(--muted);
+}
+.full-output {
+  margin: 8px 0;
+}
+.full-output-button {
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 .tabs {
   display: flex;

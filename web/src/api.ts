@@ -80,6 +80,25 @@ export async function fetchDataUrl(
   if (!response.ok) throw new ApiError(response.status, "request_failed", "Could not load attachment");
   return blobDataUrl(await response.blob());
 }
+/** A call's saved full output (docs/tool-ux-design.md §5.3); the route's errors keep their status and code. */
+export async function fetchFullToolOutput(
+  sessionId: string,
+  callId: string,
+  signal?: AbortSignal,
+): Promise<{ text: string; capped: boolean }> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(callId)}/full`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      ...(signal ? { signal } : {}),
+    },
+  );
+  if (!response.ok) return decode(response);
+  return {
+    text: await response.text(),
+    capped: response.headers.get("X-Raw-Full-Output-Capped") === "true",
+  };
+}
 export function blobDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

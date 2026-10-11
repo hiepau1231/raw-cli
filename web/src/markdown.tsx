@@ -25,6 +25,17 @@ function render(node: Node, index: number): ReactNode {
     </span>
   );
 }
+/** One highlighted line; the text itself when the language is unknown or highlighting fails. */
+export function highlightLine(language: string, text: string): ReactNode {
+  if (!highlighter.registered(language)) return text;
+  try {
+    return highlighter
+      .highlight(language, text)
+      .children.map((node, index) => render(node as Node, index));
+  } catch {
+    return text;
+  }
+}
 export function CodeBlock({
   code,
   language = "text",

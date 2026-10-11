@@ -6,7 +6,9 @@ import { startDashboard, type DashboardOptions } from "../../src/dashboard/serve
 import type { SessionOperation } from "../../src/sessions/operations.js";
 import { startMockProvider, openAiDone, openAiFrame, type MockResponse } from "./mock-provider.js";
 
-export async function dashboardFixture(options: { responses?: MockResponse[]; agent?: Record<string, unknown>; extraAgents?: Record<string, Record<string, unknown>>; model?: Record<string, unknown>; attach?: DashboardOptions["attach"]; env?: Record<string, string> } = {}) {
+export async function dashboardFixture(options: { responses?: MockResponse[]; agent?: Record<string, unknown>; extraAgents?: Record<string, Record<string, unknown>>; model?: Record<string, unknown>; attach?: DashboardOptions["attach"]; env?: Record<string, string>;
+  /** Top-level config sections such as `mcp`, merged over the generated config. */
+  config?: Record<string, unknown> } = {}) {
   const root = mkdtempSync(join(tmpdir(), "raw-dashboard-flow-"));
   const env = { ...process.env, XDG_CONFIG_HOME: join(root, "config"), XDG_STATE_HOME: join(root, "state"), XDG_DATA_HOME: join(root, "data"), ...options.env };
   const configPath = join(env.XDG_CONFIG_HOME, "raw", "config.json"); mkdirSync(join(env.XDG_CONFIG_HOME, "raw"), { recursive: true });
@@ -15,7 +17,8 @@ export async function dashboardFixture(options: { responses?: MockResponse[]; ag
     api_key: "fixture-key", base_url: provider.url, context_window_tokens: 8192, ...options.model } },
   agents: { raw: { model: "fixture", system_prompt: "Original prompt", tools: { use: [] }, request_timeout_ms: 5000, ...options.agent,
     // The small fixture window would otherwise trigger default auto-compaction against scripted responses.
-    compact: { trigger_tokens: false, ...(options.agent?.compact as Record<string, unknown> | undefined) } }, ...options.extraAgents } };
+    compact: { trigger_tokens: false, ...(options.agent?.compact as Record<string, unknown> | undefined) } }, ...options.extraAgents },
+  ...options.config };
   writeFileSync(configPath, JSON.stringify(config));
   const server = await startDashboard({ port: 0, cwd: root, configPath, env, ...(options.attach ? { attach: options.attach } : {}) });
   const api = (path: string, method = "GET", body?: unknown) => fetch(`${server.url}/api${path}`, {

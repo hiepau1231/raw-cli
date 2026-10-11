@@ -82,7 +82,7 @@ A `tool.json` may declare how surfaces show the tool. Every field is optional:
 
 - `title`: text of at most 80 characters, a template like `summary`. Default: the tool name in sentence case (`fetch_page` → `Fetch page`).
 - `kind`: `read`, `edit`, `execute`, `search`, `fetch`, `think` or `other` (the default). It picks the CLI icon and the ACP kind.
-- `icon`: an icon name of lowercase letters, digits and `-` (at most 40). The CLI uses it when it has that symbol (`read`, `write`, `bash`, `skill`, `mcp`, `generic`); otherwise the kind decides.
+- `icon`: an icon name of lowercase letters, digits and `-` (at most 40). The CLI uses it when it has that symbol (`read`, `write`, `bash`, `skill`, `mcp`, `generic`), the dashboard when it has that icon (the CLI names plus `terminal`, `file`, `edit`, `search`, `globe`, `web`, `brain`, `todo`, `question`, `image`, `variable`, `plug`, `puzzle`, `tool`); otherwise MCP tools get the MCP icon and the kind decides.
 - `summary`: a template of at most 200 characters over the normalized arguments. `{name}` is the argument's value, `{name|text}` falls back to `text`, and a `[…]` part is shown only when every placeholder inside it has a value. A list of plain values is joined with ` · `, an object is compact JSON, and newlines become ` ⏎ `. When a required placeholder has no value, the default summary is used.
 - `result`: `text`, `markdown`, `code`, `json`, `terminal` or `diff`. Without it, a result made only of JSON blocks is `json`, MCP text that starts with Markdown structure is `markdown`, and everything else is `text`. A `code` result with `host.path` is shown as path-tagged code without the line-number gutter.
 

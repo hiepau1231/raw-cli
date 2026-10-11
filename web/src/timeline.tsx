@@ -3,13 +3,13 @@ import { useState, type ReactNode } from "react";
 import { InlineToolView } from "./panels/ToolView.js";
 import type { ActionHost } from "./panels/actions.js";
 import type { InsertRef } from "./panels/status.js";
-import { Tabs } from "radix-ui";
 import {
+  Ban,
   CheckCircle2,
   ChevronRight,
   CircleDashed,
   CircleX,
-  Terminal,
+  Clock,
   ShieldQuestion,
   Brain,
 } from "lucide-react";
@@ -29,6 +29,10 @@ import { CopyButton, ErrorMessage } from "./ui.js";
 import { Receipt } from "./panels/Receipt.js";
 import { receiptPanel } from "./panels/panel-state.js";
 import { HistoryAttachments } from "./composer/HistoryAttachments.js";
+import { ToolIcon } from "./tool-cards/ToolIcon.js";
+import { ResultBody } from "./tool-cards/ResultBody.js";
+import { FullOutput } from "./tool-cards/FullOutput.js";
+import { formatDuration, statusBadge } from "./tool-cards/status.js";
 
 export function ApprovalActions({ approval }: { approval: Approval }) {
   const [busy, setBusy] = useState(false);
@@ -98,6 +102,7 @@ function ToolCard({
   approval,
   preferences,
   previewAbbreviated,
+  sessionId,
 }: {
   call?: VisibleToolCall | undefined;
   result?: VisibleToolResult | undefined;
@@ -105,102 +110,80 @@ function ToolCard({
   approval?: Approval | undefined;
   preferences: Preferences;
   previewAbbreviated?: boolean | undefined;
+  sessionId: string;
 }) {
-  const failed =
-    result?.failed ||
-    ["denied", "outcome_unknown", "cancelled"].includes(status ?? "");
-  const labels: Record<string, string> = {
-    requested: "Requested",
-    running: "Running",
-    succeeded: "Succeeded",
-    failed: "Failed",
-    denied: "Denied",
-    cancelled: "Cancelled",
-    outcome_unknown: "Outcome unknown",
-  };
-  const state = approval
-    ? "Needs approval"
-    : result
-      ? (labels[status ?? ""] ?? (result.failed ? "Failed" : "Succeeded"))
-      : (labels[status ?? ""] ?? (call?.started ? "Running" : "Requested"));
-  const Icon = approval
-    ? ShieldQuestion
-    : failed
-      ? CircleX
-      : result
+  const badge = statusBadge({ result, lifecycle: status, approval: !!approval, started: !!call?.started });
+  const failed = badge.tone === "error";
+  const StatusIcon =
+    badge.state === "approval"
+      ? ShieldQuestion
+      : badge.tone === "ok"
         ? CheckCircle2
-        : CircleDashed;
+        : badge.state === "timeout"
+          ? Clock
+          : badge.state === "cancelled" || badge.state === "denied"
+            ? Ban
+            : failed
+              ? CircleX
+              : CircleDashed;
   const name = call?.name ?? result?.name ?? "Historical tool";
   const args = call?.arguments;
   // The projected title and summary (docs/tool-ux-design.md §5.4); old records fall back to the name and identity.
   const title = call?.title ?? name;
-  const description = call?.summary ?? call?.identity ?? result?.identity ?? "Details";
+  const summary = call?.summary;
+  const fallback = call?.identity ?? result?.identity;
+  const callId = call?.id ?? result?.id;
+  const fullOutput =
+    !!result && !!callId && (!!result.host?.fullOutputPath || !!previewAbbreviated || result.truncated);
   return (
     <details
       className={`tool-card ${failed ? "failed" : ""}`}
+      data-kind={call?.kind ?? result?.kind ?? "other"}
       open={preferences.toolDetails || !!approval || failed || undefined}
     >
       <summary>
-        <Terminal size={16} aria-hidden="true" />
-        <strong>{title}</strong>
-        <span className="tool-summary">{description}</span>
-        <span className="tool-status">
-          <Icon size={14} aria-hidden="true" />
-          {state}
+        <ToolIcon icon={call?.icon} identity={call?.identity ?? result?.identity} kind={call?.kind ?? result?.kind} />
+        <strong className="tool-title">{title}</strong>
+        {summary ? (
+          <code className="tool-summary">{summary}</code>
+        ) : (
+          <span className="tool-summary">{fallback ?? ""}</span>
+        )}
+        <span className={`tool-status tone-${badge.tone}`} data-status={badge.state}>
+          <StatusIcon size={13} aria-hidden="true" />
+          {badge.label}
         </span>
+        {result?.durationMs !== undefined && (
+          <span className="tool-duration">{formatDuration(result.durationMs)}</span>
+        )}
       </summary>
       <div className="tool-content">
-        <Tabs.Root defaultValue={result ? "result" : "arguments"}>
-          <Tabs.List aria-label={`${name} details`} className="tabs">
-            <Tabs.Trigger value="arguments">Arguments</Tabs.Trigger>
-            <Tabs.Trigger value="result">Result</Tabs.Trigger>
-          </Tabs.List>
-          <Tabs.Content value="arguments">
-            {args ? (
-              <CodeBlock code={JSON.stringify(args, null, 2)} language="json" />
-            ) : (
-              <p className="muted">
-                Arguments are unavailable in this history record.
-              </p>
-            )}
-          </Tabs.Content>
-          <Tabs.Content value="result">
-            {result ? (
-              <>
-                <div className="metadata">
-                  {result.code && <span>{result.code}</span>}
-                  {result.durationMs !== undefined && (
-                    <span>{result.durationMs} ms</span>
-                  )}
-                  {result.exitCode !== undefined && (
-                    <span>Exit {result.exitCode ?? "unavailable"}</span>
-                  )}
-                </div>
-                <CodeBlock
-                  code={result.segments
-                    .map((segment) => segment.text)
-                    .join("\n")}
-                  language={
-                    result.segments.every((segment) => segment.kind === "json")
-                      ? "json"
-                      : "text"
-                  }
-                />
-                <p className="muted small">
-                  Saved preview
-                  {previewAbbreviated ? " · Display abbreviated" : ""}
-                  {result.truncated ? " · Tool truncated its output" : ""}. Full
-                  historical output, image bytes and write diffs may be
-                  unavailable.
-                </p>
-              </>
-            ) : (
-              <p className="muted">
-                Waiting for the result. Live shell output is available in Commands.
-              </p>
-            )}
-          </Tabs.Content>
-        </Tabs.Root>
+        {result ? (
+          <>
+            <ResultBody result={result} hint={call?.result} />
+            {fullOutput && <FullOutput sessionId={sessionId} callId={callId} />}
+            <p className="muted small tool-notes">
+              Saved preview
+              {result.code && result.code !== badge.state ? ` · ${result.code}` : ""}
+              {previewAbbreviated ? " · Display abbreviated" : ""}
+              {result.truncated ? " · Tool truncated its output" : ""}
+            </p>
+          </>
+        ) : (
+          <p className="muted">
+            Waiting for the result. Live shell output is available in Commands.
+          </p>
+        )}
+        <details className="tool-arguments">
+          <summary>Arguments</summary>
+          {args ? (
+            <CodeBlock code={JSON.stringify(args, null, 2)} language="json" />
+          ) : (
+            <p className="muted">
+              Arguments are unavailable in this history record.
+            </p>
+          )}
+        </details>
         {approval && <ApprovalActions approval={approval} />}
       </div>
     </details>
@@ -546,6 +529,7 @@ export function Timeline({
             approval={approval}
             preferences={preferences}
             previewAbbreviated={pair.abbreviated}
+            sessionId={state.session.id}
           />,
         );
       }

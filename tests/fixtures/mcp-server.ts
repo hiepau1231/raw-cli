@@ -42,6 +42,8 @@ export function fixtureMcpServer(label: string, count = 2, reverse = false, mode
     if (value === "structured") return { structuredContent: { label }, content: [{ type: "text", text: JSON.stringify({ label }) }] };
     if (value === "panel") return { content: [{ type: "text", text: "panelled" }], _meta: { "raw/panel": { panel: "plan", op: "replace",
       document: { blocks: [{ id: "c", kind: "checklist", items: [{ id: "a", label: "From MCP" }] }] } } } };
+    if (value === "markdown") return { content: [{ type: "text", text: `# ${label} heading\n\n- first item\n- second item` }] };
+    if (value === "mixed") return { structuredContent: { count: 3 }, content: [{ type: "text", text: "# Search results\n\nFound three records." }] };
     if (value === "error") return { isError: true, content: [{ type: "text", text: `${label}:failure` }] };
     if (value === "resource") return { content: [{ type: "resource_link", uri: "https://example.test/private", name: "secret" }] };
     if (name === "selected" || name.startsWith("hidden_")) {
