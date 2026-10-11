@@ -43,7 +43,6 @@
   --panel-font-sm: 12px;
   --panel-font-md: 13px;
   --panel-font-lg: 14px;
-  --panel-header-height: 28px;
   --panel-row-height: 24px;
   --chat-size: 16px;
   --code-size: 14px;
@@ -3477,126 +3476,380 @@ code.tool-summary {
   gap: 6px;
 }
 
-/* Side panel: a stack of collapsible sections (docs/panels-design.md §13.1). */
+/* Side panel: Overview and one tab per panel (docs/side-panel-design.md). */
 .inspector {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 0;
+  --sp-card: var(--canvas);
+  --sp-tint-accent: var(--accent-soft);
+  --sp-tint-success: color-mix(in srgb, var(--success) 14%, transparent);
+  --sp-tint-warning: color-mix(in srgb, var(--warning) 16%, transparent);
+  --sp-tint-error: color-mix(in srgb, var(--error) 14%, transparent);
+}
+:root[data-theme="dark"] .inspector {
+  --sp-card: #141020;
 }
 .inspector > .section-heading {
   flex: none;
 }
-.panel-stack {
+.side-panel-title {
+  margin: 0;
+  padding: 14px 12px 6px 16px;
+}
+.side-panel-title h2 {
+  font-size: 15px;
+}
+.side-panel {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.sp-tabs {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.sp-tabs::-webkit-scrollbar {
+  display: none;
+}
+.sp-tab {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 7px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--panel-font-md);
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: pan-x;
+  user-select: none;
+}
+.sp-tab:hover {
+  color: var(--text);
+}
+.sp-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+.sp-tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.sp-tab.dragging {
+  opacity: 0.6;
+}
+.sp-tab.target {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.sp-badge {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--panel-hover);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.sp-badge.tone-accent {
+  background: var(--sp-tint-accent);
+  color: var(--accent-text);
+}
+.sp-badge.tone-error {
+  background: var(--sp-tint-error);
+  color: var(--error);
+}
+.sp-badge.tone-warning {
+  background: var(--sp-tint-warning);
+  color: var(--warning);
+}
+.sp-unseen {
+  position: absolute;
+  top: 6px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.sp-doc-status {
+  display: inline-flex;
+  flex: none;
+}
+.sp-doc-status.done {
+  color: var(--success);
+}
+.sp-doc-status.failed {
+  color: var(--error);
+}
+.sp-content {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  margin-top: var(--space-2);
-  border-top: 1px solid var(--border);
-}
-/* Sections are not cards: one 1 px divider below each header, like VS Code views. */
-.panel-section {
-  display: flex;
-  flex-direction: column;
-  border-bottom: 1px solid var(--border);
-  overflow: hidden;
-}
-.panel-header {
-  position: relative;
-  display: flex;
-  align-items: center;
-  flex: none;
-  height: var(--panel-header-height);
-  min-height: var(--panel-header-height);
-}
-.panel-header h3 {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
+  padding: var(--space-3);
   font-size: var(--panel-font-md);
 }
-.panel-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: var(--space-2);
-  width: 100%;
-  height: var(--panel-header-height);
-  min-height: 0;
-  padding: 0 var(--space-2);
+.sp-content:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+/* Content inside a tab is not a nested card: code blocks lose their outer border and corners. */
+.sp-content .code-block {
   border: 0;
   border-radius: 0;
-  background: transparent;
-  text-align: left;
-  font: inherit;
-  color: var(--text);
-  cursor: pointer;
+  margin: var(--space-2) 0;
+}
+.sp-content .code-block .code-label {
+  border-bottom: 0;
+}
+.sp-tab-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.sp-tab-heading {
+  flex: 1;
+  min-width: 0;
+}
+.sp-tab-heading h3 {
+  margin: 0;
+  font-size: var(--panel-font-lg);
+  font-weight: 600;
+  line-height: 20px;
+  overflow-wrap: break-word;
+}
+.sp-tab-summary {
+  margin: 1px 0 0;
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
   overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.panel-toggle:hover {
+.sp-tab-header .sp-card-status {
+  margin-top: 1px;
+}
+.sp-tab-menu {
+  flex: none;
+  min-width: 26px;
+  min-height: 26px;
+  padding: 4px;
+  margin: -3px -4px 0 0;
+}
+.sp-overview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.sp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--sp-card);
+  color: var(--text);
+}
+button.sp-card {
+  align-items: stretch;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.sp-card:hover:not(:disabled) {
   background: var(--panel-hover);
+}
+.sp-overview-card {
+  gap: 8px;
+}
+.sp-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.sp-card-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+.sp-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--panel-font-lg);
+  font-weight: 600;
+}
+.sp-card-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+.sp-card-chevron {
+  flex: none;
+  color: var(--muted);
+}
+.sp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.sp-chip.tone-accent {
+  background: var(--sp-tint-accent);
+  color: var(--accent-text);
+}
+.sp-chip.tone-success {
+  background: var(--sp-tint-success);
+  color: var(--success);
+}
+.sp-chip.tone-warning {
+  background: var(--sp-tint-warning);
+  color: var(--warning);
+}
+.sp-chip.tone-error {
+  background: var(--sp-tint-error);
+  color: var(--error);
+}
+.sp-chip.tone-muted {
+  background: var(--panel-hover);
+  color: var(--muted);
+}
+.sp-stat,
+.sp-meta {
+  font-size: var(--panel-font-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.sp-stat.added {
+  color: var(--success);
+}
+.sp-stat.removed {
+  color: var(--error);
+}
+.sp-meta {
+  color: var(--muted);
+}
+.sp-bar {
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--panel-hover);
+  overflow: hidden;
+}
+.sp-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.sp-bar > i.tone-success {
+  background: var(--success);
+}
+.sp-bar > i.tone-warning {
+  background: var(--warning);
+}
+.sp-bar > i.tone-error {
+  background: var(--error);
+}
+/* A key line: the glyph sits on the first text line, the text wraps to at most two lines. */
+.sp-card-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  line-height: 18px;
+}
+.sp-line-glyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 18px;
+  color: var(--muted);
+}
+.glyph-running .sp-line-glyph {
+  color: var(--accent-text);
+}
+.glyph-failed .sp-line-glyph {
+  color: var(--error);
+}
+.glyph-done .sp-line-glyph {
+  color: var(--success);
+}
+.sp-line-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: break-word;
+}
+.sp-card-line:not(.glyph-running):not(.glyph-failed):not(.glyph-done):not(.glyph-pending) .sp-line-text {
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
+}
+.sp-line-meta {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
+  white-space: nowrap;
+}
+.sp-hidden {
+  padding: var(--space-1) 2px;
+  font-size: var(--panel-font-sm);
+}
+.sp-hidden button {
+  min-height: var(--panel-row-height);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 2px;
+  text-decoration: underline;
+}
+.sp-hidden ul {
+  list-style: none;
+  margin: 0;
+  padding-left: var(--space-2);
 }
 .panel-chevron {
   flex: none;
   transition: transform 0.15s;
-}
-.panel-toggle[aria-expanded="true"] .panel-chevron {
-  transform: rotate(90deg);
-}
-.panel-title {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-weight: 600;
-}
-/* The summary takes all the width left over. */
-.panel-header-summary {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--muted);
-  font-weight: 400;
-  font-size: var(--panel-font-sm);
-}
-.muted-section .panel-title {
-  color: var(--muted);
-}
-.panel-status-text {
-  flex: none;
-  font-size: var(--panel-font-sm);
-  color: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0 var(--space-1);
-  line-height: 16px;
-}
-.panel-unseen {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-/* The section menu shows on hover or keyboard focus, and while it is open. */
-.panel-menu {
-  flex: none;
-  min-width: var(--panel-row-height);
-  min-height: var(--panel-row-height);
-  padding: var(--space-1);
-  margin-right: var(--space-1);
-  opacity: 0;
-}
-.panel-header:hover .panel-menu,
-.panel-header:focus-within .panel-menu,
-.panel-menu[data-state="open"] {
-  opacity: 1;
-}
-@media (hover: none) {
-  .panel-menu {
-    opacity: 1;
-  }
 }
 .panel-progress-line {
   position: absolute;
@@ -3605,34 +3858,6 @@ code.tool-summary {
   height: 2px;
   background: var(--accent);
   pointer-events: none;
-}
-.panel-body {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: var(--space-1) var(--space-3) var(--space-2);
-  font-size: var(--panel-font-md);
-}
-/* Content inside a section is not a nested card: code blocks lose their outer border and corners. */
-.panel-body .code-block {
-  border: 0;
-  border-radius: 0;
-  margin: var(--space-2) 0;
-}
-.panel-body .code-block .code-label {
-  border-bottom: 0;
-}
-/* The resize handle overlaps the divider and takes no height of its own. */
-.panel-divider {
-  position: relative;
-  z-index: 1;
-  height: 6px;
-  margin: -3px 0;
-  cursor: row-resize;
-}
-.panel-divider:hover,
-.panel-divider:focus-visible {
-  background: var(--accent-soft);
 }
 .panel-block h4 {
   margin: var(--space-2) 0 var(--space-1);
@@ -3892,27 +4117,6 @@ button.panel-file {
 .panel-timeline .level-success {
   color: var(--success);
 }
-.panel-hidden {
-  padding: var(--space-1) var(--space-2);
-  border-bottom: 1px solid var(--border);
-  font-size: var(--panel-font-sm);
-}
-.panel-hidden-toggle,
-.panel-hidden button {
-  min-height: var(--panel-row-height);
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  cursor: pointer;
-  padding: 2px;
-  text-decoration: underline;
-}
-.panel-hidden ul {
-  list-style: none;
-  margin: 0;
-  padding-left: var(--space-2);
-}
 .panel-receipt {
   position: relative;
   display: flex;
@@ -3969,16 +4173,6 @@ button.panel-file {
   border-radius: 8px;
   background: var(--panel);
   overflow-wrap: anywhere;
-}
-.panel-section.drag-dragging {
-  opacity: 0.6;
-}
-.panel-section.drag-target {
-  outline: 2px solid var(--accent);
-}
-.panel-header {
-  touch-action: pan-y;
-  user-select: none;
 }
 .panel-block-header {
   display: flex;

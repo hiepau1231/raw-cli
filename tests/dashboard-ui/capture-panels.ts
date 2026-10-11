@@ -48,21 +48,18 @@ try {
       await page.locator(".inspector").screenshot({ path: join(extra, name), animations: "disabled" });
       console.log(`wrote ${join(extra, name)}`);
     };
-    const expand = async (title: string, open: boolean) => {
-      const toggle = page.locator(".panel-toggle", { has: page.locator(".panel-title", { hasText: new RegExp(`^${title}$`) }) });
-      if ((await toggle.getAttribute("aria-expanded")) !== String(open)) await toggle.click();
-    };
-    await shot("01-todo-expanded.png");
-    for (const title of ["Todo", "Files changed", "Commands", "Details"]) await expand(title, true);
-    await shot("02-all-expanded.png");
-    for (const title of ["Todo", "Details"]) await expand(title, false);
+    const select = (title: string) => page.getByRole("tab", { name: title, exact: true }).click();
+    await shot("01-todo.png");
+    await select("Overview");
+    await shot("02-overview.png");
+    await select("Commands");
     const completed = page.getByRole("button", { name: /^Completed \(/ });
     if ((await completed.getAttribute("aria-expanded")) !== "true") await completed.click();
     await page.locator("li.command-row button.command-toggle").first().click();
     await page.locator(".command-output pre", { hasText: "missing semicolon" }).waitFor();
-    await shot("03-files-and-commands.png");
+    await shot("03-commands.png");
     await page.emulateMedia({ colorScheme: "light" });
-    await shot("04-files-and-commands-light.png");
+    await shot("04-commands-light.png");
   }
 } finally {
   await browser.close();

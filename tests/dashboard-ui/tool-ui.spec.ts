@@ -37,7 +37,7 @@ test("repeated inline views retain their snapshots after reload and backward pag
   expect(snapshots.map(text => text.trim()).sort()).toEqual(Array.from({ length: 20 }, (_, index) => `Snapshot ${index}`).sort());
   expect(new Set(await page.locator(".inline-tool-view").evaluateAll(elements => elements.map(element => element.getAttribute("data-instance")))).size).toBe(20);
   await page.getByRole("button", { name: "Side panel", exact: true }).click();
-  await expect(page.locator('.panel-stack [data-panel="local/report#report"]')).toHaveCount(0);
+  await expect(page.locator('[role=tab][data-tab="local/report#report"]')).toHaveCount(0);
 });
 
 test.describe("inline action audit", () => {

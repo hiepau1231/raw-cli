@@ -7,8 +7,8 @@ import type { SessionSnapshot } from "../src/dashboard/sessions.js";
 import type { SessionSummary } from "../src/sessions/store.js";
 import type { DashboardEvent, DashboardEventData } from "../src/dashboard/streams.js";
 import {
-  DETAILS_ID, MAX_HEIGHT, MIN_HEIGHT, applyFrame, announcement, arrange, formatDuration, mergeStack, newAnnouncer, placeAt, planAnnouncements, relativeTime, setHideCompleted, stepDuration, currentOrder, emptyPrefs, firstOpenTarget, hasOpened, heightFor, isExpanded, layout, loadPrefs,
-  markOpened, markSeen, mayAnnounce, move, rejectedCode, savePrefs, setExpanded, setHeight, setHidden, setOrder, shareHeights, storageKey, unseen,
+  DETAILS_ID, OVERVIEW_ID, activeTab, applyFrame, announcement, arrange, formatDuration, mergeStack, newAnnouncer, placeAt, planAnnouncements, relativeTime, setHideCompleted, stepDuration, currentOrder, emptyPrefs, firstOpenTarget, hasOpened, layout, loadPrefs,
+  markOpened, markSeen, mayAnnounce, move, rejectedCode, savePrefs, setHidden, setOrder, setTab, storageKey, unseen,
 } from "../web/src/panels/panel-state.js";
 
 const item = (panel: string, revision = 0, open: "never" | "first_update" = "never"): PanelStackItem => ({
@@ -59,8 +59,7 @@ test("storage round-trips and corrupt or foreign storage yields defaults field b
   const saved: string[] = [];
   let prefs = setOrder(emptyPrefs(), "a", ["x#1", "y#1"]);
   prefs = setHidden(prefs, "a", "y#1", true);
-  prefs = setHeight(prefs, "a", "x#1", 300);
-  prefs = setExpanded(prefs, "s1", "x#1", true);
+  prefs = setTab(prefs, "s1", "x#1");
   prefs = markSeen(prefs, "s1", "x#1", 4);
   prefs = markOpened(prefs, "s1");
   savePrefs(prefs, { setItem: (_key, value) => { saved.push(value); } });
@@ -71,8 +70,12 @@ test("storage round-trips and corrupt or foreign storage yields defaults field b
   assert.deepEqual(loadPrefs({ getItem: () => { throw new Error("blocked"); } }), emptyPrefs());
   assert.doesNotThrow(() => savePrefs(prefs, { setItem: () => { throw new Error("full"); } }));
   assert.equal(storageKey, "raw.dashboard.panels.v1");
-  const mixed = loadPrefs(store(JSON.stringify({ version: 1, order: "nope", hidden: { a: ["h", 3, "h", ""] }, heights: { a: { p: 9999, q: "x", r: 1 }, b: 700, c: [3] }, expanded: { s: ["p", DETAILS_ID] }, seen: { s: { p: 3, q: -1, r: 1.5 } }, opened: 4 }))) ;
-  assert.deepEqual(mixed, { version: 1, order: {}, hidden: { a: ["h"] }, heights: { a: { p: MAX_HEIGHT, r: MIN_HEIGHT } }, expanded: { s: ["p", DETAILS_ID] }, seen: { s: { p: 3 } }, opened: [], hideCompleted: false });
+  const mixed = loadPrefs(store(JSON.stringify({ version: 1, order: "nope", hidden: { a: ["h", 3, "h", ""] }, tab: { s: "p", t: 3, u: "", v: DETAILS_ID, w: "x".repeat(600) }, seen: { s: { p: 3, q: -1, r: 1.5 } }, opened: 4 }))) ;
+  assert.deepEqual(mixed, { version: 1, order: {}, hidden: { a: ["h"] }, tab: { s: "p", v: DETAILS_ID }, seen: { s: { p: 3 } }, opened: [], hideCompleted: false });
+  // Earlier versions stored dragged heights and expanded sections: they load without error and are dropped.
+  const old = loadPrefs(store(JSON.stringify({ version: 1, order: { a: ["x#1"] }, heights: { a: { "x#1": 300 } }, expanded: { s1: ["x#1", DETAILS_ID] }, opened: ["s1"] })));
+  assert.deepEqual(old, { ...emptyPrefs(), order: { a: ["x#1"] }, opened: ["s1"] });
+  assert.ok(!("heights" in old) && !("expanded" in old));
   assert.equal(loadPrefs(store(JSON.stringify({ version: 1, hideCompleted: true }))).hideCompleted, true);
   assert.equal(loadPrefs(store(JSON.stringify({ version: 1, hideCompleted: "yes" }))).hideCompleted, false);
   assert.equal(setHideCompleted(emptyPrefs(), true).hideCompleted, true);
@@ -117,25 +120,27 @@ test("layout splits hidden from visible in the user's order per agent", () => {
   assert.deepEqual(layout(items, setHidden(prefs, "one", "a#1", false), "one").hidden, []);
 });
 
-test("dragged heights are clamped per agent and panel, and expansion, seen and first-open are per session", () => {
-  let prefs = setHeight(emptyPrefs(), "a", "x#1", 5);
-  assert.equal(heightFor(prefs, "a", "x#1"), MIN_HEIGHT);
-  assert.equal(heightFor(setHeight(prefs, "a", "x#1", 99999), "a", "x#1"), MAX_HEIGHT);
-  assert.equal(heightFor(setHeight(prefs, "a", "y#1", 400), "a", "x#1"), MIN_HEIGHT);
-  assert.equal(heightFor(prefs, "a", "y#1"), undefined);
-  assert.equal(heightFor(prefs, "b", "x#1"), undefined);
-  prefs = setExpanded(prefs, "s1", "p", true);
-  assert.ok(isExpanded(prefs, "s1", "p")); assert.ok(!isExpanded(prefs, "s2", "p"));
-  assert.ok(!isExpanded(setExpanded(prefs, "s1", "p", false), "s1", "p"));
+test("the selected tab, seen revisions and first-open are per session", () => {
+  let prefs = emptyPrefs();
+  // Overview until the user picks a tab; a stored tab that is no longer shown falls back to Overview.
+  assert.equal(activeTab(prefs, "s1", ["p", "q"]), OVERVIEW_ID);
+  prefs = setTab(prefs, "s1", "p");
+  assert.equal(activeTab(prefs, "s1", ["p", "q"]), "p");
+  assert.equal(activeTab(prefs, "s2", ["p", "q"]), OVERVIEW_ID);
+  assert.equal(activeTab(prefs, "s1", ["q"]), OVERVIEW_ID);
+  assert.equal(activeTab(setTab(prefs, "s1", DETAILS_ID), "s1", []), DETAILS_ID);
+  assert.equal(activeTab(setTab(prefs, "s1", OVERVIEW_ID), "s1", ["p"]), OVERVIEW_ID);
+  assert.equal(setTab(prefs, "s1", "p"), prefs);
   assert.ok(unseen(prefs, "s1", item("p", 2)));
   assert.ok(!unseen(markSeen(prefs, "s1", "p", 2), "s1", item("p", 2)));
   assert.ok(unseen(markSeen(prefs, "s1", "p", 2), "s1", item("p", 3)));
   assert.ok(!unseen(prefs, "s1", item("never", 0)));
   assert.equal(markSeen(prefs, "s1", "p", 0), prefs);
   assert.ok(!hasOpened(prefs, "s1")); assert.ok(hasOpened(markOpened(prefs, "s1"), "s1")); assert.ok(!hasOpened(markOpened(prefs, "s1"), "s2"));
-  for (let index = 0; index < 80; index++) prefs = setExpanded(prefs, `session-${index}`, "p", true);
-  assert.ok(Object.keys(prefs.expanded).length <= 50);
-  assert.ok(isExpanded(prefs, "session-79", "p"));
+  for (let index = 0; index < 80; index++) prefs = setTab(prefs, `session-${index}`, "p");
+  assert.ok(Object.keys(prefs.tab).length <= 50);
+  assert.equal(activeTab(prefs, "session-79", ["p"]), "p");
+  assert.equal(activeTab(prefs, "s1", ["p"]), OVERVIEW_ID);
 });
 
 test("live frames only move a panel forward and unknown panels ask for a refetch", () => {
@@ -308,22 +313,4 @@ test("command snapshots replace the host projection without mutating concurrent 
     assert.equal(reset.commands?.[0]?.state, "exited");
     assert.equal(reset.commands?.length, 1);
   } finally { await f.close(); }
-});
-
-test("expanded sections share the height: equal shares, short sections give the rest away, dragged sizes are kept", () => {
-  assert.deepEqual(shareHeights(600, [{ panel: "a" }, { panel: "b" }]), { a: 300, b: 300 });
-  assert.deepEqual(shareHeights(601, [{ panel: "a" }, { panel: "b" }, { panel: "c" }]), { a: 200, b: 200, c: 201 });
-  // A short section takes its content height; the other gets the rest, whatever the order.
-  assert.deepEqual(shareHeights(600, [{ panel: "long" }, { panel: "short", natural: 150 }]), { long: 450, short: 150 });
-  assert.deepEqual(shareHeights(900, [{ panel: "a", natural: 160 }, { panel: "b", natural: 250 }, { panel: "c" }]), { a: 160, b: 250, c: 490 });
-  // Two long sections still split evenly; content below the minimum still gets the minimum.
-  assert.deepEqual(shareHeights(600, [{ panel: "a", natural: 5000 }, { panel: "b", natural: 4000 }]), { a: 300, b: 300 });
-  assert.deepEqual(shareHeights(600, [{ panel: "a", natural: 30 }, { panel: "b" }]), { a: MIN_HEIGHT, b: 600 - MIN_HEIGHT });
-  // A dragged section keeps its size and the others share what is left.
-  assert.deepEqual(shareHeights(600, [{ panel: "a", dragged: 400 }, { panel: "b" }]), { a: 400, b: 200 });
-  assert.deepEqual(shareHeights(600, [{ panel: "a", dragged: 5 }, { panel: "b", dragged: 9999 }]), { a: MIN_HEIGHT, b: MAX_HEIGHT });
-  // Out of space: every section keeps the minimum and the stack scrolls.
-  assert.deepEqual(shareHeights(100, [{ panel: "a" }, { panel: "b" }]), { a: MIN_HEIGHT, b: MIN_HEIGHT });
-  assert.deepEqual(shareHeights(600, [{ panel: "a", dragged: 700 }, { panel: "b" }]), { a: 700, b: MIN_HEIGHT });
-  assert.deepEqual(shareHeights(-20, []), {});
 });

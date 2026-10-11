@@ -11,9 +11,8 @@ async function send(page: Page, text: string) {
 }
 async function showSection(page: Page, id: string) {
   if (!await page.locator(".inspector").count()) await page.getByRole("button", { name: "Side panel", exact: true }).click();
-  const section = page.locator(`[data-panel="${id}"]`);
-  if (await section.locator(".panel-toggle").getAttribute("aria-expanded") !== "true") await section.locator(".panel-toggle").click();
-  return section;
+  await page.locator(`[role=tab][data-tab="${id}"]`).click();
+  return page.locator(`[data-tab-panel="${id}"]`);
 }
 test("Ask, Commands, Todo, patches and Mermaid survive reload and retry while Stop works during a held turn", async ({ page, raw }, info) => {
   test.setTimeout(60000);
@@ -66,6 +65,7 @@ test("Ask, Commands, Todo, patches and Mermaid survive reload and retry while St
   await expect(todo).toContainText("Finish integrated workflow");
   await send(page, "keep model pending");
   await expect.poll(() => raw.provider.requests.length).toBe(9);
+  await showSection(page, "__commands");
   await commands.getByRole("button", { name: "Stop", exact: true }).click();
   await page.getByRole("textbox", { name: "Message", exact: true }).click();
   await expect(commands.getByText("Stop completed.", { exact: true })).toBeVisible();

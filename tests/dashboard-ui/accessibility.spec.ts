@@ -78,7 +78,7 @@ test("the inspector traps focus on narrow screens and both panels resize from th
   await expect(
     page.getByRole("dialog", { name: "Side panel", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Details", exact: true }).click();
+  await page.getByRole("tab", { name: "Details", exact: true }).click();
   await page.getByRole("button", { name: "Copy resume command" }).focus();
   await page.keyboard.press("Tab");
   expect(

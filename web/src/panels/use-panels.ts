@@ -3,7 +3,7 @@ import type { PanelStackItem } from "../../../src/panels/stack.js";
 import { COMMANDS_ID, commandsSection } from "./commands-state.js";
 import { api } from "../api.js";
 import type { ChatState } from "../session.js";
-import { firstOpenTarget, mergeStack, hasOpened, layout, loadPrefs, markOpened, savePrefs, setExpanded, setHidden, type PanelPrefs } from "./panel-state.js";
+import { OVERVIEW_ID, activeTab, firstOpenTarget, mergeStack, hasOpened, layout, loadPrefs, markOpened, savePrefs, setHidden, setTab, type PanelPrefs } from "./panel-state.js";
 
 interface Response { agent: string | null; items: PanelStackItem[] }
 const NONE: PanelStackItem[] = [];
@@ -64,8 +64,15 @@ export function usePanelStack(opts: {
   const items = useMemo(() => state?.commands?.length ? [...toolItems, commandsSection(state.commands)] : toolItems, [toolItems, state?.commands]);
   const stackAgent = agent || saved;
 
+  /**
+   * Opening by itself (Follow the tool) happens once per session and never moves focus. It selects the panel's tab only
+   * while Overview is showing, so it never takes the user away from a tab they chose.
+   */
+  const follow = (old: PanelPrefs, panel: string): PanelPrefs => {
+    const marked = markOpened(old, sessionId);
+    return activeTab(old, sessionId, layout(items, old, stackAgent).visible.map((item) => item.panel)) === OVERVIEW_ID ? setTab(marked, sessionId, panel) : marked;
+  };
   // First update of a `first_update` panel opens the side panel once per session, without moving focus.
-  const [reveal, setReveal] = useState<{ panel: string; nonce: number }>();
   const previous = useRef<{ key: string; map: Map<string, number> } | undefined>(undefined);
   useEffect(() => {
     // A stack for another agent that has not loaded yet is not a state to compare against.
@@ -80,12 +87,8 @@ export function usePanelStack(opts: {
     const hidden = new Set(layout(items, prefs, stackAgent).hidden.map((item) => item.panel));
     const target = firstOpenTarget({ before: before.map, items, hidden });
     if (!target) return;
-    setPrefs((old) => {
-      const marked = markOpened(old, sessionId);
-      return (old.expanded[sessionId] ?? []).length === 0 ? setExpanded(marked, sessionId, target, true) : marked;
-    });
+    setPrefs((old) => follow(old, target));
     autoOpen();
-    setReveal((old) => ({ panel: target, nonce: (old?.nonce ?? 0) + 1 }));
   }, [items]);
 
   const backgroundBefore = useRef<{ key: string; ids: Set<string> } | undefined>(undefined);
@@ -97,15 +100,14 @@ export function usePanelStack(opts: {
     backgroundBefore.current = { key, ids };
     if (!before || before.key !== key || ![...ids].some(id => !before.ids.has(id))) return;
     if (narrow || panelOpen === "never" || hasOpened(prefs, sessionId) || layout(items, prefs, stackAgent).hidden.some(item => item.panel === COMMANDS_ID)) return;
-    setPrefs(old => setExpanded(markOpened(old, sessionId), sessionId, COMMANDS_ID, true));
+    setPrefs(old => follow(old, COMMANDS_ID));
     autoOpen();
-    setReveal(old => ({ panel: COMMANDS_ID, nonce: (old?.nonce ?? 0) + 1 }));
   }, [state?.commands, state?.snapshotCount, sessionId]);
 
+  /** A receipt click: open the side panel, unhide the panel's tab and select it. */
   const show = useCallback((panel: string) => {
-    setPrefs((old) => setExpanded(setHidden(old, stackAgent, panel, false), sessionId, panel, true));
+    setPrefs((old) => setTab(setHidden(old, stackAgent, panel, false), sessionId, panel));
     openSide();
-    setReveal((old) => ({ panel, nonce: (old?.nonce ?? 0) + 1 }));
   }, [sessionId, stackAgent, openSide]);
-  return { items, prefs, setPrefs, stackAgent, reveal, show };
+  return { items, prefs, setPrefs, stackAgent, show };
 }

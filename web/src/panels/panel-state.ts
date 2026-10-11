@@ -1,24 +1,25 @@
-/** Pure state for the dashboard side panel stack (docs/panels-design.md §13.1): ordering, hiding, expansion, sizes and what the browser remembers. */
+/** Pure state for the dashboard side panel (docs/side-panel-design.md): tab order, hiding, the selected tab and what the browser remembers. */
 import type { PanelDocument } from "../../../src/panels/contract.js";
 import { derivedProgress } from "../../../src/panels/render.js";
 import type { PanelStackItem } from "../../../src/panels/stack.js";
 
 export const DETAILS_ID = "__details";
+export const OVERVIEW_ID = "__overview";
 export const storageKey = "raw.dashboard.panels.v1";
-export const MIN_HEIGHT = 120;
-export const MAX_HEIGHT = 2000;
 export const MAX_SESSIONS = 50;
 export const MAX_IDS = 200;
 const NO_AGENT = "_default";
 
-/** What the browser remembers. Order, hidden set and dragged heights are per agent; expansion and seen revisions per session. */
+/**
+ * What the browser remembers. Order and hidden set are per agent; the selected tab and seen revisions per session.
+ * Earlier versions also stored dragged heights and expanded sections; they are dropped on load.
+ */
 export interface PanelPrefs {
   version: 1;
   order: Record<string, string[]>;
   hidden: Record<string, string[]>;
-  /** Per agent, the height the user dragged each section to; sections without one share the space (§13.1 "Size"). */
-  heights: Record<string, Record<string, number>>;
-  expanded: Record<string, string[]>;
+  /** Per session, the selected tab: a panel id, {@link OVERVIEW_ID} or {@link DETAILS_ID}. */
+  tab: Record<string, string>;
   seen: Record<string, Record<string, number>>;
   /** Sessions in which "Follow the tool" already opened the side panel once. */
   opened: string[];
@@ -26,12 +27,12 @@ export interface PanelPrefs {
   hideCompleted: boolean;
 }
 
-export const emptyPrefs = (): PanelPrefs => ({ version: 1, order: {}, hidden: {}, heights: {}, expanded: {}, seen: {}, opened: [], hideCompleted: false });
+export const emptyPrefs = (): PanelPrefs => ({ version: 1, order: {}, hidden: {}, tab: {}, seen: {}, opened: [], hideCompleted: false });
 export const agentKey = (agent: string | null | undefined): string => agent || NO_AGENT;
 
-const ids = (value: unknown, allowDetails = false): string[] => {
+const ids = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0 && entry.length <= 512 && (allowDetails || entry !== DETAILS_ID)))].slice(0, MAX_IDS);
+  return [...new Set(value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0 && entry.length <= 512 && entry !== DETAILS_ID && entry !== OVERVIEW_ID))].slice(0, MAX_IDS);
 };
 const record = <T>(value: unknown, convert: (entry: unknown) => T | undefined, max: number): Record<string, T> => {
   const out: Record<string, T> = {};
@@ -42,7 +43,6 @@ const record = <T>(value: unknown, convert: (entry: unknown) => T | undefined, m
   }
   return out;
 };
-const clampHeight = (value: number) => Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.round(value)));
 
 /** Corrupt or foreign storage never blocks: each field falls back to its default on its own. */
 export function loadPrefs(storage: Pick<Storage, "getItem"> | undefined = globalStorage()): PanelPrefs {
@@ -53,9 +53,7 @@ export function loadPrefs(storage: Pick<Storage, "getItem"> | undefined = global
       version: 1,
       order: record(raw.order, (v) => (Array.isArray(v) ? ids(v) : undefined), MAX_SESSIONS),
       hidden: record(raw.hidden, (v) => (Array.isArray(v) ? ids(v) : undefined), MAX_SESSIONS),
-      heights: record(raw.heights, (v) => (v && typeof v === "object" && !Array.isArray(v)
-        ? record(v, (h) => (typeof h === "number" && Number.isFinite(h) ? clampHeight(h) : undefined), MAX_IDS) : undefined), MAX_SESSIONS),
-      expanded: record(raw.expanded, (v) => (Array.isArray(v) ? ids(v, true) : undefined), MAX_SESSIONS),
+      tab: record(raw.tab, (v) => (typeof v === "string" && v.length > 0 && v.length <= 512 ? v : undefined), MAX_SESSIONS),
       seen: record(raw.seen, (v) => {
         if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
         const out: Record<string, number> = {};
@@ -117,7 +115,7 @@ export function arrange(defaultIds: readonly string[], stored: readonly string[]
   return order;
 }
 
-/** Move one section past its nearest visible neighbour. Returns the full new order (hidden sections keep their place). */
+/** Move one tab past its nearest visible neighbour. Returns the full new order (hidden sections keep their place). */
 export function move(order: readonly string[], id: string, direction: "up" | "down", hidden: ReadonlySet<string>): string[] {
   const list = [...order];
   const from = list.indexOf(id);
@@ -146,7 +144,7 @@ export function placeAt(order: readonly string[], id: string, target: string): s
 }
 
 export interface Arrangement { visible: PanelStackItem[]; hidden: PanelStackItem[] }
-/** Splits the stack, in the user's order, into shown and hidden sections. */
+/** Splits the stack, in the user's order, into shown and hidden tabs. */
 export function layout(items: readonly PanelStackItem[], prefs: PanelPrefs, agent: string | null | undefined): Arrangement {
   const key = agentKey(agent);
   const byId = new Map(items.map((item) => [item.panel, item]));
@@ -167,46 +165,21 @@ export function setHidden(prefs: PanelPrefs, agent: string | null | undefined, p
   const rest = (prefs.hidden[key] ?? []).filter((id) => id !== panel);
   return { ...prefs, hidden: bounded(prefs.hidden, key, hide ? [...rest, panel].slice(-MAX_IDS) : rest) };
 }
-export const setHeight = (prefs: PanelPrefs, agent: string | null | undefined, panel: string, height: number): PanelPrefs =>
-  ({ ...prefs, heights: bounded(prefs.heights, agentKey(agent), bounded(prefs.heights[agentKey(agent)] ?? {}, panel, clampHeight(height), MAX_IDS)) });
-export const heightFor = (prefs: PanelPrefs, agent: string | null | undefined, panel: string): number | undefined => prefs.heights[agentKey(agent)]?.[panel];
-
-/** An expanded section for {@link shareHeights}: its content's own height (header included) and the user's dragged size. */
-export interface ShareInput { panel: string; natural?: number | undefined; dragged?: number | undefined }
-/**
- * Outer heights of the expanded sections, like VS Code split views (docs/panels-design.md §13.1 "Size"). A dragged
- * section keeps its size. The others share what is left equally, except that a section whose content is shorter than its
- * share takes only its content height (at least {@link MIN_HEIGHT}) and gives the rest to the others. When the space
- * runs out every section still gets {@link MIN_HEIGHT} and the stack scrolls.
- */
-export function shareHeights(available: number, sections: readonly ShareInput[]): Record<string, number> {
-  const out: Record<string, number> = {};
-  let left = Math.max(0, Math.floor(available));
-  for (const section of sections)
-    if (section.dragged !== undefined) { out[section.panel] = clampHeight(section.dragged); left -= out[section.panel]!; }
-  const want = (section: ShareInput) => Math.max(MIN_HEIGHT, section.natural ?? Infinity);
-  const sharing = sections.filter((section) => section.dragged === undefined).sort((a, b) => want(a) - want(b));
-  for (let index = 0; index < sharing.length; index++) {
-    const section = sharing[index]!;
-    const share = Math.floor(Math.max(0, left) / (sharing.length - index));
-    // The last section takes the rounding remainder, so the shares fill the space exactly.
-    const height = Math.max(MIN_HEIGHT, Math.min(want(section), index === sharing.length - 1 ? Math.max(0, left) : share));
-    out[section.panel] = height;
-    left -= height;
-  }
-  return out;
+/** Selects a tab for one session; an unchanged choice returns the same object. */
+export function setTab(prefs: PanelPrefs, session: string, tab: string): PanelPrefs {
+  return prefs.tab[session] === tab ? prefs : { ...prefs, tab: bounded(prefs.tab, session, tab) };
 }
-export function setExpanded(prefs: PanelPrefs, session: string, panel: string, open: boolean): PanelPrefs {
-  const rest = (prefs.expanded[session] ?? []).filter((id) => id !== panel);
-  return { ...prefs, expanded: bounded(prefs.expanded, session, open ? [...rest, panel] : rest) };
+/** The session's selected tab when it is still shown (Overview, Details or one of `shown`), else Overview. */
+export function activeTab(prefs: PanelPrefs, session: string, shown: readonly string[]): string {
+  const tab = prefs.tab[session];
+  return tab && (tab === DETAILS_ID || tab === OVERVIEW_ID || shown.includes(tab)) ? tab : OVERVIEW_ID;
 }
-export const isExpanded = (prefs: PanelPrefs, session: string, panel: string): boolean => (prefs.expanded[session] ?? []).includes(panel);
 export function markSeen(prefs: PanelPrefs, session: string, panel: string, revision: number): PanelPrefs {
   const current = prefs.seen[session] ?? {};
   if ((current[panel] ?? 0) >= revision) return prefs;
   return { ...prefs, seen: bounded(prefs.seen, session, { ...current, [panel]: revision }) };
 }
-/** Unseen when the revision is newer than the last one viewed here. A collapsed, hidden or closed section can be unseen. */
+/** Unseen when the revision is newer than the last one viewed here. A hidden, closed or unselected tab can be unseen. */
 export const unseen = (prefs: PanelPrefs, session: string, item: Pick<PanelStackItem, "panel" | "revision">): boolean =>
   item.revision > 0 && item.revision > (prefs.seen[session]?.[item.panel] ?? 0);
 export const hasOpened = (prefs: PanelPrefs, session: string): boolean => prefs.opened.includes(session);
@@ -325,7 +298,7 @@ export function relativeTime(at: number, now: number): string {
 
 /** A receipt names its panel by the local id; the stack is keyed by the full id `<owner>#<panel>`. */
 export const receiptPanel = (receipt: { panel: string; owner: string }): string => `${receipt.owner}#${receipt.panel}`;
-/** The rejected-update code to show in a section: the newest receipt of that panel, when it was an error. */
+/** The rejected-update code to show in a tab: the newest receipt of that panel, when it was an error. */
 export function rejectedCode(history: ReadonlyArray<{ panelReceipt?: { panel: string; owner: string; error?: { code: string } } }>, panel: string): string | undefined {
   for (let index = history.length - 1; index >= 0; index--) {
     const receipt = history[index]!.panelReceipt;

@@ -54,8 +54,8 @@ test.describe("shared Mermaid placements", () => {
     await expect(assistant.getByRole("button", { name: "Show diagram", exact: true })).toBeVisible();
     await assistant.getByRole("button", { name: "Show diagram", exact: true }).click();
     await page.getByRole("button", { name: "Side panel", exact: true }).click();
-    const sidebar = page.locator('[data-panel="local/diagrams#side"]');
-    await sidebar.locator(".panel-toggle").click();
+    const sidebar = page.locator('[data-tab-panel="local/diagrams#side"]');
+    await page.getByRole("tab", { name: "Sidebar diagram", exact: true }).click();
     await expect(sidebar.locator('.mermaid-viewport svg[role="img"]')).toHaveCount(2);
     await expect(sidebar.locator('svg[aria-label="Flowchart"]')).toContainText("Start");
     await expect(sidebar.locator('svg[aria-label="Sequence"]')).toContainText("Alice");
@@ -138,7 +138,7 @@ test.describe("async Mermaid updates", () => {
     });
     await openChat(page, raw);
     await send(page);
-    const figure = page.locator('[data-panel="local/diagrams#side"] .mermaid-diagram');
+    const figure = page.locator('[data-tab-panel="local/diagrams#side"] .mermaid-diagram');
     await expect(figure.locator(".mermaid-viewport svg")).toContainText("NewestEnd");
     await expect(figure.locator(".mermaid-viewport svg")).not.toContainText("OldEnd");
     await figure.getByRole("button", { name: "Show source", exact: true }).click();

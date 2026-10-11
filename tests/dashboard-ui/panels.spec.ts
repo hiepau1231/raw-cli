@@ -10,9 +10,10 @@ const call = (id: string, name: string, args: unknown) => ({
 });
 const todos = (count: number) => ({ title: "Ship", todos: Array.from({ length: count }, (_, index) => ({ content: `Step ${index + 1}`, status: index === 0 ? "in_progress" : "pending" })) });
 const KEY = "raw.dashboard.panels.v1";
-const stack = (page: Page) => page.locator(".panel-stack");
-const section = (page: Page, panel: string) => page.locator(`[data-panel="${panel}"]`);
-const toggle = (page: Page, title: string) => page.locator(".panel-toggle", { has: page.locator(".panel-title", { hasText: new RegExp(`^${title}$`) }) });
+const tab = (page: Page, title: string) => page.getByRole("tab", { name: title, exact: true });
+/** The Overview card of a panel, by its full id. */
+const card = (page: Page, panel: string) => page.locator(`.sp-overview-card[data-card="${panel}"]`);
+const titles = (page: Page) => page.getByRole("tab").evaluateAll((tabs) => tabs.map((element) => element.getAttribute("aria-label")));
 const side = (page: Page) => page.getByRole("button", { name: "Side panel", exact: true });
 async function send(page: Page, text: string) {
   await page.getByRole("textbox", { name: "Message" }).fill(text);
@@ -28,58 +29,92 @@ function plugin(raw: { env: NodeJS.ProcessEnv }, folder: string, panels: object[
 }
 const decl = (id: string, title: string, extra: object = {}) => ({ id, title, icon: "list-checks", open: "never", ...extra });
 
+
 test.describe("todo panel", () => {
+  const sixty = (doneFirst: boolean) => ({ title: "Ship", todos: Array.from({ length: 60 }, (_, index) => ({ content: `Step ${index + 1}`, status: index === 0 && doneFirst ? "done" : index === (doneFirst ? 1 : 0) ? "in_progress" : "pending" })) });
   test.use({
     scenario: {
       agent: { tools: { use: ["builtin/todo"] } },
-      responses: [call("c1", "todo", todos(3)), answer, call("c2", "todo", todos(60)), answer],
+      responses: [call("c1", "todo", todos(3)), answer, call("c2", "todo", sixty(false)), answer, call("c3", "todo", sixty(true)), answer],
     },
   });
 
-  test("the side panel starts closed, lists the declared section before any data and follows the accordion pattern", async ({ page, raw }) => {
+  test("the side panel starts closed, opens on Overview with a card for the declared panel, and follows the tabs pattern", async ({ page, raw }) => {
     await openChat(page, raw);
     await expect(page.locator(".inspector")).toHaveCount(0);
     await side(page).click();
     await expect(page.getByRole("heading", { name: "Side panel", exact: true })).toBeVisible();
-    const todo = toggle(page, "Todo");
-    await expect(todo).toHaveAttribute("aria-expanded", "false");
-    await expect(page.getByText("No data yet").first()).toBeVisible();
-    await expect(toggle(page, "Details")).toHaveAttribute("aria-expanded", "false");
-    await todo.focus();
+    expect(await titles(page)).toEqual(["Overview", "Todo", "Details"]);
+    await expect(tab(page, "Overview")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", (await tab(page, "Overview").getAttribute("id"))!);
+    await expect(card(page, "builtin/todo#todo")).toContainText("No data yet");
+    // Manual activation: arrows, Home and End move focus only; Enter or Space selects. Only one tab is in the tab order.
+    await tab(page, "Overview").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(tab(page, "Todo")).toBeFocused();
+    await expect(tab(page, "Overview")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab").and(page.locator("[tabindex='0']"))).toHaveCount(1);
     await page.keyboard.press("Enter");
-    await expect(todo).toHaveAttribute("aria-expanded", "true");
+    await expect(tab(page, "Todo")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", (await tab(page, "Todo").getAttribute("id"))!);
+    await page.keyboard.press("End");
+    await expect(tab(page, "Details")).toBeFocused();
+    await page.keyboard.press("Home");
+    await expect(tab(page, "Overview")).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(tab(page, "Details")).toBeFocused();
     await page.keyboard.press("Space");
-    await expect(todo).toHaveAttribute("aria-expanded", "false");
+    await expect(tab(page, "Details")).toHaveAttribute("aria-selected", "true");
+    // A card opens its tab, and the selected tab is stored per session and survives a reload.
+    await tab(page, "Overview").click();
+    await card(page, "builtin/todo#todo").focus();
     await page.keyboard.press("Enter");
-    // The expand state is stored per session and survives a reload.
+    await expect(tab(page, "Todo")).toHaveAttribute("aria-selected", "true");
+    // The card left with Overview, so focus moves into the tab it opened instead of falling to the page.
+    await expect(page.getByRole("tabpanel")).toBeFocused();
     await page.reload();
     await side(page).click();
-    await expect(toggle(page, "Todo")).toHaveAttribute("aria-expanded", "true");
+    await expect(tab(page, "Todo")).toHaveAttribute("aria-selected", "true");
   });
 
-  test("the first update opens the side panel once, expands the section without moving focus, and later updates never move or resize it", async ({ page, raw }) => {
+  test("the first update opens the side panel once on the panel's tab without moving focus, and later updates never switch the tab, move focus or scroll", async ({ page, raw }) => {
     await openChat(page, raw);
     await send(page, "plan it");
     await expect(page.locator(".inspector")).toBeVisible();
-    await expect(toggle(page, "Todo")).toHaveAttribute("aria-expanded", "true");
+    await expect(tab(page, "Todo")).toHaveAttribute("aria-selected", "true");
     await expect(page.getByText("Step 3", { exact: true })).toBeVisible();
     expect(await page.evaluate(() => !!document.activeElement?.closest(".inspector"))).toBe(false);
+    await expect(tab(page, "Todo")).toHaveAccessibleDescription("0 of 3 done");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
-    const target = section(page, "builtin/todo#todo");
-    const before = await target.boundingBox();
-    const bodyBefore = await target.locator(".panel-body").boundingBox();
-    expect(before && bodyBefore).toBeTruthy();
     await send(page, "more");
-    await expect(page.getByText("Step 60", { exact: true })).toBeAttached();
     await expect(page.getByTestId("assistant-message")).toHaveCount(2);
-    const after = await target.boundingBox();
-    const bodyAfter = await target.locator(".panel-body").boundingBox();
-    expect(after).toEqual(before);
-    expect(bodyAfter).toEqual(bodyBefore);
-    await expect(toggle(page, "Todo")).toHaveAttribute("aria-expanded", "true");
-    await expect(stack(page).locator("[role=status]")).toHaveText("Todo: 0 of 60 done");
-    await expect(section(page, "builtin/todo#todo").locator(".panel-progress-line")).toHaveCount(1);
-    expect(await target.locator(".panel-body").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    await expect(page.getByText("Step 60", { exact: true })).toBeAttached();
+    await expect(page.locator(".side-panel [role=status]")).toHaveText("Todo: 0 of 60 done");
+    await expect(tab(page, "Todo")).toHaveAccessibleDescription("0 of 60 done");
+    // The reader scrolls the tab; the next update keeps the tab, the focus and the scroll position.
+    const content = page.getByRole("tabpanel");
+    expect(await content.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    await content.evaluate((element) => { element.scrollTop = 200; });
+    await page.getByRole("textbox", { name: "Message" }).fill("again");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByTestId("assistant-message")).toHaveCount(3);
+    await expect(tab(page, "Todo")).toHaveAccessibleDescription("1 of 60 done");
+    await expect(tab(page, "Todo")).toHaveAttribute("aria-selected", "true");
+    expect(await content.evaluate((element) => element.scrollTop)).toBe(200);
+    expect(await page.evaluate(() => !!document.activeElement?.closest(".inspector"))).toBe(false);
+  });
+
+  test("Follow the tool keeps a tab the user chose and only marks the update", async ({ page, raw }) => {
+    await openChat(page, raw);
+    await side(page).click();
+    await tab(page, "Details").click();
+    await page.getByRole("button", { name: "Close side panel" }).click();
+    await expect(page.locator(".inspector")).toHaveCount(0);
+    await send(page, "plan it");
+    await expect(page.locator(".inspector")).toBeVisible();
+    await expect(tab(page, "Details")).toHaveAttribute("aria-selected", "true");
+    await expect(tab(page, "Todo").locator(".sp-unseen")).toHaveCount(1);
+    await expect(tab(page, "Todo")).toHaveAccessibleDescription("0 of 3 done, New update");
   });
 
   test("Never keeps the side panel closed and the unseen dot marks the update", async ({ page, raw }) => {
@@ -89,9 +124,12 @@ test.describe("todo panel", () => {
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
     await expect(page.locator(".inspector")).toHaveCount(0);
     await side(page).click();
-    await expect(section(page, "builtin/todo#todo").locator(".panel-unseen")).toBeVisible();
-    await toggle(page, "Todo").click();
-    await expect(section(page, "builtin/todo#todo").locator(".panel-unseen")).toHaveCount(0);
+    await expect(tab(page, "Overview")).toHaveAttribute("aria-selected", "true");
+    // Overview shows the card but does not count as reading the panel.
+    await expect(card(page, "builtin/todo#todo")).toContainText("Step 1");
+    await expect(tab(page, "Todo").locator(".sp-unseen")).toHaveCount(1);
+    await tab(page, "Todo").click();
+    await expect(tab(page, "Todo").locator(".sp-unseen")).toHaveCount(0);
     await expect(page.getByText("Step 1", { exact: true })).toBeVisible();
   });
 
@@ -103,17 +141,17 @@ test.describe("todo panel", () => {
     await expect(page.getByRole("dialog", { name: "Side panel" })).toHaveCount(0);
     await side(page).click();
     await expect(page.getByRole("dialog", { name: "Side panel" })).toBeVisible();
-    await expect(toggle(page, "Todo")).toBeVisible();
+    await expect(tab(page, "Todo")).toBeVisible();
   });
 
-  test("a receipt row opens, unhides and expands its section and a hidden section stays hidden on update", async ({ page, raw }) => {
+  test("a receipt row opens the side panel, unhides its tab and selects it, and a hidden tab stays hidden on update", async ({ page, raw }) => {
     await page.addInitScript(([key]) => {
       if (!localStorage.getItem(key!)) localStorage.setItem(key!, JSON.stringify({ version: 1, hidden: { raw: ["builtin/todo#todo"] } }));
     }, [KEY]);
     await openChat(page, raw);
     await send(page, "plan it");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
-    // A hidden section never opens the side panel by itself.
+    // A hidden tab never opens the side panel by itself.
     await expect(page.locator(".inspector")).toHaveCount(0);
     await page.getByText("Work", { exact: true }).click();
     const receipt = page.locator(".panel-receipt");
@@ -121,23 +159,33 @@ test.describe("todo panel", () => {
     await expect(receipt).toContainText("Ship");
     await receipt.click();
     await expect(page.locator(".inspector")).toBeVisible();
-    await expect(toggle(page, "Todo")).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByText(/hidden section/)).toHaveCount(0);
+    await expect(tab(page, "Todo")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByText("Step 3", { exact: true })).toBeVisible();
+    await tab(page, "Overview").click();
+    await expect(page.getByText(/\d hidden/)).toHaveCount(0);
   });
 
-  test("Hide, Move up and Move down live in the section menu and the hidden row shows the section again", async ({ page, raw }) => {
+  test("Hide tab, Move left and Move right live in the tab menu and the hidden row shows the tab again", async ({ page, raw }) => {
     await openChat(page, raw);
     await side(page).click();
-    await page.getByRole("button", { name: "Todo section menu" }).click();
-    await expect(page.getByRole("menuitem", { name: "Move up" })).toHaveAttribute("aria-disabled", "true");
-    await page.getByRole("menuitem", { name: "Hide section" }).click();
-    await expect(toggle(page, "Todo")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "1 hidden section" })).toBeVisible();
+    await tab(page, "Todo").click();
+    await page.getByRole("button", { name: "Todo panel menu" }).click();
+    await expect(page.getByRole("menuitem", { name: "Move left" })).toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByRole("menuitem", { name: "Move right" })).toHaveAttribute("aria-disabled", "true");
+    await page.getByRole("menuitem", { name: "Hide tab" }).click();
+    await expect(tab(page, "Todo")).toHaveCount(0);
+    await expect(tab(page, "Overview")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("button", { name: "1 hidden" })).toBeVisible();
     await page.reload();
     await side(page).click();
-    await page.getByRole("button", { name: "1 hidden section" }).click();
+    await page.getByRole("button", { name: "1 hidden" }).click();
     await page.getByRole("button", { name: "Show Todo" }).click();
-    await expect(toggle(page, "Todo")).toBeVisible();
+    await expect(tab(page, "Todo")).toBeVisible();
+    // Overview and Details have no menu: they cannot move or hide.
+    for (const fixed of ["Overview", "Details"]) {
+      await tab(page, fixed).click();
+      await expect(page.getByRole("button", { name: `${fixed} panel menu` })).toHaveCount(0);
+    }
   });
 
   test("the side panel passes axe in light and dark", async ({ page, raw }) => {
@@ -147,14 +195,15 @@ test.describe("todo panel", () => {
     await expect(page.getByText("Step 3", { exact: true })).toBeVisible();
     for (const theme of ["light", "dark"]) {
       await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
-      await toggle(page, "Details").click();
-      expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
-      await toggle(page, "Details").click();
+      for (const title of ["Overview", "Todo", "Details"]) {
+        await tab(page, title).click();
+        expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
+      }
     }
   });
 });
 
-test.describe("section layout", () => {
+test.describe("tab layout", () => {
   // `short` publishes two lines on its first call and eighty on later ones; `long` always publishes eighty lines.
   const lines = (count: number) => Array.from({ length: count }, (_, index) => `Line ${index + 1}`).join("\\n\\n");
   const publish = (text: string) => `await context.panels.update("p", { op: "replace", document: { blocks: [{ id: "m", kind: "markdown", text: ${text} }] } });`;
@@ -163,184 +212,115 @@ test.describe("section layout", () => {
     plugin(raw, "short", [decl("p", "Short")], `const fs = await import("node:fs"); const calls = Number(fs.existsSync(${JSON.stringify(counter)}) ? fs.readFileSync(${JSON.stringify(counter)}, "utf8") : 0) + 1;
       fs.writeFileSync(${JSON.stringify(counter)}, String(calls)); ${publish(`calls === 1 ? "${lines(2)}" : "${lines(80)}"`)}`);
     plugin(raw, "long", [decl("p", "Long")], publish(`"${lines(80)}"`));
-    plugin(raw, "longer", [decl("p", "Longer")], publish(`"${lines(80)}"`));
   };
   test.use({
     scenario: {
-      agent: { tools: { use: ["local/short", "local/long", "local/longer"] } },
+      agent: { tools: { use: ["local/short", "local/long"] } },
       responses: [
-        { frames: [openAiFrame({ tool_calls: ["short", "long", "longer"].map((name, index) => ({ index, id: name, type: "function", function: { name, arguments: "{}" } })) }, "tool_calls"), openAiDone] },
+        { frames: [openAiFrame({ tool_calls: ["short", "long"].map((name, index) => ({ index, id: name, type: "function", function: { name, arguments: "{}" } })) }, "tool_calls"), openAiDone] },
         answer, call("again", "short", {}), answer,
       ],
     },
   });
-  const height = async (page: Page, panel: string) => (await section(page, panel).boundingBox())!.height;
-  const filled = (page: Page) => stack(page).evaluate((element) => {
-    const rows = [...element.querySelectorAll<HTMLElement>(":scope > [data-panel], :scope > .panel-hidden")];
-    return { used: rows.reduce((sum, row) => sum + row.getBoundingClientRect().height, 0), box: element.clientHeight };
-  });
-  async function expand(page: Page, ...titles: string[]) {
-    for (const title of titles) if ((await toggle(page, title).getAttribute("aria-expanded")) !== "true") await toggle(page, title).click();
-  }
 
-  test("expanded sections share the height equally, and a short one gives its spare height to the other", async ({ page, raw }) => {
+  test("a tab's content takes the side panel's whole height and scrolls inside it", async ({ page, raw }) => {
     seed(raw);
     await openChat(page, raw);
     await send(page, "publish");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
     await side(page).click();
-    await expand(page, "Long", "Longer");
-    await expect.poll(async () => Math.abs((await height(page, "local/long#p")) - (await height(page, "local/longer#p")))).toBeLessThanOrEqual(1);
-    let fill = await filled(page);
-    expect(Math.abs(fill.used - fill.box)).toBeLessThanOrEqual(2);
-    // A short section takes its content height; the long one takes the rest instead of half.
-    await toggle(page, "Longer").click();
-    await expand(page, "Short");
-    await expect(section(page, "local/short#p").getByText("Line 2", { exact: true })).toBeVisible();
-    const short = await height(page, "local/short#p");
-    const long = await height(page, "local/long#p");
-    fill = await filled(page);
-    expect(short).toBeLessThan(fill.box / 3);
-    expect(long).toBeGreaterThan(fill.box / 2);
-    expect(Math.abs(fill.used - fill.box)).toBeLessThanOrEqual(2);
-    expect(await section(page, "local/short#p").locator(".panel-body").evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(true);
-    expect(await section(page, "local/long#p").locator(".panel-body").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    const inspector = (await page.locator(".inspector").boundingBox())!;
+    for (const [title, scrolls] of [["Long", true], ["Short", false]] as const) {
+      await tab(page, title).click();
+      const content = page.getByRole("tabpanel");
+      await expect(content.getByText("Line 2", { exact: true })).toBeVisible();
+      const box = (await content.boundingBox())!;
+      expect(Math.abs(box.y + box.height - (inspector.y + inspector.height))).toBeLessThanOrEqual(2);
+      expect(await content.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(scrolls);
+      expect(await content.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    }
+    // Another tab starts at its top.
+    await tab(page, "Long").click();
+    await page.getByRole("tabpanel").evaluate((element) => { element.scrollTop = 400; });
+    await tab(page, "Short").click();
+    expect(await page.getByRole("tabpanel").evaluate((element) => element.scrollTop)).toBe(0);
   });
 
-  test("an update to a section changes no section's height", async ({ page, raw }) => {
+  test("an update to another panel changes neither the tab, the focus nor the scroll position", async ({ page, raw }) => {
     seed(raw);
     await openChat(page, raw);
     await send(page, "publish");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
     await side(page).click();
-    await expand(page, "Short", "Long");
-    await expect(section(page, "local/short#p").getByText("Line 2", { exact: true })).toBeVisible();
-    const boxes = () => stack(page).locator("[data-panel]").evaluateAll((elements) => elements.map((element) => {
-      const rect = element.getBoundingClientRect();
-      return [(element as HTMLElement).dataset.panel, Math.round(rect.top), Math.round(rect.height)];
-    }));
-    const before = await boxes();
+    await tab(page, "Short").click();
+    await tab(page, "Long").click();
+    const content = page.getByRole("tabpanel");
+    await content.evaluate((element) => { element.scrollTop = 300; });
     await send(page, "grow the short one");
     await expect(page.getByTestId("assistant-message")).toHaveCount(2);
-    await expect(section(page, "local/short#p").getByText("Line 80", { exact: true })).toBeAttached();
-    expect(await boxes()).toEqual(before);
-    expect(await section(page, "local/short#p").locator(".panel-body").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  });
-
-  test("a dragged size is kept for that section only and survives a reload", async ({ page, raw }) => {
-    seed(raw);
-    await openChat(page, raw);
-    await send(page, "publish");
-    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
-    await side(page).click();
-    await expand(page, "Long", "Longer");
-    await expect.poll(async () => Math.abs((await height(page, "local/long#p")) - (await height(page, "local/longer#p")))).toBeLessThanOrEqual(1);
-    const start = await height(page, "local/long#p");
-    const other = await height(page, "local/longer#p");
-    await section(page, "local/long#p").locator("xpath=following-sibling::*[1]").focus();
-    await page.keyboard.press("ArrowDown");
-    await page.keyboard.press("ArrowDown");
-    await expect.poll(() => height(page, "local/long#p")).toBe(start + 48);
-    // The other section shares what is left.
-    await expect.poll(() => height(page, "local/longer#p")).toBe(other - 48);
-    await page.reload();
-    await side(page).click();
-    await expect.poll(() => height(page, "local/long#p")).toBe(start + 48);
-    await expect.poll(() => height(page, "local/longer#p")).toBe(other - 48);
-    const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}"), KEY);
-    expect(stored.heights.raw).toEqual({ "local/long#p": start + 48 });
-  });
-
-  test("a pointer drag resizes from where it started, even when the section above gives up height", async ({ page, raw }) => {
-    seed(raw);
-    await openChat(page, raw);
-    await send(page, "publish");
-    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
-    await side(page).click();
-    await expand(page, "Long", "Longer");
-    await expect.poll(async () => Math.abs((await height(page, "local/long#p")) - (await height(page, "local/longer#p")))).toBeLessThanOrEqual(1);
-    const start = await height(page, "local/longer#p");
-    const divider = (await section(page, "local/longer#p").locator("xpath=following-sibling::*[1]").boundingBox())!;
-    const x = divider.x + divider.width / 2;
-    const y = divider.y + divider.height / 2;
-    await page.mouse.move(x, y);
-    await page.mouse.down();
-    await page.mouse.move(x, y + 40, { steps: 4 });
-    // Moving sideways at the same height must not keep growing the section while Long above it shrinks.
-    for (let step = 1; step <= 4; step++) await page.mouse.move(x + step * 10, y + 40);
-    await page.mouse.up();
-    await expect.poll(() => height(page, "local/longer#p")).toBe(start + 40);
+    await expect(tab(page, "Short").locator(".sp-unseen")).toHaveCount(1);
+    await expect(tab(page, "Long")).toHaveAttribute("aria-selected", "true");
+    expect(await content.evaluate((element) => element.scrollTop)).toBe(300);
+    expect(await page.evaluate(() => !!document.activeElement?.closest(".inspector"))).toBe(false);
+    await tab(page, "Short").click();
+    await expect(page.getByRole("tabpanel").getByText("Line 80", { exact: true })).toBeAttached();
   });
 });
 
-test.describe("section chrome", () => {
+test.describe("tab chrome", () => {
   test.use({ scenario: { agent: { tools: { use: ["local/same", "local/other"] } }, responses: [
     { frames: [openAiFrame({ tool_calls: ["same", "other"].map((name, index) => ({ index, id: name, type: "function", function: { name, arguments: "{}" } })) }, "tool_calls"), openAiDone] }, answer] } });
   const seed = (raw: { env: NodeJS.ProcessEnv }) => {
-    plugin(raw, "same", [decl("p", "Notes")], `await context.panels.update("p", { op: "replace", document: { title: "Notes", subtitle: "Explains what this panel tracks.",
+    plugin(raw, "same", [decl("p", "Notes")], `await context.panels.update("p", { op: "replace", document: { title: "Notes", subtitle: "Explains what this panel tracks.", status: "done",
       summary: "${"a long summary that keeps going ".repeat(3)}", blocks: [{ id: "c", kind: "checklist", title: "Notes", items: [{ id: "a", label: "First row" }, { id: "b", label: "Second row", ref: { path: "src/a.ts" } }] },
       { id: "t", kind: "table", title: "Checks", columns: [{ id: "name", label: "Name" }], rows: [{ id: "r1", cells: { name: "lint" } }, { id: "r2", cells: { name: "test" }, ref: { path: "src/b.ts" } }] }] } });`);
     plugin(raw, "other", [decl("p", "Other")], 'await context.panels.update("p", { op: "replace", document: { title: "Release plan", blocks: [{ id: "m", kind: "markdown", text: "body\\n\\n```sh\\nnpm test\\n```" }] } });');
   };
 
-  test("the body repeats neither the section title nor its explanation, which moves to the header tooltip", async ({ page, raw }) => {
+  test("the body repeats neither the tab title nor its explanation, which moves to the header tooltip", async ({ page, raw }) => {
     seed(raw);
     await openChat(page, raw);
     await send(page, "publish");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
     await side(page).click();
-    await toggle(page, "Notes").click();
-    await toggle(page, "Other").click();
-    const notes = section(page, "local/same#p").locator(".panel-body");
+    await tab(page, "Notes").click();
+    const notes = page.getByRole("tabpanel");
     await expect(notes.getByText("First row")).toBeVisible();
-    for (const title of await stack(page).locator(".panel-title").allTextContents())
-      await expect(stack(page).locator(".panel-body h4", { hasText: new RegExp(`^${title}$`, "i") })).toHaveCount(0);
+    await expect(notes.locator("h4", { hasText: /^Notes$/i })).toHaveCount(0);
+    await expect(notes.locator(".sp-tab-heading h3")).toHaveText("Notes");
+    await expect(notes.locator(".sp-tab-heading h3")).toHaveAttribute("title", /Explains what this panel tracks\./);
     await expect(notes).not.toContainText("Explains what this panel tracks.");
-    await expect(notes).not.toContainText("a long summary");
-    await expect(toggle(page, "Notes")).toHaveAttribute("title", /Explains what this panel tracks\./);
-    // A document or block title that differs from the section title still shows.
-    await expect(section(page, "local/other#p").locator(".panel-body h4")).toHaveText("Release plan");
     await expect(notes.locator("h4")).toHaveText(["Checks"]);
-    // Content is not a nested card: a code block inside a section has no outer border.
-    const code = section(page, "local/other#p").locator(".code-block");
+    // A done document shows a glyph on its tab and in the header, never a text pill.
+    await expect(tab(page, "Notes").locator(".sp-doc-status.done")).toHaveCount(1);
+    await expect(tab(page, "Notes")).toHaveAccessibleDescription("Done");
+    await expect(notes.locator(".sp-tab-header .sp-doc-status.done")).toHaveCount(1);
+    await expect(notes.locator(".sp-tab-header .sp-chip")).toHaveCount(0);
+    // A document or block title that differs from the tab title still shows.
+    await tab(page, "Other").click();
+    await expect(page.getByRole("tabpanel").locator("h4")).toHaveText("Release plan");
+    // Content is not a nested card: a code block inside a tab has no outer border.
+    const code = page.getByRole("tabpanel").locator(".code-block");
     await expect(code).toContainText("npm test");
     await expect(code).toHaveCSS("border-top-width", "0px");
     await expect(code).toHaveCSS("border-radius", "0px");
   });
 
-  test("headers are 28 px with the summary filling the width, rows are 24 px, and the menu shows on hover or focus", async ({ page, raw }) => {
+  test("rows are 24 px with 13 px text and file references keep the row size", async ({ page, raw }) => {
     seed(raw);
     await openChat(page, raw);
     await send(page, "publish");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
     await side(page).click();
-    await toggle(page, "Notes").click();
-    const header = section(page, "local/same#p").locator(".panel-header");
-    expect((await header.boundingBox())!.height).toBe(28);
-    const button = (await toggle(page, "Notes").boundingBox())!;
-    const summary = (await header.locator(".panel-header-summary").boundingBox())!;
-    const title = (await header.locator(".panel-title").boundingBox())!;
-    // The summary starts right after the title and runs to the end of the header button (no width cap).
-    expect(summary.x).toBeLessThan(title.x + title.width + 12);
-    expect(button.x + button.width - (summary.x + summary.width)).toBeLessThanOrEqual(12);
+    await tab(page, "Notes").click();
     // Checklist rows (one with a file reference) and table rows share the row geometry.
-    const rows = section(page, "local/same#p").locator(".panel-checklist li, .panel-table tbody tr");
+    const rows = page.getByRole("tabpanel").locator(".panel-checklist li, .panel-table tbody tr");
     await expect(rows).toHaveCount(4);
     for (const row of await rows.all()) {
       expect((await row.boundingBox())!.height).toBe(24);
       expect(await row.evaluate((element) => getComputedStyle(element).fontSize)).toBe("13px");
     }
-    await expect(section(page, "local/same#p").locator(".panel-ref").first()).toHaveCSS("font-size", "13px");
-    const menu = header.getByRole("button", { name: "Notes section menu" });
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await page.mouse.move(0, 0);
-    await expect(menu).toHaveCSS("opacity", "0");
-    await header.hover();
-    await expect(menu).toHaveCSS("opacity", "1");
-    await page.mouse.move(0, 0);
-    await expect(menu).toHaveCSS("opacity", "0");
-    await menu.focus();
-    await expect(menu).toHaveCSS("opacity", "1");
+    await expect(page.getByRole("tabpanel").locator(".panel-ref").first()).toHaveCSS("font-size", "13px");
   });
 });
 
@@ -351,7 +331,6 @@ test.describe("panel ordering", () => {
   const seed = (raw: { env: NodeJS.ProcessEnv }) => {
     for (const name of ["a", "b", "c", "d"]) plugin(raw, name, [decl("p", name.toUpperCase())]);
   };
-  const titles = (page: Page) => stack(page).locator(".panel-title").allTextContents();
 
   test("new panels are inserted after their nearest present predecessor, not appended and not default-sorted", async ({ page, raw }) => {
     seed(raw);
@@ -361,60 +340,68 @@ test.describe("panel ordering", () => {
     }, [KEY]);
     await openChat(page, raw);
     await side(page).click();
-    await expect(toggle(page, "A")).toBeVisible();
-    expect(await titles(page)).toEqual(["A", "D", "B", "C", "Details"]);
+    await expect(tab(page, "A")).toBeVisible();
+    expect(await titles(page)).toEqual(["Overview", "A", "D", "B", "C", "Details"]);
   });
 
-  test("dragging a header reorders the stack and persists, while a plain click still toggles", async ({ page, raw }) => {
+  test("dragging a tab along the strip reorders and persists, while a plain click still selects", async ({ page, raw }) => {
     seed(raw);
     await openChat(page, raw);
     await side(page).click();
-    const header = (name: string) => toggle(page, name);
-    await header("A").click();
-    await expect(header("A")).toHaveAttribute("aria-expanded", "true");
-    await header("A").click();
-    const from = (await header("A").boundingBox())!;
-    const to = (await header("C").boundingBox())!;
-    await page.mouse.move(from.x + 60, from.y + from.height / 2);
+    await tab(page, "A").click();
+    await expect(tab(page, "A")).toHaveAttribute("aria-selected", "true");
+    await tab(page, "Overview").click();
+    const from = (await tab(page, "A").boundingBox())!;
+    const to = (await tab(page, "C").boundingBox())!;
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
-    await page.mouse.move(from.x + 60, from.y + from.height / 2 + 20, { steps: 4 });
-    await page.mouse.move(to.x + 60, to.y + to.height / 2, { steps: 8 });
+    await page.mouse.move(from.x + from.width / 2 + 10, from.y + from.height / 2, { steps: 4 });
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 8 });
     await page.mouse.up();
-    expect(await titles(page)).toEqual(["B", "C", "A", "D", "Details"]);
-    await expect(header("A")).toHaveAttribute("aria-expanded", "false");
+    expect(await titles(page)).toEqual(["Overview", "B", "C", "A", "D", "Details"]);
+    // The drag did not select the tab.
+    await expect(tab(page, "Overview")).toHaveAttribute("aria-selected", "true");
     await page.reload();
     await side(page).click();
-    expect(await titles(page)).toEqual(["B", "C", "A", "D", "Details"]);
+    expect(await titles(page)).toEqual(["Overview", "B", "C", "A", "D", "Details"]);
   });
 
-  test("a fast drag whose first movement already leaves the source header still reorders", async ({ page, raw }) => {
+  test("a fast drag whose first movement already leaves the source tab still reorders, and Overview and Details do not move", async ({ page, raw }) => {
     seed(raw);
     await openChat(page, raw);
     await side(page).click();
-    const from = (await toggle(page, "A").boundingBox())!;
-    const to = (await toggle(page, "C").boundingBox())!;
-    await page.mouse.move(from.x + 60, from.y + from.height / 2);
+    const from = (await tab(page, "A").boundingBox())!;
+    const to = (await tab(page, "C").boundingBox())!;
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
-    await page.mouse.move(to.x + 60, to.y + to.height / 2);
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2);
     await page.mouse.up();
-    expect(await titles(page)).toEqual(["B", "C", "A", "D", "Details"]);
+    expect(await titles(page)).toEqual(["Overview", "B", "C", "A", "D", "Details"]);
+    const details = (await tab(page, "Details").boundingBox())!;
+    const b = (await tab(page, "B").boundingBox())!;
+    await page.mouse.move(details.x + details.width / 2, details.y + details.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 6 });
+    await page.mouse.up();
+    expect(await titles(page)).toEqual(["Overview", "B", "C", "A", "D", "Details"]);
   });
 
-  test("Move up and Move down reorder by the keyboard and persist per agent", async ({ page, raw }) => {
+  test("Move left and Move right reorder by the keyboard and persist per agent", async ({ page, raw }) => {
     seed(raw);
     await openChat(page, raw);
     await side(page).click();
-    expect(await titles(page)).toEqual(["A", "B", "C", "D", "Details"]);
-    await page.getByRole("button", { name: "C section menu" }).click();
-    await page.getByRole("menuitem", { name: "Move up" }).press("Enter");
-    expect(await titles(page)).toEqual(["A", "C", "B", "D", "Details"]);
-    await page.getByRole("button", { name: "A section menu" }).click();
-    await page.getByRole("menuitem", { name: "Move down" }).press("Enter");
-    expect(await titles(page)).toEqual(["C", "A", "B", "D", "Details"]);
+    expect(await titles(page)).toEqual(["Overview", "A", "B", "C", "D", "Details"]);
+    await tab(page, "C").click();
+    await page.getByRole("button", { name: "C panel menu" }).click();
+    await page.getByRole("menuitem", { name: "Move left" }).press("Enter");
+    expect(await titles(page)).toEqual(["Overview", "A", "C", "B", "D", "Details"]);
+    await tab(page, "A").click();
+    await page.getByRole("button", { name: "A panel menu" }).click();
+    await page.getByRole("menuitem", { name: "Move right" }).press("Enter");
+    expect(await titles(page)).toEqual(["Overview", "C", "A", "B", "D", "Details"]);
     await page.reload();
     await side(page).click();
-    expect(await titles(page)).toEqual(["C", "A", "B", "D", "Details"]);
-    await expect(page.getByRole("button", { name: "Details section menu" })).toHaveCount(0);
+    expect(await titles(page)).toEqual(["Overview", "C", "A", "B", "D", "Details"]);
   });
 });
 
@@ -440,8 +427,8 @@ test.describe("panel widgets", () => {
     plugin(raw, "gadget", [decl("g", "Gadget", { open: "first_update", icon: "gauge" })], publish);
     await openChat(page, raw);
     await send(page, "run gadget");
-    await expect(toggle(page, "Gadget")).toHaveAttribute("aria-expanded", "true");
-    const body = section(page, "local/gadget#g");
+    await expect(tab(page, "Gadget")).toHaveAttribute("aria-selected", "true");
+    const body = page.getByRole("tabpanel");
     for (const kind of ["checklist", "steps", "progress", "key_value", "table", "markdown", "timeline", "files"])
       await expect(body.locator(`[data-kind="${kind}"]`)).toHaveCount(1);
     await expect(body.getByText("Parent")).toBeVisible();
@@ -477,7 +464,7 @@ test.describe("panel widgets", () => {
     await expect(body.getByText("a note", { exact: true })).toBeVisible();
     await expect(body.getByText("failing note")).toHaveCount(0);
     await expect(body.getByText("Failing", { exact: true })).toHaveAttribute("title", "failing note");
-    // Checklist: children collapse, and "Hide completed" in the section menu is remembered by the browser.
+    // Checklist: children collapse, and "Hide completed" in the tab menu is remembered by the browser.
     await expect(body.getByText("Child", { exact: true })).toBeVisible();
     await body.getByRole("button", { name: "Collapse Parent" }).click();
     await expect(body.getByText("Child", { exact: true })).toHaveCount(0);
@@ -486,7 +473,7 @@ test.describe("panel widgets", () => {
     await expect(body.getByText("Finished chore")).toBeVisible();
     await expect(body.getByLabel("Hide completed")).toHaveCount(0);
     const hideCompleted = async () => {
-      await page.getByRole("button", { name: "Gadget section menu" }).click();
+      await page.getByRole("button", { name: "Gadget panel menu" }).click();
       return page.getByRole("menuitemcheckbox", { name: "Hide completed" });
     };
     await expect(await hideCompleted()).toHaveAttribute("aria-checked", "false");
@@ -495,13 +482,13 @@ test.describe("panel widgets", () => {
     await expect(body.getByText("Parent", { exact: true })).toBeVisible();
     await page.reload();
     await side(page).click();
-    await expect(section(page, "local/gadget#g").getByText("Finished chore")).toHaveCount(0);
+    await expect(page.getByRole("tabpanel").getByText("Finished chore")).toHaveCount(0);
     await expect(await hideCompleted()).toHaveAttribute("aria-checked", "true");
     await page.getByRole("menuitemcheckbox", { name: "Hide completed" }).click();
-    await expect(section(page, "local/gadget#g").getByText("Finished chore")).toBeVisible();
+    await expect(page.getByRole("tabpanel").getByText("Finished chore")).toBeVisible();
     await body.getByRole("button", { name: "src/a.ts:3" }).click();
     await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue(/@src\/a\.ts /);
-    expect(await body.locator(".panel-body").evaluate((element) => element.scrollHeight > 0)).toBe(true);
+    expect(await body.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     for (const theme of ["light", "dark"]) {
       await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
       expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
@@ -511,20 +498,20 @@ test.describe("panel widgets", () => {
 
 test.describe("agent switch", () => {
   test.use({ scenario: { agent: { tools: { use: ["builtin/todo"] } }, extraAgents: { bare: { model: "fixture", tools: { use: [] } } }, responses: [answer] } });
-  test("choosing another agent rebuilds the stack for that agent and choosing back restores it", async ({ page, raw }) => {
+  test("choosing another agent rebuilds the tabs for that agent and choosing back restores them", async ({ page, raw }) => {
     await openChat(page, raw);
     await side(page).click();
-    await expect(toggle(page, "Todo")).toBeVisible();
+    await expect(tab(page, "Todo")).toBeVisible();
     const pick = async (name: string) => {
       await page.getByRole("button", { name: "More actions" }).click();
       await page.getByRole("menuitem", { name: /^Agent:/ }).press("ArrowRight");
       await page.getByRole("menuitemradio", { name }).press("Enter");
     };
     await pick("bare");
-    await expect(toggle(page, "Todo")).toHaveCount(0);
-    await expect(toggle(page, "Details")).toBeVisible();
+    await expect(tab(page, "Todo")).toHaveCount(0);
+    await expect(tab(page, "Details")).toBeVisible();
     await pick("raw");
-    await expect(toggle(page, "Todo")).toBeVisible();
+    await expect(tab(page, "Todo")).toBeVisible();
   });
 });
 
@@ -533,34 +520,32 @@ test.describe("unseen updates", () => {
   test.use({
     scenario: { agent: { tools: { use: ["local/one", "local/two"], rules: [{ match: "local/*", effect: "allow" }] } }, responses: [call("t1", "two", {}), answer] },
   });
-  test("an update to an expanded section that is scrolled out of view keeps its unseen dot, also after reopening the panel, until it is scrolled into view", async ({ page, raw }) => {
+  test("an update to a panel whose tab is not selected keeps its unseen dot, also after reopening the side panel, until its tab is selected", async ({ page, raw }) => {
     plugin(raw, "one", [decl("p", "One")]);
     plugin(raw, "two", [decl("p", "Two")], 'await context.panels.update("p", { op: "replace", document: { title: "Second", blocks: [{ id: "m", kind: "markdown", text: "hello" }] } });');
-    // Both sections are dragged to 700 px each, so the second starts below the fold of the stack.
     await page.addInitScript(() => {
-      if (!localStorage.getItem("raw.dashboard.panels.v1")) localStorage.setItem("raw.dashboard.panels.v1", JSON.stringify({ version: 1, heights: { raw: { "local/one#p": 700, "local/two#p": 700 } }, opened: ["x"] }));
+      if (!localStorage.getItem("raw.dashboard.panels.v1")) localStorage.setItem("raw.dashboard.panels.v1", JSON.stringify({ version: 1, opened: ["x"] }));
     });
     await openChat(page, raw);
-    const sessionId = new URL(page.url()).pathname.split("/").pop()!;
-    await page.evaluate(([id]) => {
-      const key = "raw.dashboard.panels.v1";
-      const value = JSON.parse(localStorage.getItem(key)!);
-      value.expanded = { [id!]: ["local/one#p", "local/two#p"] };
-      localStorage.setItem(key, JSON.stringify(value));
-    }, [sessionId]);
-    await page.reload();
     await side(page).click();
-    await expect(toggle(page, "Two")).toHaveAttribute("aria-expanded", "true");
+    await tab(page, "One").click();
     await send(page, "run two");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
-    const dot = section(page, "local/two#p").locator(".panel-unseen");
+    const dot = tab(page, "Two").locator(".sp-unseen");
     await expect(dot).toHaveCount(1);
-    // Closing and reopening the side panel starts from unknown visibility: below-the-fold content is still unread.
     await page.getByRole("button", { name: "Close side panel" }).click();
     await side(page).click();
-    await expect(section(page, "local/two#p").locator(".panel-unseen")).toHaveCount(1);
-    await stack(page).evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
-    await expect(section(page, "local/two#p").locator(".panel-unseen")).toHaveCount(0);
+    await expect(tab(page, "One")).toHaveAttribute("aria-selected", "true");
+    await expect(dot).toHaveCount(1);
+    // The Overview card shows the content, but only the tab counts as reading it.
+    await tab(page, "Overview").click();
+    await expect(card(page, "local/two#p")).toBeVisible();
+    await expect(dot).toHaveCount(1);
+    await tab(page, "Two").click();
+    await expect(page.getByRole("tabpanel").getByText("hello")).toBeVisible();
+    await expect(dot).toHaveCount(0);
+    await tab(page, "One").click();
+    await expect(dot).toHaveCount(0);
   });
 });
 
@@ -602,7 +587,7 @@ test.describe("panel actions", () => {
     await openChat(page, raw);
     await send(page, "plan it");
     await expect(page.getByText("Step 3", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Todo section menu" }).click();
+    await page.getByRole("button", { name: "Todo panel menu" }).click();
     await page.getByRole("menuitem", { name: "Continue" }).click();
     await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("Continue with the next pending todo item.");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
@@ -618,20 +603,18 @@ test.describe("panel actions", () => {
     const primary = page.getByRole("button", { name: "Mark done: Step 2" });
     await expect(primary).toBeDisabled();
     await expect(primary).toHaveAttribute("title", "Send a message to switch to other first");
-    await page.getByRole("button", { name: "Todo section menu" }).click();
+    await page.getByRole("button", { name: "Todo panel menu" }).click();
     await expect(page.getByRole("menuitem", { name: "Continue" })).not.toHaveAttribute("aria-disabled", "true");
     await expect(page.getByRole("menuitem", { name: "Clear completed" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  test("the section menu lists panel actions even while the section is collapsed, and the glyph is the primary action", async ({ page, raw }) => {
+  test("the tab menu lists panel actions, and the glyph is the primary action", async ({ page, raw }) => {
     await openChat(page, raw);
     await send(page, "plan it");
     await expect(page.getByText("Step 3", { exact: true })).toBeVisible();
     // The status glyph itself is the button.
     await expect(page.getByRole("button", { name: "Mark done: Step 2" }).locator(".panel-status")).toBeVisible();
-    await toggle(page, "Todo").click();
-    await expect(toggle(page, "Todo")).toHaveAttribute("aria-expanded", "false");
-    await page.getByRole("button", { name: "Todo section menu" }).click();
+    await page.getByRole("button", { name: "Todo panel menu" }).click();
     await expect(page.getByRole("menuitem", { name: "Continue" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Clear completed" })).toBeVisible();
   });
@@ -659,7 +642,7 @@ test.describe("actions on other blocks", () => {
     await send(page, "go");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
     await side(page).click();
-    await toggle(page, "Board").click();
+    await tab(page, "Board").click();
     await expect(page.getByText("Just text")).toBeVisible();
     await page.getByRole("button", { name: "Actions for markdown" }).click();
     await page.getByRole("menuitem", { name: "Annotate" }).click();

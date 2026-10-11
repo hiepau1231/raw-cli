@@ -4,13 +4,12 @@ import { join } from "node:path";
 import { test, expect, openChat, answer } from "./fixtures.js";
 import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
 const call = (name: string, args: unknown) => ({ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "command", type: "function", function: { name, arguments: JSON.stringify(args) } }] }, "tool_calls"), openAiDone] });
-const section = (page: import("@playwright/test").Page) => page.locator('[data-panel="__commands"]');
+const section = (page: import("@playwright/test").Page) => page.locator('[data-tab-panel="__commands"]');
 const KEY = "raw.dashboard.commands.v1";
 const toggleOf = (row: import("@playwright/test").Locator) => row.locator("button.command-toggle");
 async function showCommands(page: import("@playwright/test").Page) {
   if (!await page.locator(".inspector").count()) await page.getByRole("button", { name: "Side panel", exact: true }).click();
-  const toggle = section(page).locator(".panel-toggle");
-  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
+  await page.getByRole("tab", { name: "Commands", exact: true }).click();
 }
 test.describe("Commands foreground", () => {
   test.use({ scenario: { agent: { tools: { use: ["builtin/bash"] } }, responses: [
@@ -39,11 +38,11 @@ test.describe("Commands foreground", () => {
     await expect(section(page).getByRole("button", { name: /^Running/ })).toHaveCount(0);
     await expect(completed).toHaveAttribute("aria-expanded", "false");
     await expect(rows.filter({ visible: true })).toHaveCount(0);
-    // 1. The reported reset: open Completed, collapse the section, reopen it.
+    // 1. The reported reset: open Completed, switch to another tab and back.
     await completed.click();
     await expect(rows.filter({ visible: true })).toHaveCount(3);
-    await section(page).locator(".panel-toggle").click();
-    await section(page).locator(".panel-toggle").click();
+    await page.getByRole("tab", { name: "Overview", exact: true }).click();
+    await page.getByRole("tab", { name: "Commands", exact: true }).click();
     await expect(completed).toHaveAttribute("aria-expanded", "true");
     await expect(rows.filter({ visible: true })).toHaveCount(3);
     // 2. A reload keeps it, from this browser's storage.
@@ -135,8 +134,8 @@ test.describe("Commands long command", () => {
     await showCommands(page);
     const completed = section(page).getByRole("button", { name: "Completed (1)" });
     await completed.click();
-    await section(page).locator(".panel-toggle").click();
-    await section(page).locator(".panel-toggle").click();
+    await page.getByRole("tab", { name: "Overview", exact: true }).click();
+    await page.getByRole("tab", { name: "Commands", exact: true }).click();
     await expect(completed).toHaveAttribute("aria-expanded", "true");
     const row = section(page).locator("li.command-row").first();
     await expect(row.locator("code.command-text")).toHaveText(/^: 'x+…$/);
@@ -228,11 +227,14 @@ test.describe("Commands background", () => {
     await expect.poll(() => raw.provider.requests.length).toBe(2);
     await expect(page.locator(".inspector")).toHaveCount(0);
     await page.getByRole("button", { name: "Side panel", exact: true }).click();
+    await page.getByRole("tab", { name: "Commands", exact: true }).click();
     await section(page).getByRole("button", { name: /menu/i }).click();
     await page.getByRole("menuitem", { name: /Hide/ }).click();
     await expect(section(page)).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Commands", exact: true })).toHaveCount(0);
     await page.reload();
     await page.getByRole("button", { name: "Side panel", exact: true }).click();
+    await expect(page.getByRole("tab", { name: "Commands", exact: true })).toHaveCount(0);
     await expect(section(page)).toHaveCount(0);
   });
 });

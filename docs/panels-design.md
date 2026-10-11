@@ -516,6 +516,8 @@ Actions let the user change panel state or steer the agent, without free-form ed
 
 ### 13.1 Dashboard
 
+> **Superseded layout.** The side panel is now an Overview tab plus one tab per panel, described in [side-panel-design.md](side-panel-design.md). The stack of sections, section headers, expand state and shared heights below are kept as history. Stack membership, order and insertion, the stack agent, hiding, opening, receipts, live updates, accessibility announcements, stale and error states and the HTTP API still apply, re-expressed for tabs in that document.
+
 **Side panel structure: a stack of sections**
 
 The right-hand inspector becomes the **side panel**: a vertical stack of collapsible sections, like the views in VS Code's Explorer. There are no tabs. Each section is one panel. Its header doubles as a summary card when the section is collapsed.
@@ -829,6 +831,8 @@ A `tool` action is a real tool call with `source: "user_action"`, under the same
 The side panel starts closed. The tool can hint `first_update`, and the user preference decides. Focus never moves, and narrow viewports never open automatically. Updates never expand, collapse, move or resize a section; they only change the header and set a dot. This keeps a panel from stealing attention, or moving text under the reader, on every step.
 
 ### D13. A stack of always-present sections, not tabs
+> Superseded by [side-panel-design.md](side-panel-design.md) §1: the stack became tabs with an Overview of summary cards, because shared heights froze and rows wrapped at the default width.
+
 Panels are collapsible sections stacked top to bottom, in declaration order, and the user can reorder and hide them. Collapsed headers show every panel's summary and progress at once, so the user can watch Todo and Spec together without switching. There is no tab overflow and no need to pick one panel for a header chip. Listing declared panels before they have data makes the layout stable and shows what the agent can track. The costs are vertical space and possible noise from empty cards. Capped section heights with inner scrolling, user-sized dividers, collapsed defaults, one-line empty cards and Hide section address them.
 
 ### D10. Degrade, never block

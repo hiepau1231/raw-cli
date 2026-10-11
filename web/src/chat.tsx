@@ -644,7 +644,6 @@ export function Chat({
               history: state?.history.items ?? [],
               onInsert: insertRef,
               actions: panelActions,
-              reveal: panels.reveal,
             }}
           />
         )}

@@ -1,8 +1,8 @@
 import type { PanelReceipt } from "../../../src/panels/contract.js";
-import { PanelGlyph } from "./Section.js";
+import { PanelGlyph } from "./Tabs.js";
 import type { PanelIcon } from "../../../src/panels/contract.js";
 
-/** A compact chat row for one committed or rejected panel update. Clicking it shows the section in the side panel. */
+/** A compact chat row for one committed or rejected panel update. Clicking it selects its tab in the side panel. */
 export function Receipt({ receipt, icon, onOpen, openLabel = "Show this panel in the side panel" }: {
   receipt: PanelReceipt; icon: PanelIcon; onOpen: () => void; openLabel?: string;
 }) {

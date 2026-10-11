@@ -429,6 +429,8 @@ The line is cut to 120 characters on every surface, with the full arguments avai
 
 ## 6. Part C: side panel
 
+> **Superseded.** The VS Code-style layout below shipped and was replaced by [side-panel-design.md](side-panel-design.md) (Overview and tabs, cards per kind). The data contracts it introduced stay: the host-owned `files_changed` panel and its `added`, `removed` and `diff` fields (§6.3), the Commands projection and its 132-row cap (§6.4).
+
 The reference is the VS Code Explorer / Source Control view and Cursor's agent side panel. This part amends `panels-design.md` §13.1 where noted. The panel contract and block kinds are unchanged.
 
 ### 6.1 Layout and tokens

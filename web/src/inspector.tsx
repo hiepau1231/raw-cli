@@ -5,7 +5,7 @@ import type { UsageSummary } from "../../src/llm/cache.js";
 import type { ChatState } from "./session.js";
 import type { Preferences } from "./preferences.js";
 import { CopyButton } from "./ui.js";
-import { SidePanelStack, type SidePanelProps } from "./panels/SidePanel.js";
+import { SidePanel, type SidePanelProps } from "./panels/SidePanel.js";
 
 const resume = (id: string) => `raw --resume ${id} "Your next message"`;
 function Usage({ name, value }: { name: string; value: UsageSummary }) {
@@ -192,7 +192,7 @@ export function Inspector({
   narrow: boolean;
   resizeInspector: (width: number) => void;
   keepFocus: { current: boolean };
-  stack: Omit<SidePanelProps, "details" | "sessionId">;
+  stack: Omit<SidePanelProps, "details" | "sessionId" | "context">;
 }) {
   return (
     <>
@@ -247,7 +247,7 @@ export function Inspector({
             }}
             onDoubleClick={() => resizeInspector(320)}
           />
-          <div className="section-heading">
+          <div className="section-heading side-panel-title">
             <Dialog.Title asChild>
               <h2>Side panel</h2>
             </Dialog.Title>
@@ -258,8 +258,9 @@ export function Inspector({
           <Dialog.Description className="sr-only">
             Tool panels and session details for this chat.
           </Dialog.Description>
-          <SidePanelStack
+          <SidePanel
             {...stack}
+            context={state?.metrics?.context}
             commands={state?.commands ?? []}
             commandsOmitted={state?.commandsOmitted}
             sessionCwd={state?.session.cwd}
