@@ -8,7 +8,7 @@ import type { SessionSummary } from "../src/sessions/store.js";
 import type { DashboardEvent, DashboardEventData } from "../src/dashboard/streams.js";
 import {
   DETAILS_ID, MAX_HEIGHT, MIN_HEIGHT, applyFrame, announcement, arrange, formatDuration, mergeStack, newAnnouncer, placeAt, planAnnouncements, relativeTime, setHideCompleted, stepDuration, currentOrder, emptyPrefs, firstOpenTarget, hasOpened, heightFor, isExpanded, layout, loadPrefs,
-  markOpened, markSeen, mayAnnounce, move, rejectedCode, savePrefs, setExpanded, setHeight, setHidden, setOrder, storageKey, unseen,
+  markOpened, markSeen, mayAnnounce, move, rejectedCode, savePrefs, setExpanded, setHeight, setHidden, setOrder, shareHeights, storageKey, unseen,
 } from "../web/src/panels/panel-state.js";
 
 const item = (panel: string, revision = 0, open: "never" | "first_update" = "never"): PanelStackItem => ({
@@ -59,7 +59,7 @@ test("storage round-trips and corrupt or foreign storage yields defaults field b
   const saved: string[] = [];
   let prefs = setOrder(emptyPrefs(), "a", ["x#1", "y#1"]);
   prefs = setHidden(prefs, "a", "y#1", true);
-  prefs = setHeight(prefs, "a", 300);
+  prefs = setHeight(prefs, "a", "x#1", 300);
   prefs = setExpanded(prefs, "s1", "x#1", true);
   prefs = markSeen(prefs, "s1", "x#1", 4);
   prefs = markOpened(prefs, "s1");
@@ -71,8 +71,8 @@ test("storage round-trips and corrupt or foreign storage yields defaults field b
   assert.deepEqual(loadPrefs({ getItem: () => { throw new Error("blocked"); } }), emptyPrefs());
   assert.doesNotThrow(() => savePrefs(prefs, { setItem: () => { throw new Error("full"); } }));
   assert.equal(storageKey, "raw.dashboard.panels.v1");
-  const mixed = loadPrefs(store(JSON.stringify({ version: 1, order: "nope", hidden: { a: ["h", 3, "h", ""] }, heights: { a: 9999, b: "x", c: 1 }, expanded: { s: ["p", DETAILS_ID] }, seen: { s: { p: 3, q: -1, r: 1.5 } }, opened: 4 }))) ;
-  assert.deepEqual(mixed, { version: 1, order: {}, hidden: { a: ["h"] }, heights: { a: MAX_HEIGHT, c: MIN_HEIGHT }, expanded: { s: ["p", DETAILS_ID] }, seen: { s: { p: 3 } }, opened: [], hideCompleted: false });
+  const mixed = loadPrefs(store(JSON.stringify({ version: 1, order: "nope", hidden: { a: ["h", 3, "h", ""] }, heights: { a: { p: 9999, q: "x", r: 1 }, b: 700, c: [3] }, expanded: { s: ["p", DETAILS_ID] }, seen: { s: { p: 3, q: -1, r: 1.5 } }, opened: 4 }))) ;
+  assert.deepEqual(mixed, { version: 1, order: {}, hidden: { a: ["h"] }, heights: { a: { p: MAX_HEIGHT, r: MIN_HEIGHT } }, expanded: { s: ["p", DETAILS_ID] }, seen: { s: { p: 3 } }, opened: [], hideCompleted: false });
   assert.equal(loadPrefs(store(JSON.stringify({ version: 1, hideCompleted: true }))).hideCompleted, true);
   assert.equal(loadPrefs(store(JSON.stringify({ version: 1, hideCompleted: "yes" }))).hideCompleted, false);
   assert.equal(setHideCompleted(emptyPrefs(), true).hideCompleted, true);
@@ -117,11 +117,13 @@ test("layout splits hidden from visible in the user's order per agent", () => {
   assert.deepEqual(layout(items, setHidden(prefs, "one", "a#1", false), "one").hidden, []);
 });
 
-test("height is clamped per agent and expansion, seen and first-open are per session", () => {
-  let prefs = setHeight(emptyPrefs(), "a", 5);
-  assert.equal(heightFor(prefs, "a"), MIN_HEIGHT);
-  assert.equal(heightFor(setHeight(prefs, "a", 99999), "a"), MAX_HEIGHT);
-  assert.equal(heightFor(prefs, "b"), undefined);
+test("dragged heights are clamped per agent and panel, and expansion, seen and first-open are per session", () => {
+  let prefs = setHeight(emptyPrefs(), "a", "x#1", 5);
+  assert.equal(heightFor(prefs, "a", "x#1"), MIN_HEIGHT);
+  assert.equal(heightFor(setHeight(prefs, "a", "x#1", 99999), "a", "x#1"), MAX_HEIGHT);
+  assert.equal(heightFor(setHeight(prefs, "a", "y#1", 400), "a", "x#1"), MIN_HEIGHT);
+  assert.equal(heightFor(prefs, "a", "y#1"), undefined);
+  assert.equal(heightFor(prefs, "b", "x#1"), undefined);
   prefs = setExpanded(prefs, "s1", "p", true);
   assert.ok(isExpanded(prefs, "s1", "p")); assert.ok(!isExpanded(prefs, "s2", "p"));
   assert.ok(!isExpanded(setExpanded(prefs, "s1", "p", false), "s1", "p"));
@@ -306,4 +308,22 @@ test("command snapshots replace the host projection without mutating concurrent 
     assert.equal(reset.commands?.[0]?.state, "exited");
     assert.equal(reset.commands?.length, 1);
   } finally { await f.close(); }
+});
+
+test("expanded sections share the height: equal shares, short sections give the rest away, dragged sizes are kept", () => {
+  assert.deepEqual(shareHeights(600, [{ panel: "a" }, { panel: "b" }]), { a: 300, b: 300 });
+  assert.deepEqual(shareHeights(601, [{ panel: "a" }, { panel: "b" }, { panel: "c" }]), { a: 200, b: 200, c: 201 });
+  // A short section takes its content height; the other gets the rest, whatever the order.
+  assert.deepEqual(shareHeights(600, [{ panel: "long" }, { panel: "short", natural: 150 }]), { long: 450, short: 150 });
+  assert.deepEqual(shareHeights(900, [{ panel: "a", natural: 160 }, { panel: "b", natural: 250 }, { panel: "c" }]), { a: 160, b: 250, c: 490 });
+  // Two long sections still split evenly; content below the minimum still gets the minimum.
+  assert.deepEqual(shareHeights(600, [{ panel: "a", natural: 5000 }, { panel: "b", natural: 4000 }]), { a: 300, b: 300 });
+  assert.deepEqual(shareHeights(600, [{ panel: "a", natural: 30 }, { panel: "b" }]), { a: MIN_HEIGHT, b: 600 - MIN_HEIGHT });
+  // A dragged section keeps its size and the others share what is left.
+  assert.deepEqual(shareHeights(600, [{ panel: "a", dragged: 400 }, { panel: "b" }]), { a: 400, b: 200 });
+  assert.deepEqual(shareHeights(600, [{ panel: "a", dragged: 5 }, { panel: "b", dragged: 9999 }]), { a: MIN_HEIGHT, b: MAX_HEIGHT });
+  // Out of space: every section keeps the minimum and the stack scrolls.
+  assert.deepEqual(shareHeights(100, [{ panel: "a" }, { panel: "b" }]), { a: MIN_HEIGHT, b: MIN_HEIGHT });
+  assert.deepEqual(shareHeights(600, [{ panel: "a", dragged: 700 }, { panel: "b" }]), { a: 700, b: MIN_HEIGHT });
+  assert.deepEqual(shareHeights(-20, []), {});
 });

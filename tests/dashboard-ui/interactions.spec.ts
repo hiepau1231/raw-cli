@@ -12,12 +12,15 @@ for (const placement of ["chat","sidebar"]) test(`${placement} form survives rel
     input_schema:{type:"object",properties:{},additionalProperties:false},panels:[{id:"input",title:"Input",placement,actions:[
       {id:"submit",label:"Send answer",kind:"response",scope:"block",response:"submit",blocks:["form"]},
       {id:"cancel",label:"Cancel question",kind:"response",scope:"block",response:"cancel",blocks:["form"]}]}]}));
-  writeFileSync(join(folder,"index.mjs"),`export async function handler(args,context){const result=await context.interactions.request({panel:'input',document:{blocks:[
+  writeFileSync(join(folder,"index.mjs"),`export async function handler(args,context){const result=await context.interactions.request({panel:'input',document:{subtitle:'Answer to continue the task.',blocks:[
     {id:'form',kind:'form',fields:[{id:'text',label:'Your answer',kind:'text',required:true},{id:'choice',label:'Choose',kind:'single_select',required:true,options:[{id:'yes',label:'Yes'},{id:'no',label:'No'}]}]}]}});return{content:[{type:'json',value:result}]};}`);
   await openChat(page,raw);
   await page.getByRole("textbox",{name:"Message"}).fill("ask");await page.getByRole("button",{name:"Send",exact:true}).click();
   if(placement==="sidebar") await page.getByRole("button",{name:"Open question",exact:true}).click();
   await expect(page.getByRole("textbox",{name:"Your answer",exact:true})).toBeVisible();
+  // The question's explanation: in the section header's tooltip in the side panel, in the body inline.
+  if(placement==="sidebar") await expect(page.locator(".panel-toggle",{has:page.locator(".panel-title",{hasText:/^Input$/})})).toHaveAttribute("title",/Answer to continue the task\./);
+  else await expect(page.locator(".inline-tool-view").first()).toContainText("Answer to continue the task.");
   await page.reload();
   if(placement==="sidebar") await page.getByRole("button",{name:"Open question",exact:true}).click();
   const form=page.locator('[data-kind="form"]');

@@ -1,31 +1,65 @@
 import { chromium } from "@playwright/test";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { dashboardFixture } from "../fixtures/dashboard.js";
 import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
 
-// Run after npm run build. A real todo tool call against a mock provider, in disposable local state.
+// Run after npm run build. Real todo, file and bash calls against a mock provider, in disposable local state. Writes
+// docs/dashboard/chat-dark-side-panel.png, and with RAW_CAPTURE_DIR set also the side panel in several states, for
+// comparing by eye in review (docs/tool-ux-design.md §6.6); they are not pixel assertions.
 mkdirSync("docs/dashboard", { recursive: true });
+const extra = process.env.RAW_CAPTURE_DIR;
+if (extra) mkdirSync(extra, { recursive: true });
+const call = (id: string, name: string, args: unknown) => ({ frames: [openAiFrame({ tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }] }, "tool_calls"), openAiDone] });
+const answer = (text: string) => ({ frames: [openAiFrame({ content: text }, "stop"), openAiDone] });
 const todos = ["Read the failing test", "Fix the parser", "Run the suite", "Update the docs"].map((content, index) => ({ content, status: index === 0 ? "done" : index === 1 ? "in_progress" : "pending" }));
 const raw = await dashboardFixture({
-  agent: { tools: { use: ["builtin/todo"] } },
+  agent: { tools: { use: ["builtin/todo", "builtin/write_file", "builtin/edit_file", "builtin/bash"] } },
   responses: [
-    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "todo1", type: "function", function: { name: "todo", arguments: JSON.stringify({ title: "Fix the parser", todos }) } }] }, "tool_calls"), openAiDone] },
-    { frames: [openAiFrame({ content: "I made a plan and started on it." }, "stop"), openAiDone] },
+    call("todo1", "todo", { title: "Fix the parser", todos }), answer("I made a plan and started on it."),
+    call("write1", "write_file", { path: "src/parser.ts", content: "export const a = 1;\nexport const b = 2;\n" }), answer("Added the parser."),
+    call("edit1", "edit_file", { path: "README.md", old_string: "old", new_string: "new\nwith a second line" }), answer("Updated the README."),
+    call("bash1", "bash", { command: "printf 'all 42 tests passed\\n'", description: "Run the tests" }), answer("Tests passed."),
+    call("bash2", "bash", { command: "printf 'error: missing semicolon\\n' >&2; exit 2", description: "Run the linter" }), answer("Lint failed."),
   ],
 });
+writeFileSync(join(raw.root, "README.md"), "# Raw\nold\n");
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.emulateMedia({ colorScheme: "dark" });
   await page.goto(raw.server.launchUrl);
   await page.getByRole("button", { name: "New chat", exact: true }).first().click();
-  await page.getByRole("textbox", { name: "Message" }).fill("Fix the parser and tell me when the suite passes");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await page.getByText("Work", { exact: true }).click();
+  const send = async (text: string, count: number) => {
+    await page.getByRole("textbox", { name: "Message" }).fill(text);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page.getByTestId("assistant-message").nth(count - 1).waitFor({ timeout: 20000 });
+  };
+  await send("Fix the parser and tell me when the suite passes", 1);
+  await page.getByText("Work", { exact: true }).first().click();
   await page.locator(".panel-receipt").first().waitFor();
   await page.getByText("Update the docs", { exact: true }).waitFor();
   await page.screenshot({ path: "docs/dashboard/chat-dark-side-panel.png", animations: "disabled" });
   console.log("wrote docs/dashboard/chat-dark-side-panel.png");
+  if (extra) {
+    for (const [index, text] of ["Write the parser", "Update the README", "Run the tests", "Run the linter"].entries()) await send(text, index + 2);
+    const shot = async (name: string) => {
+      await page.waitForTimeout(200);
+      await page.locator(".inspector").screenshot({ path: join(extra, name), animations: "disabled" });
+      console.log(`wrote ${join(extra, name)}`);
+    };
+    const expand = async (title: string, open: boolean) => {
+      const toggle = page.locator(".panel-toggle", { has: page.locator(".panel-title", { hasText: new RegExp(`^${title}$`) }) });
+      if ((await toggle.getAttribute("aria-expanded")) !== String(open)) await toggle.click();
+    };
+    await shot("01-todo-expanded.png");
+    for (const title of ["Todo", "Files changed", "Commands", "Details"]) await expand(title, true);
+    await shot("02-all-expanded.png");
+    for (const title of ["Todo", "Details"]) await expand(title, false);
+    await shot("03-files-and-commands.png");
+    await page.emulateMedia({ colorScheme: "light" });
+    await shot("04-files-and-commands-light.png");
+  }
 } finally {
   await browser.close();
   await raw.close();

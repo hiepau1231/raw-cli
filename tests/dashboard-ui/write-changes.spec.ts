@@ -27,7 +27,9 @@ test.describe("Files changed accumulated successes", () => {
     await send(page, "patch files", 1);
     await show(page);
     await expect(section(page).locator(".panel-files li")).toHaveCount(2);
-    await expect(section(page)).toContainText("Successful tool writes in this session; not Git status or Bash edits.");
+    // The explanation is in the header tooltip, not repeated in the body (docs/tool-ux-design.md §6.1).
+    await expect(section(page).locator(".panel-toggle")).toHaveAttribute("title", /Successful tool writes in this session; not Git status or Bash edits\./);
+    await expect(section(page).locator(".panel-body")).not.toContainText("Successful tool writes");
     await expect(section(page).locator(".panel-files")).toContainText("alpha.txt");
     await expect(section(page).locator(".panel-files")).toContainText("beta.txt");
     expect(readFileSync(join(raw.root, "alpha.txt"), "utf8")).toBe("hello\n");

@@ -544,7 +544,7 @@ The right-hand inspector becomes the **side panel**: a vertical stack of collaps
 - **Hide.** The `⋯` menu has **Hide section**, stored per agent in the same browser key.
   - A hidden section stays hidden when its panel updates. Its chat receipts still open it on click, which unhides it.
   - A final row, "N hidden sections", lists hidden sections so they can be shown again.
-- **Section header (the card).** It has a **fixed height** of one line, whatever its content. The summary is truncated with an ellipsis. The progress bar is drawn as a 2 px line along the header's bottom edge, so it takes no extra height when it first appears. The header shows, in order:
+- **Section header (the card).** It has a **fixed height** of one 28 px line, whatever its content (amended by [tool-ux-design.md](tool-ux-design.md) §6.1). Sections are separated by 1 px dividers, not bordered cards. The summary takes all the width left over and is truncated with an ellipsis; the header's tooltip carries the full title and summary and the document's subtitle, which the body does not repeat. The body shows the document title only when it differs from the section title. The `⋯` menu shows on hover or keyboard focus. The progress bar is drawn as a 2 px line along the header's bottom edge, so it takes no extra height when it first appears. The header shows, in order:
   - the declaration icon and the title;
   - the summary and a thin progress bar when progress exists;
   - an unseen dot when the revision is newer than the last one viewed in this browser;
@@ -554,11 +554,12 @@ The right-hand inspector becomes the **side panel**: a vertical stack of collaps
   The header is a button with `aria-expanded` (the WAI-ARIA accordion pattern), toggled by Enter or Space.
 - **Expand and collapse.** Every section starts collapsed. The user's expand state is stored per session in the browser.
   - **Updates never expand, collapse, move or resize a section.** New content appears in place, or as a changed header while collapsed. Content that someone is reading therefore never jumps.
-- **Size.** An expanded section has a **fixed outer height**, never derived from its content:
-  - by default, 50% of the side panel's height when it is expanded;
-  - after the user drags the divider below it, the height the user chose, stored per agent in the browser.
+- **Size** (amended by [tool-ux-design.md](tool-ux-design.md) §6.1). Expanded sections **share** the side panel's height, like VS Code split views:
+  - each expanded section gets an equal share of the height left by the headers and rows of the collapsed sections;
+  - a section whose content is shorter than its share takes only its content height (at least 120 px) and gives the rest to the others;
+  - after the user drags the divider below a section (or presses `↑`/`↓` on it), that section keeps the height the user chose, stored per agent and per section in the browser, and the other expanded sections share what is left.
 
-  New content never changes this height, and it scrolls inside the section. Only the user changes the height, by dragging, collapsing or resizing the window. A section whose content is shorter than its height shows empty space. The whole side panel scrolls only when the stacked headers and sections exceed its height.
+  The content heights are measured only when the layout changes: expanding, collapsing, dragging, resizing the window, or a section joining or leaving the stack. New content never changes a height; it scrolls inside the section. A section whose content later grows keeps its height until the next layout change. When the minimum heights do not fit, the whole side panel scrolls.
 - **Closed panels.** A tool's `close` (§9) keeps the section in the stack, collapsed, with "Closed" in the header and its document still readable. A later `replace` reopens it.
 - **Details.** A section like the others, collapsed by default.
 

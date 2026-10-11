@@ -140,24 +140,6 @@ test.describe("todo panel", () => {
     await expect(toggle(page, "Todo")).toBeVisible();
   });
 
-  test("the divider resizes from the keyboard, is remembered per agent and applies to every section", async ({ page, raw }) => {
-    await openChat(page, raw);
-    await side(page).click();
-    await toggle(page, "Todo").click();
-    const body = section(page, "builtin/todo#todo");
-    const start = (await body.boundingBox())!.height;
-    const separator = page.getByRole("separator", { name: "Section height" }).first();
-    await separator.focus();
-    await page.keyboard.press("ArrowDown");
-    await page.keyboard.press("ArrowDown");
-    await expect.poll(async () => (await body.boundingBox())!.height).toBe(start + 48);
-    await page.reload();
-    await side(page).click();
-    await expect.poll(async () => (await section(page, "builtin/todo#todo").boundingBox())!.height).toBe(start + 48);
-    const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}"), KEY);
-    expect(stored.heights.raw).toBe(start + 48);
-  });
-
   test("the side panel passes axe in light and dark", async ({ page, raw }) => {
     await openChat(page, raw);
     await send(page, "plan it");
@@ -169,6 +151,196 @@ test.describe("todo panel", () => {
       expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
       await toggle(page, "Details").click();
     }
+  });
+});
+
+test.describe("section layout", () => {
+  // `short` publishes two lines on its first call and eighty on later ones; `long` always publishes eighty lines.
+  const lines = (count: number) => Array.from({ length: count }, (_, index) => `Line ${index + 1}`).join("\\n\\n");
+  const publish = (text: string) => `await context.panels.update("p", { op: "replace", document: { blocks: [{ id: "m", kind: "markdown", text: ${text} }] } });`;
+  const seed = (raw: { env: NodeJS.ProcessEnv }) => {
+    const counter = join(raw.env.XDG_CONFIG_HOME!, "short-calls");
+    plugin(raw, "short", [decl("p", "Short")], `const fs = await import("node:fs"); const calls = Number(fs.existsSync(${JSON.stringify(counter)}) ? fs.readFileSync(${JSON.stringify(counter)}, "utf8") : 0) + 1;
+      fs.writeFileSync(${JSON.stringify(counter)}, String(calls)); ${publish(`calls === 1 ? "${lines(2)}" : "${lines(80)}"`)}`);
+    plugin(raw, "long", [decl("p", "Long")], publish(`"${lines(80)}"`));
+    plugin(raw, "longer", [decl("p", "Longer")], publish(`"${lines(80)}"`));
+  };
+  test.use({
+    scenario: {
+      agent: { tools: { use: ["local/short", "local/long", "local/longer"] } },
+      responses: [
+        { frames: [openAiFrame({ tool_calls: ["short", "long", "longer"].map((name, index) => ({ index, id: name, type: "function", function: { name, arguments: "{}" } })) }, "tool_calls"), openAiDone] },
+        answer, call("again", "short", {}), answer,
+      ],
+    },
+  });
+  const height = async (page: Page, panel: string) => (await section(page, panel).boundingBox())!.height;
+  const filled = (page: Page) => stack(page).evaluate((element) => {
+    const rows = [...element.querySelectorAll<HTMLElement>(":scope > [data-panel], :scope > .panel-hidden")];
+    return { used: rows.reduce((sum, row) => sum + row.getBoundingClientRect().height, 0), box: element.clientHeight };
+  });
+  async function expand(page: Page, ...titles: string[]) {
+    for (const title of titles) if ((await toggle(page, title).getAttribute("aria-expanded")) !== "true") await toggle(page, title).click();
+  }
+
+  test("expanded sections share the height equally, and a short one gives its spare height to the other", async ({ page, raw }) => {
+    seed(raw);
+    await openChat(page, raw);
+    await send(page, "publish");
+    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
+    await side(page).click();
+    await expand(page, "Long", "Longer");
+    await expect.poll(async () => Math.abs((await height(page, "local/long#p")) - (await height(page, "local/longer#p")))).toBeLessThanOrEqual(1);
+    let fill = await filled(page);
+    expect(Math.abs(fill.used - fill.box)).toBeLessThanOrEqual(2);
+    // A short section takes its content height; the long one takes the rest instead of half.
+    await toggle(page, "Longer").click();
+    await expand(page, "Short");
+    await expect(section(page, "local/short#p").getByText("Line 2", { exact: true })).toBeVisible();
+    const short = await height(page, "local/short#p");
+    const long = await height(page, "local/long#p");
+    fill = await filled(page);
+    expect(short).toBeLessThan(fill.box / 3);
+    expect(long).toBeGreaterThan(fill.box / 2);
+    expect(Math.abs(fill.used - fill.box)).toBeLessThanOrEqual(2);
+    expect(await section(page, "local/short#p").locator(".panel-body").evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(true);
+    expect(await section(page, "local/long#p").locator(".panel-body").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  });
+
+  test("an update to a section changes no section's height", async ({ page, raw }) => {
+    seed(raw);
+    await openChat(page, raw);
+    await send(page, "publish");
+    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
+    await side(page).click();
+    await expand(page, "Short", "Long");
+    await expect(section(page, "local/short#p").getByText("Line 2", { exact: true })).toBeVisible();
+    const boxes = () => stack(page).locator("[data-panel]").evaluateAll((elements) => elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return [(element as HTMLElement).dataset.panel, Math.round(rect.top), Math.round(rect.height)];
+    }));
+    const before = await boxes();
+    await send(page, "grow the short one");
+    await expect(page.getByTestId("assistant-message")).toHaveCount(2);
+    await expect(section(page, "local/short#p").getByText("Line 80", { exact: true })).toBeAttached();
+    expect(await boxes()).toEqual(before);
+    expect(await section(page, "local/short#p").locator(".panel-body").evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  });
+
+  test("a dragged size is kept for that section only and survives a reload", async ({ page, raw }) => {
+    seed(raw);
+    await openChat(page, raw);
+    await send(page, "publish");
+    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
+    await side(page).click();
+    await expand(page, "Long", "Longer");
+    await expect.poll(async () => Math.abs((await height(page, "local/long#p")) - (await height(page, "local/longer#p")))).toBeLessThanOrEqual(1);
+    const start = await height(page, "local/long#p");
+    const other = await height(page, "local/longer#p");
+    await section(page, "local/long#p").locator("xpath=following-sibling::*[1]").focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => height(page, "local/long#p")).toBe(start + 48);
+    // The other section shares what is left.
+    await expect.poll(() => height(page, "local/longer#p")).toBe(other - 48);
+    await page.reload();
+    await side(page).click();
+    await expect.poll(() => height(page, "local/long#p")).toBe(start + 48);
+    await expect.poll(() => height(page, "local/longer#p")).toBe(other - 48);
+    const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}"), KEY);
+    expect(stored.heights.raw).toEqual({ "local/long#p": start + 48 });
+  });
+
+  test("a pointer drag resizes from where it started, even when the section above gives up height", async ({ page, raw }) => {
+    seed(raw);
+    await openChat(page, raw);
+    await send(page, "publish");
+    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
+    await side(page).click();
+    await expand(page, "Long", "Longer");
+    await expect.poll(async () => Math.abs((await height(page, "local/long#p")) - (await height(page, "local/longer#p")))).toBeLessThanOrEqual(1);
+    const start = await height(page, "local/longer#p");
+    const divider = (await section(page, "local/longer#p").locator("xpath=following-sibling::*[1]").boundingBox())!;
+    const x = divider.x + divider.width / 2;
+    const y = divider.y + divider.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y + 40, { steps: 4 });
+    // Moving sideways at the same height must not keep growing the section while Long above it shrinks.
+    for (let step = 1; step <= 4; step++) await page.mouse.move(x + step * 10, y + 40);
+    await page.mouse.up();
+    await expect.poll(() => height(page, "local/longer#p")).toBe(start + 40);
+  });
+});
+
+test.describe("section chrome", () => {
+  test.use({ scenario: { agent: { tools: { use: ["local/same", "local/other"] } }, responses: [
+    { frames: [openAiFrame({ tool_calls: ["same", "other"].map((name, index) => ({ index, id: name, type: "function", function: { name, arguments: "{}" } })) }, "tool_calls"), openAiDone] }, answer] } });
+  const seed = (raw: { env: NodeJS.ProcessEnv }) => {
+    plugin(raw, "same", [decl("p", "Notes")], `await context.panels.update("p", { op: "replace", document: { title: "Notes", subtitle: "Explains what this panel tracks.",
+      summary: "${"a long summary that keeps going ".repeat(3)}", blocks: [{ id: "c", kind: "checklist", title: "Notes", items: [{ id: "a", label: "First row" }, { id: "b", label: "Second row", ref: { path: "src/a.ts" } }] },
+      { id: "t", kind: "table", title: "Checks", columns: [{ id: "name", label: "Name" }], rows: [{ id: "r1", cells: { name: "lint" } }, { id: "r2", cells: { name: "test" }, ref: { path: "src/b.ts" } }] }] } });`);
+    plugin(raw, "other", [decl("p", "Other")], 'await context.panels.update("p", { op: "replace", document: { title: "Release plan", blocks: [{ id: "m", kind: "markdown", text: "body\\n\\n```sh\\nnpm test\\n```" }] } });');
+  };
+
+  test("the body repeats neither the section title nor its explanation, which moves to the header tooltip", async ({ page, raw }) => {
+    seed(raw);
+    await openChat(page, raw);
+    await send(page, "publish");
+    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
+    await side(page).click();
+    await toggle(page, "Notes").click();
+    await toggle(page, "Other").click();
+    const notes = section(page, "local/same#p").locator(".panel-body");
+    await expect(notes.getByText("First row")).toBeVisible();
+    for (const title of await stack(page).locator(".panel-title").allTextContents())
+      await expect(stack(page).locator(".panel-body h4", { hasText: new RegExp(`^${title}$`, "i") })).toHaveCount(0);
+    await expect(notes).not.toContainText("Explains what this panel tracks.");
+    await expect(notes).not.toContainText("a long summary");
+    await expect(toggle(page, "Notes")).toHaveAttribute("title", /Explains what this panel tracks\./);
+    // A document or block title that differs from the section title still shows.
+    await expect(section(page, "local/other#p").locator(".panel-body h4")).toHaveText("Release plan");
+    await expect(notes.locator("h4")).toHaveText(["Checks"]);
+    // Content is not a nested card: a code block inside a section has no outer border.
+    const code = section(page, "local/other#p").locator(".code-block");
+    await expect(code).toContainText("npm test");
+    await expect(code).toHaveCSS("border-top-width", "0px");
+    await expect(code).toHaveCSS("border-radius", "0px");
+  });
+
+  test("headers are 28 px with the summary filling the width, rows are 24 px, and the menu shows on hover or focus", async ({ page, raw }) => {
+    seed(raw);
+    await openChat(page, raw);
+    await send(page, "publish");
+    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
+    await side(page).click();
+    await toggle(page, "Notes").click();
+    const header = section(page, "local/same#p").locator(".panel-header");
+    expect((await header.boundingBox())!.height).toBe(28);
+    const button = (await toggle(page, "Notes").boundingBox())!;
+    const summary = (await header.locator(".panel-header-summary").boundingBox())!;
+    const title = (await header.locator(".panel-title").boundingBox())!;
+    // The summary starts right after the title and runs to the end of the header button (no width cap).
+    expect(summary.x).toBeLessThan(title.x + title.width + 12);
+    expect(button.x + button.width - (summary.x + summary.width)).toBeLessThanOrEqual(12);
+    // Checklist rows (one with a file reference) and table rows share the row geometry.
+    const rows = section(page, "local/same#p").locator(".panel-checklist li, .panel-table tbody tr");
+    await expect(rows).toHaveCount(4);
+    for (const row of await rows.all()) {
+      expect((await row.boundingBox())!.height).toBe(24);
+      expect(await row.evaluate((element) => getComputedStyle(element).fontSize)).toBe("13px");
+    }
+    await expect(section(page, "local/same#p").locator(".panel-ref").first()).toHaveCSS("font-size", "13px");
+    const menu = header.getByRole("button", { name: "Notes section menu" });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.mouse.move(0, 0);
+    await expect(menu).toHaveCSS("opacity", "0");
+    await header.hover();
+    await expect(menu).toHaveCSS("opacity", "1");
+    await page.mouse.move(0, 0);
+    await expect(menu).toHaveCSS("opacity", "0");
+    await menu.focus();
+    await expect(menu).toHaveCSS("opacity", "1");
   });
 });
 
@@ -336,9 +508,9 @@ test.describe("unseen updates", () => {
   test("an update to an expanded section that is scrolled out of view keeps its unseen dot, also after reopening the panel, until it is scrolled into view", async ({ page, raw }) => {
     plugin(raw, "one", [decl("p", "One")]);
     plugin(raw, "two", [decl("p", "Two")], 'await context.panels.update("p", { op: "replace", document: { title: "Second", blocks: [{ id: "m", kind: "markdown", text: "hello" }] } });');
-    // Both sections are expanded at 700 px each, so the second starts below the fold of the stack.
+    // Both sections are dragged to 700 px each, so the second starts below the fold of the stack.
     await page.addInitScript(() => {
-      if (!localStorage.getItem("raw.dashboard.panels.v1")) localStorage.setItem("raw.dashboard.panels.v1", JSON.stringify({ version: 1, heights: { raw: 700 }, opened: ["x"] }));
+      if (!localStorage.getItem("raw.dashboard.panels.v1")) localStorage.setItem("raw.dashboard.panels.v1", JSON.stringify({ version: 1, heights: { raw: { "local/one#p": 700, "local/two#p": 700 } }, opened: ["x"] }));
     });
     await openChat(page, raw);
     const sessionId = new URL(page.url()).pathname.split("/").pop()!;
@@ -380,6 +552,22 @@ test.describe("panel actions", () => {
     await row(page, "Step 2").getByRole("button", { name: "Actions for Step 2" }).click();
     await expect(page.getByRole("menuitem", { name: "Reopen" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Mark done" })).toHaveCount(0);
+  });
+
+  test("rows with actions stay 24 px and show their menu button on hover or focus", async ({ page, raw }) => {
+    await openChat(page, raw);
+    await send(page, "plan it");
+    await expect(page.getByText("Step 3", { exact: true })).toBeVisible();
+    for (const label of ["Step 1", "Step 2", "Step 3"]) expect((await row(page, label).boundingBox())!.height).toBe(24);
+    const button = row(page, "Step 2").getByRole("button", { name: "Actions for Step 2" });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.mouse.move(0, 0);
+    await expect(button).toHaveCSS("opacity", "0");
+    await row(page, "Step 2").hover();
+    await expect(button).toHaveCSS("opacity", "1");
+    await page.mouse.move(0, 0);
+    await button.focus();
+    await expect(button).toHaveCSS("opacity", "1");
   });
 
   test("a prompt action fills the message box without sending", async ({ page, raw }) => {
@@ -448,7 +636,19 @@ test.describe("actions on other blocks", () => {
     await page.getByRole("button", { name: "Actions for markdown" }).click();
     await page.getByRole("menuitem", { name: "Annotate" }).click();
     await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("About notes");
-    await page.getByRole("button", { name: "Actions for Alpha" }).click();
+    // A table row with actions keeps the 24 px row, and its menu button shows on hover or focus.
+    const tableRow = page.locator(".panel-table tbody tr", { hasText: "Alpha" });
+    const rowMenu = page.getByRole("button", { name: "Actions for Alpha" });
+    expect((await tableRow.boundingBox())!.height).toBe(24);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.mouse.move(0, 0);
+    await expect(rowMenu).toHaveCSS("opacity", "0");
+    await tableRow.hover();
+    await expect(rowMenu).toHaveCSS("opacity", "1");
+    await page.mouse.move(0, 0);
+    await rowMenu.focus();
+    await expect(rowMenu).toHaveCSS("opacity", "1");
+    await rowMenu.click();
     await page.getByRole("menuitem", { name: "Open row" }).click();
     await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("Row r1 in rows");
   });

@@ -39,6 +39,12 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  /* Side panel type scale and row geometry (docs/tool-ux-design.md §6.1); spacing uses --space-1..4. */
+  --panel-font-sm: 12px;
+  --panel-font-md: 13px;
+  --panel-font-lg: 14px;
+  --panel-header-height: 28px;
+  --panel-row-height: 24px;
   --chat-size: 16px;
   --code-size: 14px;
   --context-width: 260px;
@@ -3484,15 +3490,14 @@ code.tool-summary {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  margin-top: 10px;
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border);
 }
+/* Sections are not cards: one 1 px divider below each header, like VS Code views. */
 .panel-section {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--canvas);
-  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
   overflow: hidden;
 }
 .panel-header {
@@ -3500,24 +3505,26 @@ code.tool-summary {
   display: flex;
   align-items: center;
   flex: none;
-  height: 40px;
-  min-height: 40px;
+  height: var(--panel-header-height);
+  min-height: var(--panel-header-height);
 }
 .panel-header h3 {
   flex: 1;
   min-width: 0;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--panel-font-md);
 }
 .panel-toggle {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 7px;
+  gap: var(--space-2);
   width: 100%;
-  height: 40px;
-  padding: 0 8px;
+  height: var(--panel-header-height);
+  min-height: 0;
+  padding: 0 var(--space-2);
   border: 0;
+  border-radius: 0;
   background: transparent;
   text-align: left;
   font: inherit;
@@ -3537,31 +3544,33 @@ code.tool-summary {
   transform: rotate(90deg);
 }
 .panel-title {
-  flex: none;
-  max-width: 45%;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   font-weight: 600;
 }
+/* The summary takes all the width left over. */
 .panel-header-summary {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--muted);
   font-weight: 400;
-  font-size: 12px;
+  font-size: var(--panel-font-sm);
 }
 .muted-section .panel-title {
   color: var(--muted);
 }
 .panel-status-text {
   flex: none;
-  font-size: 11px;
+  font-size: var(--panel-font-sm);
   color: var(--muted);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 0 6px;
+  padding: 0 var(--space-1);
+  line-height: 16px;
 }
 .panel-unseen {
   flex: none;
@@ -3570,9 +3579,24 @@ code.tool-summary {
   border-radius: 50%;
   background: var(--accent);
 }
+/* The section menu shows on hover or keyboard focus, and while it is open. */
 .panel-menu {
   flex: none;
-  margin-right: 4px;
+  min-width: var(--panel-row-height);
+  min-height: var(--panel-row-height);
+  padding: var(--space-1);
+  margin-right: var(--space-1);
+  opacity: 0;
+}
+.panel-header:hover .panel-menu,
+.panel-header:focus-within .panel-menu,
+.panel-menu[data-state="open"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .panel-menu {
+    opacity: 1;
+  }
 }
 .panel-progress-line {
   position: absolute;
@@ -3586,39 +3610,50 @@ code.tool-summary {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 8px 12px 12px;
-  border-top: 1px solid var(--border);
-  font-size: 13px;
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  font-size: var(--panel-font-md);
 }
+/* Content inside a section is not a nested card: code blocks lose their outer border and corners. */
+.panel-body .code-block {
+  border: 0;
+  border-radius: 0;
+  margin: var(--space-2) 0;
+}
+.panel-body .code-block .code-label {
+  border-bottom: 0;
+}
+/* The resize handle overlaps the divider and takes no height of its own. */
 .panel-divider {
-  height: 8px;
-  margin: -3px 0 3px;
+  position: relative;
+  z-index: 1;
+  height: 6px;
+  margin: -3px 0;
   cursor: row-resize;
-  border-radius: 4px;
 }
 .panel-divider:hover,
 .panel-divider:focus-visible {
   background: var(--accent-soft);
 }
 .panel-block h4 {
-  margin: 10px 0 4px;
-  font-size: 12px;
+  margin: var(--space-2) 0 var(--space-1);
+  font-size: var(--panel-font-sm);
   color: var(--muted);
 }
 .panel-summary {
-  margin: 4px 0;
+  margin: var(--space-1) 0;
 }
+/* Notes line up with the row label: disclosure (16 px) plus the row gap. */
 .panel-note {
-  margin: 2px 0 4px 22px;
+  margin: 0 0 var(--space-1) calc(16px + var(--space-2));
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--panel-font-sm);
 }
 .panel-banner {
-  margin: 0 0 8px;
-  padding: 6px 8px;
+  margin: var(--space-1) 0 var(--space-2);
+  padding: var(--space-1) var(--space-2);
   border-radius: 6px;
   background: var(--accent-soft);
-  font-size: 12px;
+  font-size: var(--panel-font-sm);
 }
 .panel-banner.error {
   color: var(--error);
@@ -3632,7 +3667,7 @@ code.tool-summary {
 .panel-row {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 .panel-checklist,
@@ -3645,14 +3680,18 @@ code.tool-summary {
 }
 .panel-checklist ul {
   list-style: none;
-  padding-left: 18px;
-  margin: 2px 0;
+  padding-left: var(--space-4);
+  margin: 0;
 }
+/* Rows: 24 px high, 13 px text; secondary text is 12 px and muted. */
 .panel-checklist li,
 .panel-steps li,
 .panel-timeline li,
 .panel-files li {
-  margin: 4px 0;
+  margin: 0;
+  padding: 2px 0;
+  min-height: var(--panel-row-height);
+  line-height: 20px;
 }
 .panel-done {
   text-decoration: line-through;
@@ -3686,20 +3725,24 @@ code.tool-summary {
   }
 }
 .panel-tag {
-  padding: 0 6px;
+  padding: 0 var(--space-1);
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--panel-font-sm);
+  line-height: 18px;
 }
 .panel-ref {
+  min-height: 0;
   padding: 0;
   border: 0;
+  border-radius: 0;
   background: transparent;
   color: var(--accent-text);
   font: inherit;
   font-family: ui-monospace, monospace;
-  font-size: 12px;
+  font-size: var(--panel-font-md);
+  line-height: 20px;
   text-decoration: underline;
   cursor: pointer;
   overflow-wrap: anywhere;
@@ -3707,7 +3750,7 @@ code.tool-summary {
 }
 .panel-progress-block {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .panel-progress-block progress {
   width: 100%;
@@ -3715,13 +3758,15 @@ code.tool-summary {
 }
 .panel-kv {
   display: grid;
-  gap: 6px;
+  gap: 0;
   margin: 0;
 }
 .panel-kv div {
   display: grid;
   grid-template-columns: minmax(70px, 30%) 1fr;
-  gap: 8px;
+  gap: var(--space-2);
+  min-height: var(--panel-row-height);
+  align-items: center;
 }
 .panel-kv dt {
   color: var(--muted);
@@ -3736,17 +3781,20 @@ code.tool-summary {
 .panel-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--panel-font-md);
 }
+/* Table rows are 24 px like list rows. */
 .panel-table th,
 .panel-table td {
-  padding: 4px 6px;
+  height: var(--panel-row-height);
+  padding: 0 var(--space-2);
+  line-height: 20px;
   border-bottom: 1px solid var(--border);
 }
 .panel-timeline time {
   color: var(--muted);
-  font-size: 11px;
-  margin-right: 6px;
+  font-size: var(--panel-font-sm);
+  margin-right: var(--space-2);
 }
 .panel-timeline .level-error {
   color: var(--error);
@@ -3758,23 +3806,25 @@ code.tool-summary {
   color: var(--success);
 }
 .panel-hidden {
-  margin: 2px 0 6px;
-  font-size: 12px;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--panel-font-sm);
 }
 .panel-hidden-toggle,
 .panel-hidden button {
+  min-height: var(--panel-row-height);
   border: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
   cursor: pointer;
-  padding: 4px 2px;
+  padding: 2px;
   text-decoration: underline;
 }
 .panel-hidden ul {
   list-style: none;
   margin: 0;
-  padding-left: 8px;
+  padding-left: var(--space-2);
 }
 .panel-receipt {
   position: relative;
@@ -3820,8 +3870,8 @@ code.tool-summary {
   }
 }
 .panel-doc-title {
-  margin: 0 0 2px;
-  font-size: 13px;
+  margin: var(--space-1) 0;
+  font-size: var(--panel-font-md);
 }
 
 .inline-tool-view {
@@ -3847,13 +3897,13 @@ code.tool-summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .panel-hide-completed {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
+  gap: var(--space-1);
+  font-size: var(--panel-font-sm);
   color: var(--muted);
 }
 .panel-disclosure {
@@ -3863,6 +3913,7 @@ code.tool-summary {
   justify-content: center;
   width: 16px;
   height: 16px;
+  min-height: 0;
   padding: 0;
   border: 0;
   background: transparent;
@@ -3883,6 +3934,7 @@ code.tool-summary {
 }
 .panel-glyph-button {
   display: inline-flex;
+  min-height: 0;
   padding: 0;
   border: 0;
   background: none;
@@ -3896,8 +3948,30 @@ code.tool-summary {
 .panel-glyph-button:disabled {
   cursor: default;
 }
-.panel-row .panel-action-menu {
+/* Row actions (list and table rows) fit the 24 px row and show on hover or keyboard focus, and while their menu is open. */
+.panel-row .panel-action-menu,
+.panel-table td .panel-action-menu {
   margin-left: auto;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 0;
+  padding: 1px;
+  opacity: 0;
+}
+.panel-row:hover .panel-action-menu,
+.panel-row:focus-within .panel-action-menu,
+.panel-row .panel-action-menu[data-state="open"],
+.panel-table tr:hover .panel-action-menu,
+.panel-table tr:focus-within .panel-action-menu,
+.panel-table td .panel-action-menu[data-state="open"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .panel-row .panel-action-menu,
+  .panel-table td .panel-action-menu {
+    opacity: 1;
+  }
 }
 .panel-block-header .panel-action-menu {
   margin-left: auto;

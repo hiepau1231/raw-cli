@@ -1,11 +1,11 @@
-import { useId, type PointerEvent, type ReactNode } from "react";
+import { useId, useRef, type PointerEvent, type ReactNode } from "react";
 import { DropdownMenu } from "radix-ui";
 import { Activity, ChevronRight, EyeOff, FileText, Flag, FolderTree, Gauge, ListChecks, ListOrdered, MoreHorizontal, MoveDown, MoveUp, PanelTop, Table } from "lucide-react";
 import type { PanelIcon } from "../../../src/panels/contract.js";
 import { derivedProgress, derivedSummary } from "../../../src/panels/render.js";
 import type { PanelStackItem } from "../../../src/panels/stack.js";
 
-export const HEADER_HEIGHT = 40;
+export const HEADER_HEIGHT = 28;
 const icons: Record<PanelIcon, typeof Activity> = {
   "list-checks": ListChecks, "list-ordered": ListOrdered, "file-text": FileText, table: Table, activity: Activity, gauge: Gauge, "folder-tree": FolderTree, flag: Flag, panel: PanelTop,
 };
@@ -23,10 +23,12 @@ export interface SectionProps {
   /** 0..1 progress drawn as a 2 px line along the header's bottom edge. */
   progress?: number | undefined;
   statusText?: string | undefined;
+  /** Explanatory text (a document subtitle) shown in the header tooltip instead of the body. */
+  tooltip?: string | undefined;
   unseen?: boolean;
   muted?: boolean;
   expanded: boolean;
-  /** Fixed outer height (header included) while expanded. */
+  /** Outer height (header included) while expanded, given by the stack; content never changes it. */
   height: number;
   onToggle: () => void;
   onResize?: (height: number) => void;
@@ -35,14 +37,17 @@ export interface SectionProps {
   menu?: { actions?: Array<{ id: string; label: string; disabled?: string | undefined; run: () => void }> | undefined; up?: (() => void) | undefined; down?: (() => void) | undefined; hide?: (() => void) | undefined } | undefined;
   children?: ReactNode;
 }
-/** One accordion section (WAI-ARIA accordion): a header button with `aria-expanded`, and a fixed-height body that scrolls inside. */
+/** One accordion section (WAI-ARIA accordion): a header button with `aria-expanded`, and a body of the given height that scrolls inside. */
 export function Section(props: SectionProps) {
   const id = useId();
-  const { panel, title, icon, summary, progress, statusText, unseen, muted, expanded, height, onToggle, onResize, drag, menu, children } = props;
+  const { panel, title, icon, summary, progress, statusText, tooltip, unseen, muted, expanded, height, onToggle, onResize, drag, menu, children } = props;
+  // Labels end with an ellipsis; the tooltip carries the full text and the explanation.
+  const hint = [summary ? `${title} · ${summary}` : title, tooltip].filter(Boolean).join("\n");
+  // A drag resizes from where it started: the section's top can move while other sections give up height.
+  const dragStart = useRef<{ y: number; height: number } | undefined>(undefined);
   const resize = (event: PointerEvent<HTMLDivElement>) => {
-    if (!onResize || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    const top = event.currentTarget.previousElementSibling?.getBoundingClientRect().top ?? 0;
-    onResize(event.clientY - top);
+    if (!onResize || !dragStart.current || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    onResize(dragStart.current.height + event.clientY - dragStart.current.y);
   };
   return (
     <>
@@ -52,7 +57,7 @@ export function Section(props: SectionProps) {
           {...(drag ? { onPointerDown: drag.onPointerDown } : {})}
         >
           <h3>
-            <button type="button" className="panel-toggle" aria-expanded={expanded} aria-controls={`${id}-body`} onClick={onToggle}>
+            <button type="button" className="panel-toggle" aria-expanded={expanded} aria-controls={`${id}-body`} title={hint} onClick={onToggle}>
               <ChevronRight size={14} aria-hidden="true" className="panel-chevron" />
               {icon && <PanelGlyph icon={icon} />}
               <span className="panel-title">{title}</span>
@@ -85,7 +90,7 @@ export function Section(props: SectionProps) {
         </div>
         {expanded && (
           <div id={`${id}-body`} role="region" aria-label={title} className="panel-body" tabIndex={0}>
-            {children}
+            <div className="panel-body-content">{children}</div>
           </div>
         )}
       </section>
@@ -105,7 +110,12 @@ export function Section(props: SectionProps) {
             event.preventDefault();
             onResize(height + step);
           }}
-          onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+          onPointerDown={(event) => {
+            dragStart.current = { y: event.clientY, height };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerUp={() => { dragStart.current = undefined; }}
+          onPointerCancel={() => { dragStart.current = undefined; }}
           onPointerMove={resize}
         />
       )}

@@ -8,16 +8,19 @@ import { ActionScope, ActionMenu, offeredActions, type ActionHost } from "./acti
 import { Blocks } from "./Blocks.js";
 import type { InsertRef } from "./status.js";
 
-/** The same document/action presentation at either destination. */
-export function ToolView({ item, onInsert, hideCompleted, onHideCompleted, actions, children }: {
+/**
+ * The same document/action presentation at either destination. A side-panel section's header already shows the title,
+ * summary and subtitle; an inline view (`inline`) shows them itself, minus the `heading` it was given.
+ */
+export function ToolView({ item, onInsert, hideCompleted, onHideCompleted, actions, inline = false, heading, children }: {
   item: PanelStackItem; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted: (value: boolean) => void;
-  actions?: ActionHost | undefined; children?: ReactNode;
+  actions?: ActionHost | undefined; inline?: boolean; heading?: string | undefined; children?: ReactNode;
 }) {
   const displayed = sidebarPresentation(item, actions?.interactions ?? []);
   return <ActionScope value={actions && { item, host: actions }}>
     {item.stale && <p className="panel-banner" role="note">The tool that owns this panel is not selected by this agent.</p>}
     {children}
-    {displayed.document ? <Blocks document={displayed.document} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={onHideCompleted} /> : <p className="muted small">No data yet.</p>}
+    {displayed.document ? <Blocks document={displayed.document} title={inline ? heading : item.title} inline={inline} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={onHideCompleted} /> : <p className="muted small">No data yet.</p>}
   </ActionScope>;
 }
 
@@ -47,7 +50,7 @@ export function InlineToolView({ sessionId, identity, live, receipt, availabilit
     {item ? <>
       <div className="panel-block-header"><h4>{item.title}</h4>{receipt?.source === "user_action" && <small className="panel-tag">You</small>}
         {actions && <ActionMenu offered={offeredActions(item, actions, "panel")} label={`Actions for ${item.title}`} />}</div>
-      <ToolView item={item} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={setHideCompleted} actions={actions} />
+      <ToolView item={item} inline heading={item.title} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={setHideCompleted} actions={actions} />
     </> : <p className={error ? "error small" : "muted small"}>{error || "Loading tool view…"}</p>}
   </section>;
 }

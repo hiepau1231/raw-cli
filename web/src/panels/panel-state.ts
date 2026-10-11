@@ -11,12 +11,13 @@ export const MAX_SESSIONS = 50;
 export const MAX_IDS = 200;
 const NO_AGENT = "_default";
 
-/** What the browser remembers. Order, hidden set and height are per agent; expansion and seen revisions per session. */
+/** What the browser remembers. Order, hidden set and dragged heights are per agent; expansion and seen revisions per session. */
 export interface PanelPrefs {
   version: 1;
   order: Record<string, string[]>;
   hidden: Record<string, string[]>;
-  heights: Record<string, number>;
+  /** Per agent, the height the user dragged each section to; sections without one share the space (§13.1 "Size"). */
+  heights: Record<string, Record<string, number>>;
   expanded: Record<string, string[]>;
   seen: Record<string, Record<string, number>>;
   /** Sessions in which "Follow the tool" already opened the side panel once. */
@@ -52,7 +53,8 @@ export function loadPrefs(storage: Pick<Storage, "getItem"> | undefined = global
       version: 1,
       order: record(raw.order, (v) => (Array.isArray(v) ? ids(v) : undefined), MAX_SESSIONS),
       hidden: record(raw.hidden, (v) => (Array.isArray(v) ? ids(v) : undefined), MAX_SESSIONS),
-      heights: record(raw.heights, (v) => (typeof v === "number" && Number.isFinite(v) ? clampHeight(v) : undefined), MAX_SESSIONS),
+      heights: record(raw.heights, (v) => (v && typeof v === "object" && !Array.isArray(v)
+        ? record(v, (h) => (typeof h === "number" && Number.isFinite(h) ? clampHeight(h) : undefined), MAX_IDS) : undefined), MAX_SESSIONS),
       expanded: record(raw.expanded, (v) => (Array.isArray(v) ? ids(v, true) : undefined), MAX_SESSIONS),
       seen: record(raw.seen, (v) => {
         if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
@@ -165,9 +167,35 @@ export function setHidden(prefs: PanelPrefs, agent: string | null | undefined, p
   const rest = (prefs.hidden[key] ?? []).filter((id) => id !== panel);
   return { ...prefs, hidden: bounded(prefs.hidden, key, hide ? [...rest, panel].slice(-MAX_IDS) : rest) };
 }
-export const setHeight = (prefs: PanelPrefs, agent: string | null | undefined, height: number): PanelPrefs =>
-  ({ ...prefs, heights: bounded(prefs.heights, agentKey(agent), clampHeight(height)) });
-export const heightFor = (prefs: PanelPrefs, agent: string | null | undefined): number | undefined => prefs.heights[agentKey(agent)];
+export const setHeight = (prefs: PanelPrefs, agent: string | null | undefined, panel: string, height: number): PanelPrefs =>
+  ({ ...prefs, heights: bounded(prefs.heights, agentKey(agent), bounded(prefs.heights[agentKey(agent)] ?? {}, panel, clampHeight(height), MAX_IDS)) });
+export const heightFor = (prefs: PanelPrefs, agent: string | null | undefined, panel: string): number | undefined => prefs.heights[agentKey(agent)]?.[panel];
+
+/** An expanded section for {@link shareHeights}: its content's own height (header included) and the user's dragged size. */
+export interface ShareInput { panel: string; natural?: number | undefined; dragged?: number | undefined }
+/**
+ * Outer heights of the expanded sections, like VS Code split views (docs/panels-design.md §13.1 "Size"). A dragged
+ * section keeps its size. The others share what is left equally, except that a section whose content is shorter than its
+ * share takes only its content height (at least {@link MIN_HEIGHT}) and gives the rest to the others. When the space
+ * runs out every section still gets {@link MIN_HEIGHT} and the stack scrolls.
+ */
+export function shareHeights(available: number, sections: readonly ShareInput[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  let left = Math.max(0, Math.floor(available));
+  for (const section of sections)
+    if (section.dragged !== undefined) { out[section.panel] = clampHeight(section.dragged); left -= out[section.panel]!; }
+  const want = (section: ShareInput) => Math.max(MIN_HEIGHT, section.natural ?? Infinity);
+  const sharing = sections.filter((section) => section.dragged === undefined).sort((a, b) => want(a) - want(b));
+  for (let index = 0; index < sharing.length; index++) {
+    const section = sharing[index]!;
+    const share = Math.floor(Math.max(0, left) / (sharing.length - index));
+    // The last section takes the rounding remainder, so the shares fill the space exactly.
+    const height = Math.max(MIN_HEIGHT, Math.min(want(section), index === sharing.length - 1 ? Math.max(0, left) : share));
+    out[section.panel] = height;
+    left -= height;
+  }
+  return out;
+}
 export function setExpanded(prefs: PanelPrefs, session: string, panel: string, open: boolean): PanelPrefs {
   const rest = (prefs.expanded[session] ?? []).filter((id) => id !== panel);
   return { ...prefs, expanded: bounded(prefs.expanded, session, open ? [...rest, panel] : rest) };

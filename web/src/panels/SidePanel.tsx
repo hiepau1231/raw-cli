@@ -5,10 +5,11 @@ import { COMMANDS_ID } from "./commands-state.js";
 import type { PanelStackItem } from "../../../src/panels/stack.js";
 import { offeredActions, type ActionHost } from "./actions.js";
 import { ToolView } from "./ToolView.js";
+import { sidebarPresentation } from "./interaction-state.js";
 import { Section, progressFor, statusTextFor, summaryFor } from "./Section.js";
 import {
-  DETAILS_ID, MIN_HEIGHT, currentOrder, heightFor, isExpanded, layout, markSeen, move, newAnnouncer, placeAt, planAnnouncements, rejectedCode, setExpanded, setHeight, setHidden,
-  setHideCompleted, setOrder, unseen,
+  DETAILS_ID, currentOrder, heightFor, isExpanded, layout, markSeen, move, newAnnouncer, placeAt, planAnnouncements, rejectedCode, setExpanded, setHeight, setHidden,
+  setHideCompleted, setOrder, shareHeights, unseen,
   type PanelPrefs,
 } from "./panel-state.js";
 import type { InsertRef } from "./status.js";
@@ -53,11 +54,35 @@ export function SidePanelStack({ commands = [], sessionId, agent, items, prefs, 
   const { visible, hidden } = layout(items, prefs, agent);
   const order = currentOrder(items, prefs, agent);
   const hiddenIds = new Set(hidden.map((item) => item.panel));
-  // Fixed outer height: the user's choice for this agent, else half of the side panel. Content never changes it.
-  const height = Math.max(MIN_HEIGHT, heightFor(prefs, agent) ?? Math.round(boxHeight * 0.5));
   const expandedOf = (panel: string) => isExpanded(prefs, sessionId, panel);
   const toggle = (panel: string) => setPrefs((old) => setExpanded(old, sessionId, panel, !isExpanded(old, sessionId, panel)));
-  const resize = (next: number) => setPrefs((old) => setHeight(old, agent, next));
+  const resizeOf = (panel: string) => (next: number) => setPrefs((old) => setHeight(old, agent, panel, next));
+  // Expanded sections share the stack's height (§13.1 "Size"). Their content heights and the space left by the other rows
+  // are measured only when the layout changes (expand, collapse, a dragged size, the window, the set of sections), never
+  // on a content update, so an update never resizes a section.
+  const expandedIds = [...visible.map((item) => item.panel), DETAILS_ID].filter(expandedOf);
+  const dragged = expandedIds.map((panel) => heightFor(prefs, agent, panel) ?? "");
+  const layoutKey = [boxHeight, visible.map((item) => item.panel).join("\0"), hidden.length, showHidden, expandedIds.join("\0"), dragged.join(",")].join("|");
+  const [measured, setMeasured] = useState<{ key: string; available: number; naturals: Record<string, number> }>({ key: "", available: 0, naturals: {} });
+  useLayoutEffect(() => {
+    const root = box.current;
+    if (!root || measured.key === layoutKey) return;
+    let chrome = 0;
+    const naturals: Record<string, number> = {};
+    root.querySelectorAll<HTMLElement>(":scope > [data-panel], :scope > .panel-hidden").forEach((element) => {
+      const panel = element.dataset.panel;
+      if (!panel || !expandedIds.includes(panel)) { chrome += element.offsetHeight; return; }
+      const header = element.querySelector<HTMLElement>(".panel-header")?.offsetHeight ?? 0;
+      const body = element.querySelector<HTMLElement>(".panel-body");
+      const content = body?.querySelector<HTMLElement>(".panel-body-content");
+      const padding = body ? parseFloat(getComputedStyle(body).paddingTop) + parseFloat(getComputedStyle(body).paddingBottom) : 0;
+      // Shares are outer heights, header included, so an expanded section's header is not chrome.
+      naturals[panel] = header + Math.ceil((content?.offsetHeight ?? 0) + padding);
+    });
+    setMeasured({ key: layoutKey, available: root.clientHeight - chrome, naturals });
+  });
+  const heights = shareHeights(measured.available, expandedIds.map((panel) => ({ panel, natural: measured.naturals[panel], dragged: heightFor(prefs, agent, panel) })));
+  const heightOf = (panel: string) => heights[panel] ?? 0;
   // What someone can read counts as seen: an expanded section that is inside the stack's viewport, at its current revision.
   useEffect(() => {
     setPrefs((old) => {
@@ -100,7 +125,7 @@ export function SidePanelStack({ commands = [], sessionId, agent, items, prefs, 
     }, { root, threshold: [0, 0.25, 0.5, 1] });
     root.querySelectorAll("[data-panel]").forEach((element) => observer.observe(element));
     return () => observer.disconnect();
-  }, [expandedKey, height]);
+  }, [expandedKey, measured.key]);
   const sectionAt = (y: number): string | undefined => {
     let best: { id: string; distance: number } | undefined;
     box.current?.querySelectorAll<HTMLElement>("[data-panel]").forEach((element) => {
@@ -167,22 +192,25 @@ export function SidePanelStack({ commands = [], sessionId, agent, items, prefs, 
     <div className="panel-stack" ref={box}>
       {visible.map((item) => {
         const rejected = rejectedCode(history, item.panel);
-        const progress = progressFor(item);
+        // The header describes the document the body shows, which may be a sidebar interaction's.
+        const shown = sidebarPresentation(item, actions?.interactions ?? []);
+        const progress = progressFor(shown);
         return (
           <Section
             key={item.panel}
             panel={item.panel}
             title={item.title}
             icon={item.icon}
-            summary={summaryFor(item)}
+            summary={summaryFor(shown)}
             progress={progress}
-            statusText={statusTextFor(item)}
+            statusText={statusTextFor(shown)}
             unseen={unseen(prefs, sessionId, item)}
-            muted={!item.document}
+            muted={!shown.document}
+            tooltip={shown.document?.subtitle}
             expanded={expandedOf(item.panel)}
-            height={height}
+            height={heightOf(item.panel)}
             onToggle={() => { if (!suppressClick.current) toggle(item.panel); }}
-            onResize={resize}
+            onResize={resizeOf(item.panel)}
             drag={dragFor(item)}
             menu={menuFor(item)}
           >
@@ -212,9 +240,9 @@ export function SidePanelStack({ commands = [], sessionId, agent, items, prefs, 
         panel={DETAILS_ID}
         title="Details"
         expanded={expandedOf(DETAILS_ID)}
-        height={height}
+        height={heightOf(DETAILS_ID)}
         onToggle={() => toggle(DETAILS_ID)}
-        onResize={resize}
+        onResize={resizeOf(DETAILS_ID)}
       >
         {details}
       </Section>
