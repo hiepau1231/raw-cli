@@ -38,7 +38,7 @@ export interface SessionSnapshot {
   metrics: SessionMetrics | null; metricsStale: boolean;
   context: { summary?: string; messageCount: number }; live: LiveSegment[]; approvals: Approval[];
   /** The session's saved agent and its committed panels; authoritative for the dashboard's panel state (§13.1). */
-  agent: string | null; panels: PanelStackItem[]; commands?: CommandRecord[]; interactions?: InteractionRequest[];
+  agent: string | null; panels: PanelStackItem[]; commands?: CommandRecord[]; commandsOmitted?: number; interactions?: InteractionRequest[];
 }
 export function workspacePath(value: unknown, base: string): string {
   const input = textField(value, "cwd", 4096);
@@ -64,7 +64,7 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
   }];
   const output = new LiveOutput(join(dirname(store.path), "dashboard-live"));
   let streams!: SessionStreams;
-  const processes = new ProcessSupervisor({ store, publishCommands: (sessionId,items) => { if(streams) streams.publish(sessionId,"commands",{items}); } }); context.processes = processes;
+  const processes = new ProcessSupervisor({ store, publishCommands: (sessionId,items,omitted) => { if(streams) streams.publish(sessionId,"commands",{items,...(omitted?{omitted}:{})}); } }); context.processes = processes;
   const interactions = new InteractionService({ store, available: true, publish: request => {
     if (streams) streams.publish(request.identity.sessionId!, "interaction", request, request.identity.operationId);
   } });
@@ -140,10 +140,11 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
     const session = requireSession(id); const historyWatermark = store.historyWatermark(id);
     const page = store.getSessionHistory({ sessionId: id, limit: 50, atOrBefore: historyWatermark });
     const receipts = store.listOperations(id, 20);
+    const commands = processes.commands.listing(id);
     return { session, history: { ...page, items: page.items.map(projectHistoryItem) }, historyWatermark,
       ownership: streams.ownership(id), operations: receipts, ...metrics(id), context: store.getContextSummary(id),
       live: output.list(new Set(receipts.filter((op) => !terminalOperationStates.has(op.state)).map((op) => op.id))), approvals: approvals.list(id),
-      agent: session.agentName ?? null, commands: processes.commands.list(id), interactions: store.pendingInteractions(id),
+      agent: session.agentName ?? null, commands: commands.items, ...(commands.omitted ? { commandsOmitted: commands.omitted } : {}), interactions: store.pendingInteractions(id),
       panels: withInteractions(id, buildPanelStack(declarationsFor(session.agentName, loaded), store.listSessionPanels(id))) };
   };
   streams = new SessionStreams(context, output, snapshot, knownForSession);
@@ -234,7 +235,7 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
       const sessionId=decodeURIComponent(commandRoute[1]!);requireSession(sessionId);
       const id=commandRoute[2]===undefined?undefined:decodeURIComponent(commandRoute[2]);
       try {
-        if(id===undefined&&method==="GET")return reply({items:processes.commands.list(sessionId)});
+        if(id===undefined&&method==="GET"){const {items,omitted}=processes.commands.listing(sessionId);return reply({items,...(omitted?{omitted}:{})});}
         if(id&&commandRoute[3]==="output"&&method==="GET") {
           const cursor=url.searchParams.has("cursor")?Number(url.searchParams.get("cursor")):0;
           const maxBytes=url.searchParams.has("maxBytes")?Number(url.searchParams.get("maxBytes")):65536;

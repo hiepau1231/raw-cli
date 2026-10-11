@@ -3764,6 +3764,7 @@ code.tool-summary {
   display: flex;
   flex: 1 1 auto;
   align-items: center;
+  justify-content: flex-start;
   gap: var(--space-1);
   min-width: 0;
   min-height: 0;
@@ -4075,8 +4076,147 @@ button.panel-file {
 .interaction-receipt dl { flex-basis: 100%; margin: 0; }
 .interaction-receipt dd { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.commands-list { list-style: none; margin: 0; padding: 0; }
-.command-row { padding: 10px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
-.command-row code { display: block; }
-.command-row button { margin: 6px 6px 0 0; }
-.command-output pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; font-size: 12px; }
+/* Commands (docs/tool-ux-design.md §6.4): group headers and one 24 px monospace row per command. */
+.commands-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.command-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-1);
+  width: 100%;
+  min-height: 0;
+  height: var(--panel-row-height);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--panel-font-sm);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.command-group[aria-expanded="true"] .panel-chevron {
+  transform: rotate(90deg);
+}
+.command-line {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--panel-row-height);
+  margin: 0 calc(-1 * var(--space-1));
+  padding: 0 var(--space-1);
+  border-radius: 4px;
+}
+.command-line:hover {
+  background: var(--panel-hover);
+}
+.command-line .panel-row-action {
+  margin-left: 0;
+}
+.command-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--panel-font-md);
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+.command-glyph {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+.command-glyph[data-glyph="ok"] {
+  color: var(--success);
+}
+.command-glyph[data-glyph="error"] {
+  color: var(--error);
+}
+.command-glyph[data-glyph="running"],
+.command-glyph[data-glyph="timeout"] {
+  color: var(--warning);
+}
+.command-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: var(--panel-font-sm);
+}
+.command-duration {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
+  font-variant-numeric: tabular-nums;
+}
+.command-exit {
+  flex: none;
+  padding: 0 var(--space-1);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--error);
+  font-size: var(--panel-font-sm);
+  line-height: 16px;
+}
+.command-detail {
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0 0 2px calc(14px + var(--space-2));
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
+  line-height: 18px;
+}
+.command-detail > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-cwd {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.command-note {
+  margin: 0 0 var(--space-1) calc(14px + var(--space-2));
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
+}
+.command-note.error {
+  color: var(--error);
+}
+.command-output {
+  margin: 2px 0 var(--space-2);
+}
+.command-output .command-note {
+  margin: var(--space-1) var(--space-2) 0;
+  color: var(--terminal-muted);
+}
+.command-output pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.command-output .command-more-output {
+  margin: var(--space-1) var(--space-2) var(--space-2);
+}
+.command-more {
+  padding: 2px 0;
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
+}

@@ -56,6 +56,10 @@ try {
     for (const title of ["Todo", "Files changed", "Commands", "Details"]) await expand(title, true);
     await shot("02-all-expanded.png");
     for (const title of ["Todo", "Details"]) await expand(title, false);
+    const completed = page.getByRole("button", { name: /^Completed \(/ });
+    if ((await completed.getAttribute("aria-expanded")) !== "true") await completed.click();
+    await page.locator("li.command-row button.command-toggle").first().click();
+    await page.locator(".command-output pre", { hasText: "missing semicolon" }).waitFor();
     await shot("03-files-and-commands.png");
     await page.emulateMedia({ colorScheme: "light" });
     await shot("04-files-and-commands-light.png");

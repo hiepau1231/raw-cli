@@ -420,7 +420,7 @@ async function bashTool(args, context) {
   }
   let activity;
   try {
-    activity = context.commandActivity?.begin(args.command, cwd);
+    activity = context.commandActivity?.begin(args.command, cwd, { ...args.description ? { label: args.description } : {}, ...context.toolCallId ? { toolCallId: context.toolCallId } : {} });
   } catch {
   }
   const started = performance.now();

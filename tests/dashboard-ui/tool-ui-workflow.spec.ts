@@ -38,7 +38,7 @@ test("Ask, Commands, Todo, patches and Mermaid survive reload and retry while St
   await expect(page.getByRole("textbox", { name: "Workflow answer", exact: true })).toBeDisabled();
   const commands = await showSection(page, "__commands");
   await expect(commands).toContainText("Workflow job");
-  await commands.getByRole("button", { name: "Output", exact: true }).click();
+  await commands.locator("li.command-row button.command-toggle").first().click();
   await expect(commands.locator("pre")).toContainText("workflow ready");
   await send(page, "patch and diagram");
   await expect(page.getByTestId("assistant-message")).toHaveCount(2);

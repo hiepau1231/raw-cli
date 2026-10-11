@@ -23,7 +23,7 @@ import type { LoadedDeclarations } from "../panels/stack.js";
 const PANEL_FRAME_INTERVAL_MS = 250;
 
 export interface DashboardEventData {
-  commands: { items: CommandRecord[] };
+  commands: { items: CommandRecord[]; omitted?: number };
   process_control: ProcessControl;
   interaction: InteractionRequest;
   snapshot: SessionSnapshot; reset: SessionSnapshot;

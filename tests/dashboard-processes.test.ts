@@ -95,3 +95,29 @@ test("foreground UI observer failures do not change Bash side effects or outcome
     assert.match(result.content.map(c=>c.type==="text"?c.text:"").join(""),/^preserved\n?\[exit 7 · /);
   }
 });
+
+test("foreground rows carry the call's description, call id and saved full output, and the listing counts the older rows it cuts",async()=>{
+  const f=await dashboardFixture({agent:{tools:{use:["builtin/bash"]}},responses:[
+    {frames:[openAiFrame({tool_calls:[{index:0,id:"long-call",type:"function",function:{name:"bash",arguments:JSON.stringify({command:"seq 1 200000",description:"Count a lot"})}}]},"tool_calls"),openAiDone]},
+    {frames:[openAiFrame({tool_calls:[{index:0,id:"short-call",type:"function",function:{name:"bash",arguments:JSON.stringify({command:"printf short"})}}]},"tool_calls"),openAiDone]},
+    {frames:[openAiFrame({content:"done"},"stop"),openAiDone]}]});
+  try {
+    const s=await f.json<SessionSummary>("/sessions","POST",{cwd:f.root,agent:"raw"});
+    const op=await f.json<{id:string}>(`/sessions/${s.id}/operations`,"POST",{clientRequestId:"run",kind:"turn",agent:"raw",input:"go"});
+    await f.wait(op.id);
+    const rows=await f.json<{items:CommandRecord[];omitted?:number}>(`/sessions/${s.id}/commands`);
+    assert.equal(rows.omitted,undefined);
+    const [short,long]=rows.items;
+    assert.deepEqual([long?.label,long?.toolCallId,long?.state],["Count a lot","long-call","exited"]);
+    assert.match(long!.fullOutputPath!,/\S/,"the spilled output's path is on the row");
+    assert.deepEqual([short?.label,short?.toolCallId,short?.fullOutputPath],[undefined,"short-call",undefined]);
+  } finally {await f.close();}
+  const {Commands}=await import("../src/processes/presentation.js");
+  const records=(count:number)=>Array.from({length:count},(_,i)=>({id:`p${i}`,sessionId:"s",command:`job ${i}`,cwd:"/w",state:"exited" as const,createdAt:i,updatedAt:i,cursor:0,droppedBytes:0,earliestCursor:0,hostToken:"h",generation:0}));
+  for(const [count,omitted] of [[132,0],[133,1],[200,68]] as const){
+    const commands=new Commands({hostToken:"h",list:()=>records(count) as never,output:()=>{throw new Error("unused");}});
+    const listing=commands.listing("s");
+    assert.equal(listing.items.length,132);assert.equal(listing.omitted,omitted);
+    assert.equal(listing.items[0]?.command,`job ${count-1}`,"newest first");
+  }
+});

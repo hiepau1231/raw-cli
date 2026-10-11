@@ -261,6 +261,8 @@ export function Inspector({
           <SidePanelStack
             {...stack}
             commands={state?.commands ?? []}
+            commandsOmitted={state?.commandsOmitted}
+            sessionCwd={state?.session.cwd}
             sessionId={id}
             details={<Details id={id} state={state} bootstrap={bootstrap} />}
           />

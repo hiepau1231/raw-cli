@@ -16,6 +16,10 @@ import type { InsertRef } from "./status.js";
 
 export interface SidePanelProps {
   commands?: readonly CommandRecord[];
+  /** How many older commands the server left out beyond its row limit. */
+  commandsOmitted?: number | undefined;
+  /** A command's directory shows only when it differs from this. */
+  sessionCwd?: string | undefined;
   sessionId: string;
   agent: string | null;
   items: PanelStackItem[];
@@ -32,7 +36,7 @@ export interface SidePanelProps {
 }
 
 /** The stack of sections shown in the side panel (docs/panels-design.md §13.1). */
-export function SidePanelStack({ commands = [], sessionId, agent, items, prefs, setPrefs, history, onInsert, actions, reveal, details }: SidePanelProps) {
+export function SidePanelStack({ commands = [], commandsOmitted, sessionCwd, sessionId, agent, items, prefs, setPrefs, history, onInsert, actions, reveal, details }: SidePanelProps) {
   const box = useRef<HTMLDivElement>(null);
   const [boxHeight, setBoxHeight] = useState(0);
   const [showHidden, setShowHidden] = useState(false);
@@ -217,7 +221,7 @@ export function SidePanelStack({ commands = [], sessionId, agent, items, prefs, 
             drag={dragFor(item)}
             menu={menuFor(item, shown.document)}
           >
-            {item.panel === COMMANDS_ID ? <Commands items={commands} sessionId={sessionId} /> : <ToolView item={item} actions={actions} onInsert={onInsert} hideCompleted={prefs.hideCompleted}>
+            {item.panel === COMMANDS_ID ? <Commands items={commands} omitted={commandsOmitted} sessionId={sessionId} sessionCwd={sessionCwd} onInsert={onInsert} /> : <ToolView item={item} actions={actions} onInsert={onInsert} hideCompleted={prefs.hideCompleted}>
             {rejected && <p className="panel-banner error" role="note">Update rejected: {rejected}</p>}
             </ToolView>}
           </Section>

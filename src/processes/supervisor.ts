@@ -23,7 +23,7 @@ export class ProcessSupervisor {
   private readonly fences = new Set<string>();
   private closing = false;
   private failureCleanup?: Promise<void>;
-  constructor(private readonly options: { store?: SessionStore; platform?: NodeJS.Platform; now?: () => number; publish?: (record: ProcessRecord) => void; publishCommands?: (sessionId: string, items: CommandRecord[]) => void; signalGroup?: typeof signalShellGroup } = {}) {
+  constructor(private readonly options: { store?: SessionStore; platform?: NodeJS.Platform; now?: () => number; publish?: (record: ProcessRecord) => void; publishCommands?: (sessionId: string, items: CommandRecord[], omitted: number) => void; signalGroup?: typeof signalShellGroup } = {}) {
     if (options.store) this.storage = new ProcessStore(options.store, this.token, this.generation, options.now);
     this.commands = new Commands({ ...(options.store ? {store: options.store} : {}), hostToken:this.token,
       list: sid => this.list(sid), output:(sid,id,cursor,max)=>this.output(sid,id,cursor,max),

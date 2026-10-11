@@ -376,7 +376,9 @@ export async function bashTool(args: BashArgs, context: ToolContext): Promise<To
     }
   }
   let activity: ReturnType<CommandActivity["begin"]> | undefined;
-  try { activity = context.commandActivity?.begin(args.command, cwd); } catch { /* UI persistence cannot change Bash execution. */ }
+  try {
+    activity = context.commandActivity?.begin(args.command, cwd, { ...(args.description ? { label: args.description } : {}), ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}) });
+  } catch { /* UI persistence cannot change Bash execution. */ }
   const started = performance.now();
   let result: ToolResult;
   try {

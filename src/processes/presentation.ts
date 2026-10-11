@@ -8,9 +8,15 @@ export interface CommandRecord {
   id: string; sessionId: string; kind: "foreground" | "background"; owner: "builtin/bash" | "builtin/process";
   command: string; commandTruncated?: boolean; cwd: string; label?: string; state: ProcessRecord["state"]; createdAt: number; updatedAt: number;
   endedAt?: number; exitCode?: number | null; signal?: string | null; error?: string; cursor: number; droppedBytes: number;
+  /** Foreground Bash: the model's call id, and the complete output the call saved (docs/tool-ux-design.md §6.4). */
+  toolCallId?: string; fullOutputPath?: string; fullOutputCapped?: boolean;
 }
+/** The newest rows the dashboard shows; `omitted` counts the older ones that were cut. */
+export const COMMAND_ROWS = 132;
+export interface CommandListing { items: CommandRecord[]; omitted: number }
 export interface CommandActivity {
-  begin(command: string, cwd: string): { output(channel: "stdout" | "stderr", text: string): void; finish(result: ToolResult): void };
+  /** `label` is the call's description. */
+  begin(command: string, cwd: string, call?: { label?: string; toolCallId?: string }): { output(channel: "stdout" | "stderr", text: string): void; finish(result: ToolResult): void };
 }
 export function terminalText(text: string): string {
   return stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
@@ -27,18 +33,20 @@ interface Entry {record:CommandRecord;chunks:ProcessChunk[];forgotten?:boolean;t
 /** Independent durable host projection; never writes to a PanelHost or model transcript. */
 export class Commands {
   private readonly active=new Map<string,Entry>();
-  constructor(private readonly options:{store?:SessionStore;hostToken:string;list:(sid:string)=>ProcessRecord[];output:(sid:string,id:string,cursor?:number,max?:number)=>ProcessOutput;publish?:(sid:string,items:CommandRecord[])=>void}) {}
+  constructor(private readonly options:{store?:SessionStore;hostToken:string;list:(sid:string)=>ProcessRecord[];output:(sid:string,id:string,cursor?:number,max?:number)=>ProcessOutput;publish?:(sid:string,items:CommandRecord[],omitted:number)=>void}) {}
   private stored(sessionId:string):Entry[] {
     return (this.options.store?.database.prepare("SELECT record_json,chunks_json FROM session_commands WHERE session_id = ? ORDER BY created_at DESC LIMIT 100").all(sessionId)??[])
       .map(row=>({record:JSON.parse(String(row.record_json)) as CommandRecord,chunks:JSON.parse(String(row.chunks_json)) as ProcessChunk[]}));
   }
-  list(sessionId:string):CommandRecord[] {
+  list(sessionId:string):CommandRecord[] { return this.listing(sessionId).items; }
+  listing(sessionId:string):CommandListing {
     const entries=new Map(this.stored(sessionId).map(e=>[e.record.id,e]));
     for(const [id,e] of this.active) if(e.record.sessionId===sessionId) entries.set(id,e);
     const records=[...this.options.list(sessionId).map(presentProcess),...[...entries.values()].map(e=>structuredClone(e.record))];
-    return records.sort((a,b)=>Number(LIVE_PROCESS_STATES.includes(b.state))-Number(LIVE_PROCESS_STATES.includes(a.state))||b.createdAt-a.createdAt||b.id.localeCompare(a.id)).slice(0,132);
+    const sorted=records.sort((a,b)=>Number(LIVE_PROCESS_STATES.includes(b.state))-Number(LIVE_PROCESS_STATES.includes(a.state))||b.createdAt-a.createdAt||b.id.localeCompare(a.id));
+    return {items:sorted.slice(0,COMMAND_ROWS),omitted:Math.max(0,sorted.length-COMMAND_ROWS)};
   }
-  publish(sessionId:string):void {try {this.options.publish?.(sessionId,this.list(sessionId));}catch{/* observers do not own execution */}}
+  publish(sessionId:string):void {try {const {items,omitted}=this.listing(sessionId);this.options.publish?.(sessionId,items,omitted);}catch{/* observers do not own execution */}}
   private save(entry:Entry):void {
     if(entry.timer) clearTimeout(entry.timer);delete entry.timer;
     const r=entry.record;
@@ -50,8 +58,9 @@ export class Commands {
     this.publish(r.sessionId);
   }
   forSession(sessionId:string):CommandActivity {
-    return {begin:(command,cwd)=>{
-      const entry:Entry={record:{id:randomUUID(),sessionId,kind:"foreground",owner:"builtin/bash",command:terminalText(utf8Prefix(command,4096).text),...(Buffer.byteLength(command)>4096?{commandTruncated:true}:{}),cwd:terminalText(cwd),state:"running",createdAt:Date.now(),updatedAt:Date.now(),cursor:0,droppedBytes:0},chunks:[]};
+    return {begin:(command,cwd,call)=>{
+      const entry:Entry={record:{id:randomUUID(),sessionId,kind:"foreground",owner:"builtin/bash",command:terminalText(utf8Prefix(command,4096).text),...(Buffer.byteLength(command)>4096?{commandTruncated:true}:{}),cwd:terminalText(cwd),state:"running",createdAt:Date.now(),updatedAt:Date.now(),cursor:0,droppedBytes:0,
+        ...(call?.label?{label:terminalText(utf8Prefix(call.label,800).text)}:{}),...(call?.toolCallId?{toolCallId:call.toolCallId}:{})},chunks:[]};
       this.active.set(entry.record.id,entry);this.save(entry);
       let finished=false;
       return {output:(channel,text)=>{
@@ -65,7 +74,8 @@ export class Commands {
         if(!entry.timer)entry.timer=setTimeout(()=>{try{this.save(entry);}catch{entry.record.error="command output persistence unavailable";}},250);
       },finish:result=>{
         if(finished)return;finished=true;
-        Object.assign(entry.record,{state:result.timedOut?"timed_out":result.code==="aborted"?"stopped":result.isError||result.exitCode!==0?"failed":"exited",endedAt:Date.now(),exitCode:result.exitCode??null,signal:result.signal??null,...(result.code?{error:result.code}:{})});
+        Object.assign(entry.record,{state:result.timedOut?"timed_out":result.code==="aborted"?"stopped":result.isError||result.exitCode!==0?"failed":"exited",endedAt:Date.now(),exitCode:result.exitCode??null,signal:result.signal??null,...(result.code?{error:result.code}:{}),
+          ...(result.fullOutputPath?{fullOutputPath:result.fullOutputPath,...(result.fullOutputCapped?{fullOutputCapped:true}:{})}:{})});
         this.save(entry);
         const terminal=[...this.active.values()].filter(e=>e.record.sessionId===sessionId&&!LIVE_PROCESS_STATES.includes(e.record.state)).sort((a,b)=>b.record.createdAt-a.record.createdAt);
         for(const old of terminal.slice(100))this.active.delete(old.record.id);
