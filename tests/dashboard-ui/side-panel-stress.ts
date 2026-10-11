@@ -1,6 +1,6 @@
 /**
  * A session that fills every kind of side panel with real-length content (docs/side-panel-design.md §10), the same data
- * as the approved mockups (docs/design/side-panel/): long Vietnamese todo items in every state, a modified file on a deep
+ * shapes as the approved mockups, with neutral sample text: long Vietnamese todo items in every state, a modified file on a deep
  * path, an added and a deleted one, a timed-out command, foreground Bash with a description, a failing command with
  * stderr, a background job that keeps streaming, a plugin panel with every block kind, and an `ask_user` question.
  */

@@ -295,7 +295,7 @@ test.describe("tab chrome", () => {
     const notes = page.getByRole("tabpanel");
     await expect(notes.getByText("First row")).toBeVisible();
     await expect(notes.locator("h4", { hasText: /^Notes$/i })).toHaveCount(0);
-    // No header inside the tab (docs/design/side-panel/): the explanation is the tab's description and tooltip, and the
+    // No header inside the tab (the approved mockups): the explanation is the tab's description and tooltip, and the
     // panel's menu sits in the side panel's title row.
     await expect(notes.locator("h3")).toHaveCount(0);
     await expect(notes.locator(".sp-tab-header")).toHaveCount(0);

@@ -215,7 +215,7 @@ test.describe("side panel type", () => {
       expect((await style(".inspector", "font-family"))[0]).toMatch(/^"Inter Variable"/);
       expect((await style(".command-card-line", "font-family"))[0]).toMatch(/^"JetBrains Mono Variable"/);
       expect(await style(".sp-tab", "padding-top", "padding-bottom")).toEqual(["8px", "9px"]);
-      // docs/design/side-panel/mockups.tsx: the title row, the tabs, the body and a command card.
+      // The approved mockups: the title row, the tabs, the body and a command card.
       expect(await style(".side-panel-title h2", "font-size", "font-weight")).toEqual(["14px", "600"]);
       expect(await style(".side-panel-title", "padding-top", "padding-left")).toEqual(["12px", "12px"]);
       expect(await style(".sp-tab", "font-size", "padding-left", "padding-right")).toEqual(["12.5px", "7px", "7px"]);

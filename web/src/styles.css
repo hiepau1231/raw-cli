@@ -3535,7 +3535,7 @@ code.tool-summary {
 .inspector > .section-heading {
   flex: none;
 }
-/* The side panel follows docs/design/side-panel/mockups.tsx: its sizes, spacing and radii are the reference. */
+/* The side panel follows the approved mockups (docs/side-panel-design.md): their sizes, spacing and radii are the reference. */
 .side-panel-title {
   display: flex;
   flex: none;

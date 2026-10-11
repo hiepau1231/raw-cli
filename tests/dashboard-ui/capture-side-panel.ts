@@ -6,7 +6,7 @@ import { installStressTools, seedStress, stressScenario } from "./side-panel-str
 
 // Run after npm run build. The side-panel gallery (docs/side-panel-design.md §10): the stress session at the default
 // 320 px width, one image per tab in dark and light, written to test-results/side-panel/ and copied to
-// docs/dashboard/side-panel-*.png. Compare them by eye with docs/design/side-panel/; they are not pixel assertions.
+// docs/dashboard/side-panel-*.png. Compare them by eye with the approved mockups (compare-side-panel.ts); they are not pixel assertions.
 const out = "test-results/side-panel";
 mkdirSync(out, { recursive: true });
 mkdirSync("docs/dashboard", { recursive: true });

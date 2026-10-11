@@ -3,14 +3,21 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-// Run after capture-side-panel.ts. Renders the approved mockups (docs/design/side-panel/mockups.tsx) at the gallery's
-// scale and writes test-results/side-panel/compare-<mockup>-<scheme>.png: the mockup on the left, the dashboard's tab on
-// the right, both at their CSS size, so the two can be compared. Not a pixel assertion.
+// Run after capture-side-panel.ts. Renders the approved mockups at the gallery's scale and writes
+// test-results/side-panel/compare-<mockup>-<scheme>.png: the mockup on the left, the dashboard's tab on the right, both at
+// their CSS size, so the two can be compared. Not a pixel assertion. The mockups hold private sample content, so they are
+// not in the repository: put their `mockups.tsx` in test-results/side-panel-mock/ (ignored), or name the folder in
+// RAW_SIDE_PANEL_MOCKUPS.
 const out = "test-results/side-panel";
+const mockups = process.env.RAW_SIDE_PANEL_MOCKUPS ?? "test-results/side-panel-mock";
+if (!existsSync(join(mockups, "mockups.tsx"))) {
+  console.log(`no mockups in ${mockups}; nothing to compare`);
+  process.exit(0);
+}
 mkdirSync(out, { recursive: true });
-execFileSync("npx", ["tsx", "docs/design/side-panel/mockups.tsx"], { stdio: "inherit" });
+execFileSync("npx", ["tsx", join(mockups, "mockups.tsx")], { stdio: "inherit" });
 const mock = join(out, "mock.html");
-renameSync("docs/design/side-panel/mock.html", mock);
+renameSync(join(mockups, "mock.html"), mock);
 /** Mockup shot id → the gallery tab it shows. */
 const pairs: Record<string, string> = {
   "frame-tabs": "commands", "frame-overview": "overview", commands: "commands", todo: "todo", files: "files-changed", details: "details",

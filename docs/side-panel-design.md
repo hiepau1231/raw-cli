@@ -2,7 +2,7 @@
 
 This document owns how the dashboard side panel looks and behaves. It replaces the layout parts of [panels-design.md](panels-design.md) §13.1 (the stack of accordion sections) and [tool-ux-design.md](tool-ux-design.md) §6 (the VS Code-style rows). The panel contract, block kinds, HTTP routes, stream frames and opening rules of §13.1 are unchanged.
 
-The approved mockups are in [design/side-panel/](design/side-panel/) (`frame-tabs.png`, `frame-overview.png`, `commands.png`, `todo.png`, `files.png`, `details.png`, `steps.png`, `kvtable.png`, `question.png`; source `mockups.tsx`). They are the visual reference.
+The approved mockups are kept outside the repository: they were drawn with private sample content. The gallery (`docs/dashboard/side-panel-*.png`, §10), captured from a neutral stress session, shows the result.
 
 ## 1. Why it changed
 
@@ -57,7 +57,7 @@ Overview and Details cannot be moved or hidden.
 
 ## 4. Commands
 
-One card per command ([commands.png](design/side-panel/commands.png)): running commands first, then, under an **Earlier** label, the others; each group newest first by start time. The label appears only when the filter shows both groups.
+One card per command ([gallery](dashboard/side-panel-commands-dark.png)): running commands first, then, under an **Earlier** label, the others; each group newest first by start time. The label appears only when the filter shows both groups.
 
 - **Filter.** Chips `All N`, `Running N`, `Failed N` (failed includes timed out and lost), stored per session. An empty filter shows a short note and keeps the chips. The chip counts cover the listed rows; "Older commands not shown" closes the list when the server cut older ones.
 - **Running card.** Accent border, a `Running` chip with a spinner and the ticking duration, the call's description as the title (else the command), the command line in monospace with an ellipsis and the full text in `title`, the last three output lines for foreground Bash, and a footer: start time, foreground or background, **Output**, and **Stop for background jobs only**. Foreground Bash stops with the turn's Stop in the composer, because per-command Stop exists only for supervisor-managed processes.
@@ -70,7 +70,7 @@ One card per command ([commands.png](design/side-panel/commands.png)): running c
 
 ## 5. Todo (checklist blocks)
 
-([todo.png](design/side-panel/todo.png))
+([gallery](dashboard/side-panel-todo-dark.png))
 
 - A header line "N of M done" (with the document title when it differs from the tab title) and a progress bar.
 - **Groups by top-level subtree,** so hierarchy is never split: an item goes to **Now** when it or any descendant is in progress; else to **Next** when it or any descendant is unfinished (pending, blocked, failed); else to **Completed** (the whole subtree done or skipped).
@@ -84,14 +84,14 @@ One card per command ([commands.png](design/side-panel/commands.png)): running c
 
 ## 6. Files changed (files blocks)
 
-([files.png](design/side-panel/files.png))
+([gallery](dashboard/side-panel-files-changed-dark.png))
 
 - A summary line "N files changed" with `+a −r` (each only when known) and a ratio bar when both are known.
 - Rows: a coloured status letter (A, M, D, R; a file icon when the entry has no status), the file name (or its `label`) at weight 550 with an ellipsis, its folder on a muted second line ("project root" for the session directory; the absolute folder outside it), `+N −M` (a zero count is left out unless the status implies it: an added file's `+N`, a deleted file's `−M`), and a chevron when a diff exists. Clicking opens the diff inline (400 px at most, scrolling); `@` on hover or keyboard focus inserts the path. Under the list, a hint "Click a file to see its diff · @ adds it to your message" when any file has a diff. A footer appears only when older history was omitted.
 
 ## 7. Details
 
-([details.png](design/side-panel/details.png))
+([gallery](dashboard/side-panel-details-dark.png))
 
 - **Context card.** Tokens in large type (`6.9k / 8.2k tokens`), the percent chip and a bar coloured by fill (warning from 80 %, error from 95 %), then one line with the retained messages, whether a summary exists and the auto-compact trigger ("auto compact off" without one, rounded), and **Compact now** (the composer's Compact context, disabled while it is).
 - **Usage card.** Key/value rows as in details.png: "Last turn" and "This session" (requests, then the input and output tokens when reported: "2 requests · 1,500 in · 40 out"), "Cache reads" for the last turn (requests that reported cache reads of all, and their tokens), then only what was reported: session cache reads, cache writes, cache read share (with the requests it covers: "66.7% (1 of 2)") and derived uncached input, each as "turn · session in session", a dash for a scope that did not report it. One note when the provider reports no input, output or cache token counts.
@@ -102,7 +102,7 @@ One card per command ([commands.png](design/side-panel/commands.png)): running c
 
 ## 8. Plugin blocks
 
-([steps.png](design/side-panel/steps.png), [kvtable.png](design/side-panel/kvtable.png))
+([gallery](dashboard/side-panel-gadget-dark.png))
 
 - **Block titles.** An 11 px uppercase group label; steps add how many are finished (done or skipped) of all (`Steps · 1 of 3`), a table its row count (`Results · 2 rows`).
 - **Steps.** A vertical stepper with a connecting line, the glyph on the first line, the current step at weight 550 with its detail and `aria-current="step"`, the duration muted on the right: how long a finished step took, or how long the running step has run (refreshed every 15 s).
@@ -115,7 +115,7 @@ One card per command ([commands.png](design/side-panel/commands.png)): running c
 
 ## 9. Questions (`ask_user` and form blocks)
 
-([question.png](design/side-panel/question.png))
+([gallery](dashboard/side-panel-question-dark.png))
 
 - A lone untitled form (an `ask_user` question) leads with its status chip and the question at 14 px, not the document title.
 - Single-select options as radio cards, multi-select as checkbox cards. When the choice has a paired `<id>_other` text field (`ask_user` with `allow_other`), an **Other…** card opens that field and focuses it; for a single choice it replaces the chosen option, and closing it clears its text. Other text fields are full width.
