@@ -118,12 +118,14 @@ test("context use is measured against the compact trigger or the window, coloure
   const warm = summarizeContext({ estimatedTokens: 6900, contextWindow: 8200 });
   assert.deepEqual(warm?.badge, { text: "84%", tone: "warning", label: "84% of the context window used" });
   assert.deepEqual(warm?.chips, [{ text: "84%", tone: "warning" }]);
-  assert.deepEqual(warm?.lines, [{ text: "~6.9k / 8.2k tokens" }]);
+  // With a limit the card shows the chip and the bar; the numbers stay in the summary.
+  assert.deepEqual(warm?.lines, []);
+  assert.equal(warm?.summary, "~6.9k / 8.2k tokens");
   assert.equal(warm?.progress?.tone, "warning");
   assert.ok(Math.abs(warm!.progress!.value - 6900 / 8200) < 1e-9);
   const trigger = summarizeContext({ estimatedTokens: 50_000, source: "provider", contextWindow: 200_000, compactTrigger: 52_000 });
   assert.deepEqual(trigger?.badge, { text: "96%", tone: "error", label: "96% of the auto-compact trigger used" });
-  assert.deepEqual(trigger?.lines, [{ text: "50k / 52k tokens" }]);
+  assert.equal(trigger?.summary, "50k / 52k tokens");
   const cool = summarizeContext({ estimatedTokens: 1000, contextWindow: 200_000 });
   assert.equal(cool?.badge?.tone, "muted");
   assert.equal(cool?.progress?.tone, "accent");

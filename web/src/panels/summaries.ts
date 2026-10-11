@@ -130,7 +130,8 @@ export function summarizeContext(context: ContextUsageInput | undefined | null):
   return {
     badge: { text: `${percent}%`, tone, label: `${percent}% of the ${usage.basis === "compact" ? "auto-compact trigger" : "context window"} used` },
     chips: [{ text: `${percent}%`, tone }],
-    lines: [{ text }],
+    // The card shows the chip and the bar (frame-overview.png); the numbers stay in the summary and in Details.
+    lines: [],
     progress: { value: Math.min(1, usage.percent / 100), tone: tone === "muted" ? "accent" : tone },
     summary: text,
   };

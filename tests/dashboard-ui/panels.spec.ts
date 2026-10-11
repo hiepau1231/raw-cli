@@ -295,15 +295,18 @@ test.describe("tab chrome", () => {
     const notes = page.getByRole("tabpanel");
     await expect(notes.getByText("First row")).toBeVisible();
     await expect(notes.locator("h4", { hasText: /^Notes$/i })).toHaveCount(0);
-    await expect(notes.locator(".sp-tab-heading h3")).toHaveText("Notes");
-    await expect(notes.locator(".sp-tab-heading h3")).toHaveAttribute("title", /Explains what this panel tracks\./);
+    // No header inside the tab (docs/design/side-panel/): the explanation is the tab's description and tooltip, and the
+    // panel's menu sits in the side panel's title row.
+    await expect(notes.locator("h3")).toHaveCount(0);
+    await expect(notes.locator(".sp-tab-header")).toHaveCount(0);
+    await expect(tab(page, "Notes")).toHaveAttribute("title", /^Notes · Explains what this panel tracks\./);
     await expect(notes).not.toContainText("Explains what this panel tracks.");
     await expect(notes.locator("h4")).toHaveText(["Checks"]);
-    // A done document shows a glyph on its tab and in the header, never a text pill.
+    await expect(page.locator(".side-panel-title").getByRole("button", { name: "Notes panel menu", exact: true })).toBeVisible();
+    // A done document shows a glyph on its tab, never a text pill.
     await expect(tab(page, "Notes").locator(".sp-doc-status.done")).toHaveCount(1);
-    await expect(tab(page, "Notes")).toHaveAccessibleDescription("Done");
-    await expect(notes.locator(".sp-tab-header .sp-doc-status.done")).toHaveCount(1);
-    await expect(notes.locator(".sp-tab-header .sp-chip")).toHaveCount(0);
+    await expect(tab(page, "Notes")).toHaveAccessibleDescription("Explains what this panel tracks. Done");
+    await expect(notes.locator(".sp-chip")).toHaveCount(0);
     // A document or block title that differs from the tab title still shows.
     await tab(page, "Other").click();
     await expect(page.getByRole("tabpanel").locator("h4")).toHaveText("Release plan");
@@ -778,7 +781,8 @@ test.describe("panel actions", () => {
     await openChat(page, raw);
     await send(page, "plan it");
     await expect(page.getByText("Step 3", { exact: true })).toBeVisible();
-    const heights = await Promise.all(["Step 1", "Step 2", "Step 3"].map(async (label) => (await row(page, label).locator(".todo-row").boundingBox())!.height));
+    // Step 1 is the Now card's row; the Next rows, one with its primary action, keep one height.
+    const heights = await Promise.all(["Step 2", "Step 3"].map(async (label) => (await row(page, label).locator(".todo-row").boundingBox())!.height));
     expect(new Set(heights).size).toBe(1);
     expect(heights[0]).toBeLessThanOrEqual(32);
     const button = row(page, "Step 2").getByRole("button", { name: "Actions for Step 2" });
@@ -788,7 +792,10 @@ test.describe("panel actions", () => {
     await row(page, "Step 2").hover();
     await expect(button).toHaveCSS("opacity", "1");
     await page.mouse.move(0, 0);
-    await button.focus();
+    // Keyboard focus shows it; Tab moves from the row's primary action to its menu button.
+    await row(page, "Step 2").getByRole("button", { name: "Mark done: Step 2" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(button).toBeFocused();
     await expect(button).toHaveCSS("opacity", "1");
   });
 

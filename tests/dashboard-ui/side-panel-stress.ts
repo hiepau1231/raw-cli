@@ -1,7 +1,8 @@
 /**
- * A session that fills every kind of side panel with real-length content (docs/side-panel-design.md §10): long Vietnamese
- * todo items in every state, files on a deep path and a short one, foreground Bash with a description, a failing command
- * with stderr, a background job that keeps streaming, a plugin panel with every block kind, and an `ask_user` question.
+ * A session that fills every kind of side panel with real-length content (docs/side-panel-design.md §10), the same data
+ * as the approved mockups (docs/design/side-panel/): long Vietnamese todo items in every state, a modified file on a deep
+ * path, an added and a deleted one, a timed-out command, foreground Bash with a description, a failing command with
+ * stderr, a background job that keeps streaming, a plugin panel with every block kind, and an `ask_user` question.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,11 +21,12 @@ export const ACTIVE_NOTE = "đang chờ phản hồi của máy chủ, khoảng 
 export const DEEP_FILE = "src/very/deep/nested/directory/structure/component-file-name-that-is-long.ts";
 export const todos = [
   { content: LONG, status: "done" },
-  { content: "Đọc log lỗi của lần chạy trước", status: "done" },
   { content: ACTIVE_TODO, status: "in_progress", note: ACTIVE_NOTE },
+  { content: "Gửi báo cáo tổng hợp cho nhóm tài liệu kèm danh sách liên kết hỏng", status: "pending" },
   { content: "Ngắn", status: "pending" },
   { content: "Bỏ qua bước này vì đã có kết quả từ hôm qua", status: "skipped" },
 ];
+export const TIMED_OUT = { command: "sleep 5", description: "npm test", timeout: 1000 };
 export const FOREGROUND = { command: "for page in $(cat pages.txt 2>/dev/null); do node scripts/check-links.mjs --page \"$page\" --verbose; done; echo checked", description: "Kiểm tra lại liên kết của từng trang sau khi cập nhật mục lục" };
 export const FAILING = { command: "printf 'error: missing semicolon\\n' >&2; exit 2", description: "Chạy linter" };
 export const BACKGROUND = { command: "for i in $(seq 1 100000); do echo \"tick $i đang chạy kiểm tra\"; sleep 1; done", description: "Theo dõi liên kết sau khi cập nhật mục lục", run_in_background: true };
@@ -42,13 +44,15 @@ export const gadget = {
   ],
 };
 
-const MESSAGES = ["todo", "write", "write2", "bash", "lint", "bg", "gadget", "ask"] as const;
+const MESSAGES = ["todo", "slow", "edit", "write", "delete", "bash", "lint", "bg", "gadget", "ask"] as const;
 export const stressScenario = {
-  agent: { tools: { use: ["builtin/todo", "builtin/write_file", "builtin/bash", "builtin/process", "builtin/ask_user", "local/gadget"], rules: [{ match: "local/gadget", effect: "allow" }, { match: "builtin/bash", effect: "allow" }, { match: "builtin/process", effect: "allow" }, { match: "builtin/write_file", effect: "allow" }] } },
+  agent: { tools: { use: ["builtin/todo", "builtin/write_file", "builtin/edit_file", "builtin/apply_patch", "builtin/bash", "builtin/process", "builtin/ask_user", "local/gadget"], rules: [{ match: "local/gadget", effect: "allow" }, { match: "builtin/bash", effect: "allow" }, { match: "builtin/process", effect: "allow" }, { match: "builtin/write_file", effect: "allow" }, { match: "builtin/edit_file", effect: "allow" }, { match: "builtin/apply_patch", effect: "allow" }] } },
   responses: [
     call("t1", "todo", { title: "Link check", todos }), done("ok"),
-    call("w1", "write_file", { path: DEEP_FILE, content: "a\nb\n" }), done("ok"),
-    call("w2", "write_file", { path: "README.md", content: "# x\n" }), done("ok"),
+    call("b0", "bash", TIMED_OUT), done("ok"),
+    call("e1", "edit_file", { path: DEEP_FILE, old_string: "export const b = 2;", new_string: "export const b = 3;\nexport const c = 4;" }), done("ok"),
+    call("w1", "write_file", { path: "README.md", content: "# Link check\n\nKiểm tra liên kết của các trang tài liệu.\n\nnpm test\n" }), done("ok"),
+    call("p1", "apply_patch", { patch: "*** Begin Patch\n*** Delete File: config/old-config.json\n*** End Patch" }), done("ok"),
     call("b1", "bash", FOREGROUND), done("ok"),
     call("b2", "bash", FAILING), done("ok"),
     call("b3", "bash", BACKGROUND), done("ok"),
@@ -57,8 +61,12 @@ export const stressScenario = {
   ],
 };
 
-/** The local `gadget` plugin with every block kind; install it before the chat is opened. */
-export function installStressTools(raw: { env: NodeJS.ProcessEnv }) {
+/** The local `gadget` plugin with every block kind and the files the session edits and deletes; install before the chat is opened. */
+export function installStressTools(raw: { env: NodeJS.ProcessEnv; root: string }) {
+  mkdirSync(join(raw.root, DEEP_FILE, ".."), { recursive: true });
+  writeFileSync(join(raw.root, DEEP_FILE), "export const a = 1;\nexport const b = 2;\n");
+  mkdirSync(join(raw.root, "config"), { recursive: true });
+  writeFileSync(join(raw.root, "config", "old-config.json"), "{ \"legacy\": true }\n");
   const dir = join(raw.env.XDG_CONFIG_HOME!, "raw", "tools", "gadget");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "tool.json"), JSON.stringify({ api_version: 2, id: "gadget", version: "1.0.0", name: "gadget", description: "Tool gadget.", input_schema: { type: "object", additionalProperties: false }, entry: "./index.mjs", panels: [{ id: "g", title: "Gadget", icon: "gauge", open: "never" }] }));

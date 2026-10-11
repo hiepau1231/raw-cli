@@ -18,14 +18,16 @@ The new design gives each panel the full height in its own tab, and presents eac
 
 The side panel follows the rest of the dashboard (the OpenAI/ChatGPT-like look of the session list and chat), not VS Code:
 
-- Inter, 13 px labels at weight 500 to 600, 11 to 12 px muted secondary text, 11 px uppercase group labels with 0.8 px tracking (`.group-label`).
-- Cards: 1 px `--border`, 10 px radius, `--panel` background, 10 to 12 px padding. Rows inside cards use the inset hover of `.session-row`.
+- **Type.** Inter (variable) for text and JetBrains Mono (variable) for code, both bundled with the dashboard under the SIL Open Font License 1.1 ([dashboard.md](dashboard.md#fonts)), so every system renders the mockups' type; no platform font is named. Body text 13 px at line height 1.45, titles 13 px at weight 550, 11 to 11.5 px muted secondary text, 11 px uppercase group labels with 0.8 px tracking.
+- **Spacing.** The values of `mockups.tsx` are the reference: the title row 14 px at weight 600 with 12 px padding, tabs 12.5 px with 7 px side padding, the tab body padded 10 px (12 px at the bottom) with 8 px between cards.
+- Cards: 1 px `--border`, 10 px radius, 10 by 11 px padding, 6 px between rows.
 - Chips for status: 11 px, weight 600, pill radius, tinted backgrounds derived from `--accent`, `--success`, `--warning` and `--error` in both themes. Status is never colour-only: every chip has a word or a glyph with an accessible name.
-- Monospace (`--mono`) only for commands, output and paths in code.
+- Monospace (`--font-mono`) only for commands, output and paths in code: 11.5 px on a `--code` background, 6 px radius.
+- **Row actions** (a checklist item's `⋯`, a file's `@`) appear on hover or keyboard focus, not after a click. With a pointer they reserve no column: an item's `⋯` floats over the row's right end, and a file's `@` takes its chevron's place, so labels and counts run to the edge as in the mockups. On touch screens they stay visible in their own column.
 
 ## 3. Frame: Overview and tabs
 
-The side panel has a compact title row (Side panel, close) and a **tab strip** under it:
+The side panel has a compact title row (Side panel, the selected panel's `⋯` menu, close) and a **tab strip** under it:
 
 1. **Overview**, always first.
 2. One tab per visible panel, in the stored per-agent order (the insertion rule of §13.1 is unchanged): declared tool panels, Commands, plugin and MCP panels.
@@ -33,12 +35,12 @@ The side panel has a compact title row (Side panel, close) and a **tab strip** u
 
 Overview and Details cannot be moved or hidden.
 
-- **Tabs.** The active tab shows its icon and label; inactive tabs show their icon and badge, and the label in their tooltip and accessible name. The strip scrolls horizontally when it overflows. An unseen dot marks a panel updated since it was last viewed.
-- **Badges.** Checklist progress `done/total`; files: the file count; Commands: the running count (accent), else the failed count (error), else the total; Details: the context use in percent (warning from 80 %, error from 95 %); other panels: `done/total` when the document reports progress. A done or failed document shows a small status glyph instead; there is no text pill. Closed and Stale show as a muted chip in the Overview card and the tab header.
+- **Tabs.** The active tab shows its icon and label; inactive tabs show their icon and badge, and the label in their tooltip and accessible name. The strip scrolls horizontally when it overflows, keeping the active tab in view. A tab's tooltip and accessible description give the panel's explanation (its document `subtitle`) as a sentence, then its state ("Tracks the plan. 2 of 5 done, New update"). An unseen dot marks a panel updated since it was last viewed.
+- **Badges.** Checklist progress `done/total`; files: the file count; Commands: the running count (accent), else the failed count (error), else the total; Details: the context use in percent (warning from 80 %, error from 95 %); other panels: `done/total` when the document reports progress. A done or failed document shows a small status glyph instead; there is no text pill. Closed and Stale show as a muted chip in the Overview card; a closed panel's tab says so in a banner above its content.
 - **Keyboard.** WAI-ARIA tabs with manual activation: arrow keys, `Home` and `End` move focus between tabs, `Enter` or `Space` selects. Tab moves into the active panel.
-- **Reorder and hide.** Drag a tab along the strip, or use **Move left**, **Move right** and **Hide tab** in the tab header's `⋯` menu. Order and hidden tabs are stored per agent as before.
+- **Reorder and hide.** Drag a tab along the strip, or use **Move left**, **Move right** and **Hide tab** in the title row's `⋯` menu, which acts on the selected tab. Order and hidden tabs are stored per agent as before.
 - **Overview.** One card per visible panel: icon, title, status on the right (badge, chips, `+a −r`), up to two key lines from the panel's content (the todo item in progress; the running and failed commands; file totals and names; the current step; else the summary), and a thin progress bar when progress exists. Details appears as a Context card. Clicking a card selects its tab. Hidden panels are listed in a final row, "N hidden", that shows them again.
-- **Tab content.** A header row with the full title, a muted summary and the `⋯` menu (panel actions, Hide completed for checklists, Move left/right, Hide tab), then the stale banner and rejected-update notice, then the content, scrolling inside the remaining height. There is no height sharing and no divider.
+- **Tab content.** No header inside the tab, as in the mockups: the tab names the panel, its tooltip explains it, and the title row's `⋯` menu holds the panel actions, Hide completed for checklists, Move left/right and Hide tab. The content starts with the stale or closed banner and the rejected-update notice, then scrolls inside the remaining height. There is no height sharing and no divider.
 
 ### 3.1 What stays from §13.1
 
@@ -55,12 +57,12 @@ Overview and Details cannot be moved or hidden.
 
 ## 4. Commands
 
-One card per command, newest first by start time ([commands.png](design/side-panel/commands.png)).
+One card per command ([commands.png](design/side-panel/commands.png)): running commands first, then, under an **Earlier** label, the others; each group newest first by start time. The label appears only when the filter shows both groups.
 
 - **Filter.** Chips `All N`, `Running N`, `Failed N` (failed includes timed out and lost), stored per session. An empty filter shows a short note and keeps the chips. The chip counts cover the listed rows; "Older commands not shown" closes the list when the server cut older ones.
 - **Running card.** Accent border, a `Running` chip with a spinner and the ticking duration, the call's description as the title (else the command), the command line in monospace with an ellipsis and the full text in `title`, the last three output lines for foreground Bash, and a footer: start time, foreground or background, **Output**, and **Stop for background jobs only**. Foreground Bash stops with the turn's Stop in the composer, because per-command Stop exists only for supervisor-managed processes.
 - **Failed card.** Error border, an `Exit N` chip, duration and time, title, command, the last error lines, **Copy** and **Output**.
-- **Timed out, stopped, lost.** One compact card with its own chip.
+- **Timed out, stopped, lost.** One compact card: the state's glyph, the title, the chip as a word only (the glyph already marks the state), the duration, and the command as a muted second line when the title is the description. The record's error text is in the row's tooltip and in the opened card.
 - **Succeeded.** One compact line: check glyph, title with ellipsis, duration; the command as a muted second line when the title is the description. Activating a compact card shows the whole card, opens its output and moves focus to its **Output** button.
 - **Cards in use stay put.** A card whose output is open, that holds focus, that is stopping or that shows a notice stays in the current filter after its state changes, and leaves it only when it is no longer in use. New cards inserted above keep the reader's scroll anchor.
 - **Output** opens the terminal frame inside the card (auto-follow, Copy output, Load more, full output and `@`). Background output is read through the process control only after Output is opened; there is no live tail for background jobs because every read of their output is policy-checked and audited.
@@ -85,16 +87,17 @@ One card per command, newest first by start time ([commands.png](design/side-pan
 ([files.png](design/side-panel/files.png))
 
 - A summary line "N files changed" with `+a −r` (each only when known) and a ratio bar when both are known.
-- Rows: a coloured status letter (A, M, D, R; a file icon when the entry has no status), the file name (or its `label`) in bold with an ellipsis, its folder on a muted second line ("project root" for the session directory; the absolute folder outside it), `+N −M`, and a chevron when a diff exists. Clicking opens the diff inline (400 px at most, scrolling); `@` on hover or focus inserts the path. A footer appears only when older history was omitted.
+- Rows: a coloured status letter (A, M, D, R; a file icon when the entry has no status), the file name (or its `label`) at weight 550 with an ellipsis, its folder on a muted second line ("project root" for the session directory; the absolute folder outside it), `+N −M` (a zero count is left out unless the status implies it: an added file's `+N`, a deleted file's `−M`), and a chevron when a diff exists. Clicking opens the diff inline (400 px at most, scrolling); `@` on hover or keyboard focus inserts the path. Under the list, a hint "Click a file to see its diff · @ adds it to your message" when any file has a diff. A footer appears only when older history was omitted.
 
 ## 7. Details
 
 ([details.png](design/side-panel/details.png))
 
-- **Context card.** Tokens in large type (`6.9k / 8.2k tokens`), the percent chip and a bar coloured by fill (warning from 80 %, error from 95 %), then one line with the retained messages, whether a summary exists and the auto-compact trigger ("auto compact off" without one, rounded), the window, input budget, output reserve and exact auto-compact trigger when known, **Compact now** (the composer's Compact context, disabled while it is), and the history note with the measurement time.
-- **Usage card.** A table with Last turn and Session columns and a row only for a measure either reports (requests always; input, output, cache read and write tokens, cache coverage, cache read share and derived uncached input when measured; a dash for the column that did not report it); one note when the provider reports no input, output or cache token counts.
+- **Context card.** Tokens in large type (`6.9k / 8.2k tokens`), the percent chip and a bar coloured by fill (warning from 80 %, error from 95 %), then one line with the retained messages, whether a summary exists and the auto-compact trigger ("auto compact off" without one, rounded), and **Compact now** (the composer's Compact context, disabled while it is).
+- **Usage card.** Key/value rows as in details.png: "Last turn" and "This session" (requests, then the input and output tokens when reported: "2 requests · 1,500 in · 40 out"), "Cache reads" for the last turn (requests that reported cache reads of all, and their tokens), then only what was reported: session cache reads, cache writes, cache read share (with the requests it covers: "66.7% (1 of 2)") and derived uncached input, each as "turn · session in session", a dash for a scope that did not report it. One note when the provider reports no input, output or cache token counts.
 - **Summary card** when a summary exists (expandable, copyable).
 - **Continue in terminal** with the copyable resume command.
+- **Context limits.** The window, input budget, output reserve and exact auto-compact trigger when known, the estimated or provider-reported context tokens, and the history note with the measurement time.
 - **Last attached capabilities** (tools, skills, variables) and **Session** (ID, workspace, config for the next turn, a previously saved config when it differs, model) in the final cards. Nothing Details shows today is dropped; unreported values are covered by the note.
 
 ## 8. Plugin blocks

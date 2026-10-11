@@ -31,8 +31,8 @@ test.describe("Files changed accumulated successes", () => {
     await send(page, "patch files", 1);
     await show(page);
     await expect(section(page).locator(".panel-files li")).toHaveCount(2);
-    // The explanation is in the tab header's tooltip, not repeated in the body (docs/side-panel-design.md §3).
-    await expect(section(page).locator(".sp-tab-heading h3")).toHaveAttribute("title", /Successful tool writes in this session; not Git status or Bash edits\./);
+    // The explanation is the tab's description and tooltip, not repeated in the body (docs/side-panel-design.md §3).
+    await expect(page.getByRole("tab", { name: "Files changed", exact: true })).toHaveAttribute("title", /Successful tool writes in this session; not Git status or Bash edits\./);
     await expect(section(page)).not.toContainText("Successful tool writes");
     await expect(section(page).locator(".panel-files")).toContainText("alpha.txt");
     await expect(section(page).locator(".panel-files")).toContainText("beta.txt");
@@ -45,8 +45,8 @@ test.describe("Files changed accumulated successes", () => {
     expect(existsSync(join(raw.root, "failed.txt"))).toBe(false);
     // A source-control list (docs/tool-ux-design.md §6.3): the name, its directory muted, the session's +/− and the status letter.
     // alpha: +1 then +1 −1; beta: +1 then +2 −1; gamma: +1.
-    await expect(section(page).locator(".sp-tab-summary")).toHaveText("3 files · +6 −2");
-    await expect(section(page).locator(".sp-tab-header .sp-chip")).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Files changed", exact: true })).toHaveAccessibleDescription(/ 3 files(, |$)/);
+    await expect(section(page).locator(".sp-chip")).toHaveCount(0);
     // The block's own summary: the count, the totals and a ratio bar of added to removed lines.
     await expect(section(page).locator(".files-count")).toHaveText("3 files changed");
     await expect(section(page).locator(".files-head .sp-stat.added")).toHaveText("+6");
@@ -55,14 +55,16 @@ test.describe("Files changed accumulated successes", () => {
     await expect(row(page, "gamma.txt").locator(".panel-file-dir")).toHaveText("src");
     const color = (selector: string) => row(page, "gamma.txt").locator(selector).evaluate((element) => getComputedStyle(element).color);
     expect(await color(".panel-file-dir"), "the directory is muted").not.toBe(await color(".panel-file-name"));
-    expect(await row(page, "gamma.txt").locator(".panel-file-name").evaluate((element) => Number(getComputedStyle(element).fontWeight)), "the name is bold").toBeGreaterThanOrEqual(600);
+    expect(await row(page, "gamma.txt").locator(".panel-file-name").evaluate((element) => Number(getComputedStyle(element).fontWeight)), "the name is bold").toBeGreaterThanOrEqual(550);
     await expect(row(page, "alpha.txt").locator(".panel-file-dir")).toHaveText("project root");
-    for (const [name, added, removed] of [["alpha.txt", "+2", "−1"], ["beta.txt", "+3", "−1"], ["gamma.txt", "+1", "−0"]]) {
+    // A zero count is left out, as in files-changed.png: gamma shows its +1 only.
+    for (const [name, added, removed] of [["alpha.txt", "+2", "−1"], ["beta.txt", "+3", "−1"], ["gamma.txt", "+1", undefined]]) {
       await expect(row(page, name!).locator(".panel-file-added")).toHaveText(added!);
-      await expect(row(page, name!).locator(".panel-file-removed")).toHaveText(removed!);
+      if (removed) await expect(row(page, name!).locator(".panel-file-removed")).toHaveText(removed);
+      else await expect(row(page, name!).locator(".panel-file-removed")).toHaveCount(0);
       await expect(row(page, name!).locator(".panel-file-status")).toHaveText("A");
-      // Two lines: the name, then the folder; a chevron marks the diff.
-      expect((await row(page, name!).boundingBox())!.height).toBeLessThanOrEqual(44);
+      // Two lines: the name, then the folder, in the mockup's 6 px padding; a chevron marks the diff.
+      expect((await row(page, name!).boundingBox())!.height).toBeLessThanOrEqual(48);
       await expect(row(page, name!).locator(".panel-file-chevron")).toHaveCount(1);
     }
     // Hide completed belongs to checklists only.
@@ -109,8 +111,13 @@ test.describe("Files changed accumulated successes", () => {
     await row(page, "alpha.txt").hover();
     await expect(insert).toHaveCSS("opacity", "1");
     await page.mouse.move(0, 0);
-    await insert.focus();
+    // Keyboard focus shows it too: Tab from the row's file button reaches it, in place of the chevron.
+    await row(page, "alpha.txt").locator("button.panel-file").focus();
+    await page.keyboard.press("Tab");
+    await expect(insert).toBeFocused();
     await expect(insert).toHaveCSS("opacity", "1");
+    await expect(row(page, "alpha.txt").locator(".panel-file-chevron")).toBeHidden();
+    expect((await insert.boundingBox())!.width).toBe(20);
     await row(page, "gamma.txt").hover();
     await row(page, "gamma.txt").getByRole("button", { name: "Insert @src/gamma.txt into the message" }).click();
     await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("@src/gamma.txt ");

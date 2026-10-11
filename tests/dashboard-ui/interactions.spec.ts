@@ -18,8 +18,8 @@ for (const placement of ["chat","sidebar"]) test(`${placement} form survives rel
   await page.getByRole("textbox",{name:"Message"}).fill("ask");await page.getByRole("button",{name:"Send",exact:true}).click();
   if(placement==="sidebar") await page.getByRole("button",{name:"Open question",exact:true}).click();
   await expect(page.getByRole("textbox",{name:"Your answer",exact:true})).toBeVisible();
-  // The question's explanation: in the tab header's tooltip in the side panel, in the body inline.
-  if(placement==="sidebar") await expect(page.getByRole("tabpanel").locator(".sp-tab-heading h3")).toHaveAttribute("title",/Answer to continue the task\./);
+  // The question's explanation: the tab's description and tooltip in the side panel, the body inline.
+  if(placement==="sidebar") await expect(page.getByRole("tab",{name:"Input",exact:true})).toHaveAccessibleDescription(/^Answer to continue the task\./);
   else await expect(page.locator(".inline-tool-view").first()).toContainText("Answer to continue the task.");
   await page.reload();
   if(placement==="sidebar") await page.getByRole("button",{name:"Open question",exact:true}).click();

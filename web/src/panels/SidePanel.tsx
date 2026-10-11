@@ -9,7 +9,7 @@ import { offeredActions, type ActionHost } from "./actions.js";
 import { ToolView } from "./ToolView.js";
 import { sidebarPresentation } from "./interaction-state.js";
 import { Overview, type OverviewCard } from "./Overview.js";
-import { TabHeader, type TabMenu } from "./TabHeader.js";
+import { PanelMenu, type TabMenu } from "./PanelMenu.js";
 import { PanelGlyph, TabStrip, type TabSpec } from "./Tabs.js";
 import { summarizeCommands, summarizeContext, summarizePanel, type PanelSummary } from "./summaries.js";
 import {
@@ -38,12 +38,15 @@ export interface SidePanelProps {
   context?: ContextUsageInput | undefined;
   /** The Details tab content (the former inspector). */
   details: ReactNode;
+  /** The title row: the side panel's heading and its Close button, with the selected panel tab's menu between them. */
+  heading: ReactNode;
+  close: ReactNode;
 }
 
 const iconFor = (item: PanelStackItem) => (item.panel === COMMANDS_ID ? <SquareTerminal size={15} aria-hidden="true" /> : <PanelGlyph icon={item.icon} size={15} />);
 
 /** The side panel: Overview, one tab per shown panel, and Details (docs/side-panel-design.md §3). */
-export function SidePanel({ commands = [], commandsOmitted, sessionCwd, sessionId, agent, items, prefs, setPrefs, history, onInsert, actions, context, details }: SidePanelProps) {
+export function SidePanel({ commands = [], commandsOmitted, sessionCwd, sessionId, agent, items, prefs, setPrefs, history, onInsert, actions, context, details, heading, close }: SidePanelProps) {
   const base = useId();
   const panelId = `${base}-panel`;
   // Panel ids hold `/` and `#`; each other character is escaped as `-<hex>`, so two ids never share a DOM id.
@@ -114,7 +117,8 @@ export function SidePanel({ commands = [], commandsOmitted, sessionCwd, sessionI
     { id: OVERVIEW_ID, title: "Overview", icon: <LayoutGrid size={15} aria-hidden="true" />, movable: false },
     ...visible.map((item): TabSpec => {
       const summary = summaryOf(item);
-      return { id: item.panel, title: item.title, icon: iconFor(item), badge: summary.badge, status: summary.status, unseen: unseen(prefs, sessionId, item), movable: true };
+      return { id: item.panel, title: item.title, icon: iconFor(item), badge: summary.badge, status: summary.status, unseen: unseen(prefs, sessionId, item), movable: true,
+        about: shownOf(item).document?.subtitle };
     }),
     { id: DETAILS_ID, title: "Details", icon: <Gauge size={15} aria-hidden="true" />, badge: contextSummary?.badge, movable: false },
   ];
@@ -125,22 +129,22 @@ export function SidePanel({ commands = [], commandsOmitted, sessionCwd, sessionI
   const body = () => {
     if (active === OVERVIEW_ID)
       return <Overview cards={cards} hidden={hidden.map((item) => ({ id: item.panel, title: item.title }))} onOpen={open} onShow={(panel) => setPrefs((old) => setHidden(old, agent, panel, false))} />;
-    if (active === DETAILS_ID) return <><TabHeader title="Details" summary={contextSummary} />{details}</>;
+    if (active === DETAILS_ID) return details;
     const item = selected!;
     const rejected = rejectedCode(history, item.panel);
-    return (
-      <>
-        <TabHeader title={item.title} tooltip={shownOf(item).document?.subtitle} summary={summaryOf(item)} menu={menuFor(item)} />
-        {item.panel === COMMANDS_ID ? <Commands items={commands} omitted={commandsOmitted} sessionId={sessionId} sessionCwd={sessionCwd} onInsert={onInsert} /> : (
-          <ToolView item={item} scope={sessionId} actions={actions} onInsert={onInsert} hideCompleted={prefs.hideCompleted}>
-            {rejected && <p className="panel-banner error" role="note">Update rejected: {rejected}</p>}
-          </ToolView>
-        )}
-      </>
+    return item.panel === COMMANDS_ID ? <Commands items={commands} omitted={commandsOmitted} sessionId={sessionId} sessionCwd={sessionCwd} onInsert={onInsert} /> : (
+      <ToolView item={item} scope={sessionId} actions={actions} onInsert={onInsert} hideCompleted={prefs.hideCompleted}>
+        {rejected && <p className="panel-banner error" role="note">Update rejected: {rejected}</p>}
+      </ToolView>
     );
   };
   return (
     <div className="side-panel">
+      <div className="section-heading side-panel-title">
+        {heading}
+        {selected && <PanelMenu title={selected.title} menu={menuFor(selected)} />}
+        {close}
+      </div>
       <TabStrip tabs={tabs} active={active} panelId={panelId} idOf={idOf} onSelect={select}
         onDrop={(tab, target) => setPrefs((old) => setOrder(old, agent, placeAt(currentOrder(items, old, agent), tab, target)))} />
       {/* A new key per tab starts each tab at its top; updates inside a tab keep the element, so nothing scrolls. */}

@@ -1,11 +1,8 @@
 :root {
-  font-family:
-    Inter,
-    ui-sans-serif,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  /* Inter and JetBrains Mono are bundled (SIL Open Font License 1.1); no platform font is named. */
+  --font-sans: "Inter Variable", sans-serif;
+  --font-mono: "JetBrains Mono Variable", monospace;
+  font-family: var(--font-sans);
   font-size: 14px;
   color-scheme: light;
   --canvas: #ffffff;
@@ -48,6 +45,13 @@
   --code-size: 14px;
   --context-width: 260px;
   --inspector-width: 320px;
+}
+/* Code everywhere uses the bundled monospace, never the browser's default. */
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -1054,7 +1058,7 @@ main > .error-banner {
 }
 .path-list dd {
   margin: 6px 0 16px;
-  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 .resume-command {
@@ -1145,7 +1149,7 @@ summary::-webkit-details-marker {
   font-size: 12px;
 }
 code.tool-summary {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 .tool-status {
   display: inline-flex;
@@ -1230,7 +1234,7 @@ code.tool-summary {
 .tool-text,
 .code-file code,
 .diff-view code {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-family: var(--font-mono);
   white-space: pre;
 }
 .tool-text {
@@ -1304,7 +1308,7 @@ code.tool-summary {
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--code);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
   max-height: 400px;
@@ -1385,7 +1389,7 @@ code.tool-summary {
   font-weight: 600;
 }
 .approval .approval-summary {
-  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }
 .approval .approval-arguments summary {
@@ -1437,7 +1441,7 @@ code.tool-summary {
   tab-size: 2;
 }
 .code-block code {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-family: var(--font-mono);
   white-space: pre;
 }
 .markdown {
@@ -1475,7 +1479,7 @@ code.tool-summary {
   color: var(--muted);
 }
 .markdown :not(pre) > code {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
   background: var(--code);
   border-radius: 4px;
@@ -3492,17 +3496,53 @@ code.tool-summary {
   --sp-success-text: color-mix(in srgb, var(--success) 75%, var(--text));
 }
 :root[data-theme="dark"] .inspector {
+  /* The mockups' dark palette: the canvas surface, solid status tints and their plain colours as text. */
+  background: var(--canvas);
   --sp-card: #141020;
+  --sp-tint-success: #10261c;
+  --sp-tint-warning: #2a2110;
+  --sp-tint-error: #2a0f1a;
+  --sp-warning-text: var(--warning);
+  --sp-success-text: var(--success);
+}
+:root[data-theme="dark"] .command-card[data-tone="running"] {
+  border-color: #4c3a86;
+  box-shadow: inset 0 0 0 1px #2b2147;
+}
+:root[data-theme="dark"] .panel-file-diff .diff-add {
+  background: #0f2a1d;
+  color: #bff0d6;
+}
+:root[data-theme="dark"] .panel-file-diff .diff-remove {
+  background: #2f1019;
+  color: #ffc9d3;
+}
+.panel-file-diff .diff-hunk {
+  color: var(--accent-text);
 }
 .inspector > .section-heading {
   flex: none;
 }
+/* The side panel follows docs/design/side-panel/mockups.tsx: its sizes, spacing and radii are the reference. */
 .side-panel-title {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0;
-  padding: 14px 12px 6px 16px;
+  padding: 12px 8px 8px 12px;
 }
 .side-panel-title h2 {
-  font-size: 15px;
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+.side-panel-title .icon-button {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 5px;
 }
 .side-panel {
   display: flex;
@@ -3528,27 +3568,28 @@ code.tool-summary {
   flex: none;
   align-items: center;
   gap: 5px;
-  min-height: 34px;
-  padding: 0 7px;
+  min-height: 0;
+  padding: 8px 7px 9px;
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: var(--panel-font-md);
+  font-size: 12.5px;
+  line-height: 18px;
   white-space: nowrap;
   cursor: pointer;
   touch-action: pan-x;
   user-select: none;
 }
-.sp-tab:hover {
+.sp-tab:hover:not(:disabled) {
+  background: transparent;
   color: var(--text);
 }
 .sp-tab.active {
   color: var(--text);
   border-bottom-color: var(--accent);
-  font-weight: 500;
 }
 .sp-tab:focus-visible {
   outline: 2px solid var(--focus);
@@ -3566,8 +3607,8 @@ code.tool-summary {
   border-radius: 999px;
   background: var(--panel-hover);
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: 10.5px;
+  font-weight: 400;
   line-height: 16px;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -3607,8 +3648,9 @@ code.tool-summary {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: var(--space-3);
-  font-size: var(--panel-font-md);
+  padding: 10px 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
 }
 .sp-content:focus-visible {
   outline: 2px solid var(--focus);
@@ -3622,41 +3664,6 @@ code.tool-summary {
 }
 .sp-content .code-block .code-label {
   border-bottom: 0;
-}
-.sp-tab-header {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-}
-.sp-tab-heading {
-  flex: 1;
-  min-width: 0;
-}
-.sp-tab-heading h3 {
-  margin: 0;
-  font-size: var(--panel-font-lg);
-  font-weight: 600;
-  line-height: 20px;
-  overflow-wrap: break-word;
-}
-.sp-tab-summary {
-  margin: 1px 0 0;
-  color: var(--muted);
-  font-size: var(--panel-font-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sp-tab-header .sp-card-status {
-  margin-top: 1px;
-}
-.sp-tab-menu {
-  flex: none;
-  min-width: 26px;
-  min-height: 26px;
-  padding: 4px;
-  margin: -3px -4px 0 0;
 }
 .sp-overview {
   display: flex;
@@ -3706,7 +3713,7 @@ button.sp-card:hover:not(:disabled) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--panel-font-lg);
+  font-size: 13px;
   font-weight: 600;
 }
 .sp-card-status {
@@ -3752,7 +3759,7 @@ button.sp-card:hover:not(:disabled) {
 }
 .sp-stat,
 .sp-meta {
-  font-size: var(--panel-font-sm);
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -3764,6 +3771,7 @@ button.sp-card:hover:not(:disabled) {
 }
 .sp-meta {
   color: var(--muted);
+  font-size: 11px;
 }
 .sp-bar {
   display: block;
@@ -3790,16 +3798,16 @@ button.sp-card:hover:not(:disabled) {
 /* A key line: the glyph sits on the first text line, the text wraps to at most two lines. */
 .sp-card-line {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  line-height: 18px;
+  font-size: 12px;
+  line-height: 17px;
 }
 .sp-line-glyph {
   display: inline-flex;
   flex: none;
   align-items: center;
-  height: 18px;
   color: var(--muted);
 }
 .glyph-running .sp-line-glyph {
@@ -3811,24 +3819,25 @@ button.sp-card:hover:not(:disabled) {
 .glyph-done .sp-line-glyph {
   color: var(--success);
 }
+/* A key line is one line; a plain line (file names, a summary) is muted and wraps. */
 .sp-line-text {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
   overflow: hidden;
-  overflow-wrap: break-word;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sp-card-line:not(.glyph-running):not(.glyph-failed):not(.glyph-done):not(.glyph-pending) .sp-line-text {
   color: var(--muted);
-  font-size: var(--panel-font-sm);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .sp-line-meta {
   flex: none;
   color: var(--muted);
-  font-size: var(--panel-font-sm);
+  font-size: 11px;
   white-space: nowrap;
 }
 .sp-hidden {
@@ -3936,8 +3945,10 @@ button.sp-card:hover:not(:disabled) {
 .panel-status.status-failed {
   color: var(--error);
 }
-.panel-status.status-blocked,
 .panel-status.status-in_progress {
+  color: var(--accent-text);
+}
+.panel-status.status-blocked {
   color: var(--warning);
 }
 .panel-status.status-pending,
@@ -3968,9 +3979,9 @@ button.sp-card:hover:not(:disabled) {
   background: transparent;
   color: var(--accent-text);
   font: inherit;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--panel-font-md);
-  line-height: 20px;
+  line-height: inherit;
   text-decoration: underline;
   cursor: pointer;
   overflow-wrap: anywhere;
@@ -3994,19 +4005,20 @@ button.sp-card:hover:not(:disabled) {
   min-width: 0;
   margin: 0;
   color: var(--text);
-  font-size: var(--panel-font-lg);
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 550;
   overflow-wrap: anywhere;
 }
 .todo-count {
   flex: none;
   margin-left: auto;
   color: var(--muted);
-  font-size: var(--panel-font-sm);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.sp-bar.todo-bar {
+.sp-bar.todo-bar,
+.details-card .sp-bar {
   height: 6px;
 }
 .todo-group {
@@ -4014,10 +4026,15 @@ button.sp-card:hover:not(:disabled) {
   flex-direction: column;
   min-width: 0;
 }
+.todo-group > .panel-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .todo-now {
-  gap: 2px;
-  padding: 8px 7px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  gap: 5px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
   border-radius: 10px;
   background: var(--sp-tint-accent);
 }
@@ -4030,12 +4047,12 @@ button.sp-card:hover:not(:disabled) {
   text-transform: uppercase;
 }
 .todo-kicker {
-  padding: 0 4px 2px;
   color: var(--accent-text);
+  font-size: 10.5px;
   font-weight: 700;
 }
 .todo-group-label {
-  padding: 4px 4px 2px;
+  padding: 6px 2px 8px;
   color: var(--muted);
 }
 .todo .panel-checklist li {
@@ -4044,9 +4061,17 @@ button.sp-card:hover:not(:disabled) {
 }
 .todo-row {
   flex-wrap: nowrap;
-  padding: 4px;
+  gap: 9px;
+  padding: 5px 4px;
   border-radius: 7px;
-  line-height: 20px;
+  line-height: 1.45;
+}
+.todo-row > .panel-status {
+  padding-top: 2px;
+}
+.todo-now .todo-row {
+  gap: 8px;
+  padding: 0;
 }
 .todo-row:hover {
   background: var(--panel-hover);
@@ -4073,13 +4098,11 @@ button.sp-card:hover:not(:disabled) {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
-.todo-current {
-  font-weight: 500;
-}
 .todo-note {
+  margin-top: 5px;
   color: var(--muted);
-  font-size: var(--panel-font-sm);
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 .todo-state {
@@ -4100,17 +4123,18 @@ button.sp-card:hover:not(:disabled) {
   gap: 4px;
   width: 100%;
   min-height: 0;
-  padding: 4px;
+  padding: 6px 2px 0;
   border: 0;
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
   font-family: inherit;
+  line-height: 1.45;
   text-align: left;
   cursor: pointer;
 }
 .todo-completed-toggle:hover {
-  background: var(--panel-hover);
+  background: transparent;
   color: var(--text);
 }
 .todo-completed-toggle[aria-expanded="true"] .panel-chevron {
@@ -4131,8 +4155,22 @@ button.sp-card:hover:not(:disabled) {
 .files-count {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: var(--panel-font-lg);
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 550;
+}
+.files .panel-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+.files-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.files-hint svg {
+  vertical-align: -1px;
 }
 .files-ratio {
   display: flex;
@@ -4155,10 +4193,11 @@ button.sp-card:hover:not(:disabled) {
   flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-1);
-  padding: 0 4px 0 0;
+  padding: 0;
   border-radius: 8px;
 }
-.panel-file-row:hover {
+.panel-file-row:hover,
+.panel-file-row:has(> .panel-file[aria-expanded="true"]) {
   background: var(--panel-hover);
 }
 .panel-file {
@@ -4169,14 +4208,14 @@ button.sp-card:hover:not(:disabled) {
   gap: 9px;
   min-width: 0;
   min-height: 0;
-  padding: 5px 6px;
+  padding: 6px;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: var(--panel-font-md);
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 1.45;
   text-align: left;
 }
 button.panel-file {
@@ -4201,18 +4240,17 @@ button.panel-file {
   white-space: nowrap;
 }
 .panel-file-name {
-  font-weight: 600;
+  font-weight: 550;
 }
 .panel-file-dir {
   color: var(--muted);
-  font-size: var(--panel-font-sm);
-  line-height: 16px;
+  font-size: 11.5px;
 }
 .panel-file-stats {
   display: inline-flex;
   flex: none;
   gap: var(--space-1);
-  font-size: var(--panel-font-sm);
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
 }
 .panel-file-added {
@@ -4259,11 +4297,44 @@ button.panel-file {
   background: var(--sp-tint-accent);
   color: var(--accent-text);
 }
+/* The diff under a file: a dark code panel; its Copy button shows on hover or focus. */
 .panel-file-diff {
-  margin-left: 25px;
+  margin: 2px 0 4px 26px;
 }
 .panel-file-diff .code-block {
-  margin: 2px 0 var(--space-1);
+  position: relative;
+  margin: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--code);
+  overflow: hidden;
+}
+.panel-file-diff .code-label {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.panel-file-diff .code-label > span {
+  display: none;
+}
+.panel-file-diff .code-label .copy-button,
+.panel-file-diff .code-label button {
+  opacity: 0;
+}
+.panel-file-diff .code-block:hover .code-label button,
+.panel-file-diff .code-label button:focus-visible {
+  opacity: 1;
+}
+.panel-file-diff .code-block.diff-view pre {
+  padding: 0;
+  font-size: 11px;
+  line-height: 17px;
+}
+.panel-file-diff .diff-line {
+  padding: 0 8px;
 }
 .panel-progress-block {
   display: grid;
@@ -4434,7 +4505,7 @@ button.panel-file {
 .panel-glyph-button:disabled {
   cursor: default;
 }
-/* Row actions (list and table rows) fit the 24 px row and show on hover or keyboard focus, and while their menu is open. */
+/* Row actions (list and table rows) fit the 24 px row and show on hover or keyboard focus (not a click's), and while their menu is open. */
 .panel-row .panel-action-menu,
 .panel-row .panel-row-action,
 .panel-table td .panel-action-menu {
@@ -4447,9 +4518,9 @@ button.panel-file {
   opacity: 0;
 }
 .panel-row:hover .panel-action-menu,
-.panel-row:focus-within .panel-action-menu,
+.panel-row:has(:focus-visible) .panel-action-menu,
 .panel-row:hover .panel-row-action,
-.panel-row:focus-within .panel-row-action,
+.panel-row:has(:focus-visible) .panel-row-action,
 .panel-row .panel-action-menu[data-state="open"],
 .panel-table tr:hover .panel-action-menu,
 .panel-table tr:focus-within .panel-action-menu,
@@ -4461,6 +4532,44 @@ button.panel-file {
   .panel-row .panel-row-action,
   .panel-table td .panel-action-menu {
     opacity: 1;
+  }
+}
+/* With a pointer, a row's action floats over the row's right end instead of reserving a column, so text and stats run
+   to the edge as in the mockups. The pointer over the row is what shows it, so a hidden action is never clicked. */
+@media (hover: hover) {
+  .panel-row {
+    position: relative;
+  }
+  .panel-row > .panel-action-menu,
+  .panel-row > .panel-row-action {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    z-index: 1;
+    border-radius: 6px;
+    background: var(--panel-hover);
+  }
+  /* A file row's @ takes the chevron's place instead, so it overlaps no other target: collapsed until the row is hovered
+     or keyboard-focused, while still reachable with Tab. */
+  .panel-file-row > .panel-row-action {
+    position: static;
+    width: 0;
+    min-width: 0;
+    margin-left: -4px;
+    padding: 0;
+    overflow: hidden;
+    background: transparent;
+  }
+  .panel-file-row:hover > .panel-row-action,
+  .panel-file-row:has(:focus-visible) > .panel-row-action {
+    width: 20px;
+    min-width: 20px;
+    margin: 0 3px 0 0;
+    padding: 1px;
+  }
+  .panel-file-row:hover .panel-file-chevron,
+  .panel-file-row:has(:focus-visible) .panel-file-chevron {
+    display: none;
   }
 }
 .panel-block-header .panel-action-menu {
@@ -4483,7 +4592,7 @@ button.panel-file {
   min-width: 0;
 }
 .details-card {
-  gap: 8px;
+  gap: 6px;
 }
 .details-card-head {
   display: flex;
@@ -4511,12 +4620,14 @@ button.panel-file {
   letter-spacing: -0.3px;
   font-variant-numeric: tabular-nums;
 }
-.details-of,
+.details-of {
+  color: var(--muted);
+}
 .details-line,
 .details-hint,
 .details-note {
   color: var(--muted);
-  font-size: var(--panel-font-sm);
+  font-size: 11px;
 }
 .details-line,
 .details-hint,
@@ -4534,10 +4645,10 @@ button.panel-file {
 }
 .details-kv {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px 10px;
+  grid-template-columns: auto 1fr;
+  gap: 5px 10px;
   margin: 0;
-  font-size: var(--panel-font-sm);
+  font-size: 12.5px;
 }
 .details-kv > div {
   display: contents;
@@ -4553,39 +4664,20 @@ button.panel-file {
 .details-actions {
   display: flex;
 }
-.details-usage {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--panel-font-sm);
-  font-variant-numeric: tabular-nums;
-}
-.details-usage th,
-.details-usage td {
-  padding: 3px 0;
-  text-align: right;
-  font-weight: 400;
-}
-.details-usage thead th {
-  color: var(--muted);
-  font-size: 11px;
-}
-.details-usage tbody th {
-  color: var(--muted);
-  text-align: left;
-}
-.details-usage td {
-  padding-left: 10px;
-  /* Counts never break; coverage and share phrases wrap at their spaces. */
-  overflow-wrap: normal;
-}
 .details-card .resume-command {
+  gap: 4px;
   border: 0;
-  padding: 6px 8px;
+  border-radius: 6px;
+  padding: 0 0 0 7px;
   background: var(--code);
 }
 .details-card .resume-command code {
   flex: 1 1 auto;
+  padding: 5px 0;
   overflow: hidden;
+  color: color-mix(in srgb, var(--text) 66%, var(--muted));
+  font-size: 11.5px;
+  line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4611,9 +4703,10 @@ button.panel-file {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-bottom: var(--space-2);
+  margin-bottom: 10px;
 }
 .command-filter button {
+  display: inline-block;
   min-height: 0;
   padding: 2px 9px;
   border: 1px solid var(--border);
@@ -4621,8 +4714,8 @@ button.panel-file {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: var(--panel-font-sm);
-  line-height: 18px;
+  font-size: 11.5px;
+  line-height: 1.45;
   cursor: pointer;
 }
 .command-filter button:hover {
@@ -4632,10 +4725,6 @@ button.panel-file {
   border-color: transparent;
   background: var(--panel-hover);
   color: var(--text);
-  font-weight: 600;
-}
-.command-filter-count {
-  font-variant-numeric: tabular-nums;
 }
 .command-empty {
   margin: var(--space-2) 2px;
@@ -4666,15 +4755,24 @@ button.panel-file {
   outline-offset: 1px;
 }
 .command-card[data-tone="running"] {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, var(--border));
 }
 .command-card[data-tone="failed"] {
-  border-color: color-mix(in srgb, var(--error) 40%, var(--border));
+  border-color: var(--danger-border);
 }
 .command-card[data-compact] {
   gap: 3px;
-  padding: 7px 11px;
+  padding: 8px 11px;
+}
+/* "Earlier": running commands come first, the others below this label. */
+.command-group-label {
+  padding: 6px 2px 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
 }
 .command-card-head,
 .command-card-foot {
@@ -4719,15 +4817,15 @@ button.panel-file {
 .command-card-time {
   flex: none;
   color: var(--muted);
-  font-size: var(--panel-font-sm);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .command-card-title {
   min-width: 0;
-  font-size: var(--panel-font-lg);
-  font-weight: 600;
-  line-height: 18px;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 .command-card:not([data-compact]) > .command-card-title {
@@ -4739,8 +4837,8 @@ button.panel-file {
 .command-card-line,
 .command-card-sub,
 .command-tail {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: var(--panel-font-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 .command-card-line {
   display: block;
@@ -4748,6 +4846,9 @@ button.panel-file {
   padding: 5px 7px;
   border-radius: 6px;
   background: var(--code);
+  color: color-mix(in srgb, var(--text) 66%, var(--muted));
+  font-size: 11.5px;
+  line-height: 1.45;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4764,6 +4865,7 @@ button.panel-file {
   padding: 6px 8px;
   border-radius: 6px;
   background: var(--code);
+  color: color-mix(in srgb, var(--text) 50%, var(--muted));
   line-height: 16px;
 }
 .command-tail-line {
@@ -4779,7 +4881,7 @@ button.panel-file {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--panel-font-sm);
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4795,7 +4897,7 @@ button.panel-file {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: var(--panel-font-sm);
+  font-size: 11.5px;
   line-height: 16px;
   cursor: pointer;
 }
@@ -4811,7 +4913,7 @@ button.panel-file {
   padding: 3px 5px;
 }
 .command-action.danger {
-  border-color: color-mix(in srgb, var(--error) 40%, var(--border));
+  border-color: var(--danger-border);
   color: var(--error);
 }
 .command-action[aria-expanded="true"] {
@@ -4834,7 +4936,7 @@ button.panel-file {
   cursor: pointer;
 }
 .command-card-open > .command-card-title {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4856,6 +4958,7 @@ button.panel-file {
 .command-card-sub {
   display: block;
   min-width: 0;
+  line-height: 1.45;
   padding-left: calc(14px + var(--space-2));
   overflow: hidden;
   color: var(--muted);

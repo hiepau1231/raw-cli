@@ -45,6 +45,9 @@ export function Files({ entries, onInsert }: { entries: FileEntry[]; onInsert: I
           // Paths are relative to the session directory; one outside it is absolute and keeps its whole folder.
           const folder = cut > 0 ? entry.path.slice(0, cut - 1) || entry.path.slice(0, cut) : "project root";
           const Icon = fileIcon(entry.path);
+          // A zero count says nothing, except the one its status implies: an added file's lines, a deleted file's.
+          const showAdded = entry.added !== undefined && (entry.added > 0 || entry.status === "added");
+          const showRemoved = entry.removed !== undefined && (entry.removed > 0 || entry.status === "deleted");
           const content = (
             <>
               {entry.status
@@ -54,10 +57,10 @@ export function Files({ entries, onInsert }: { entries: FileEntry[]; onInsert: I
                 <span className="panel-file-name">{name}</span>
                 <span className="panel-file-dir">{folder}</span>
               </span>
-              {(entry.added !== undefined || entry.removed !== undefined) && (
+              {(showAdded || showRemoved) && (
                 <span className="panel-file-stats">
-                  {entry.added !== undefined && <span className="panel-file-added">+{entry.added}</span>}
-                  {entry.removed !== undefined && <span className="panel-file-removed">−{entry.removed}</span>}
+                  {showAdded && <span className="panel-file-added">+{entry.added}</span>}
+                  {showRemoved && <span className="panel-file-removed">−{entry.removed}</span>}
                 </span>
               )}
               {entry.diff && <ChevronRight size={14} aria-hidden="true" className="panel-chevron panel-file-chevron" />}
@@ -82,6 +85,7 @@ export function Files({ entries, onInsert }: { entries: FileEntry[]; onInsert: I
           );
         })}
       </ul>
+      {entries.some((entry) => entry.diff) && <p className="files-hint">Click a file to see its diff · <AtSign size={11} aria-label="@" /> adds it to your message</p>}
     </div>
   );
 }

@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { ArrowUpRight, AtSign, Ban, Check, CircleCheck, CircleX, Clock, Copy, LoaderCircle, Square, Unplug, type LucideIcon } from "lucide-react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { ArrowUpRight, AtSign, Ban, Check, CircleCheck, CircleX, Clock, Copy, Loader, Square, Unplug, type LucideIcon } from "lucide-react";
 import type { CommandRecord } from "../../../src/processes/presentation.js";
 import type { ProcessOutput } from "../../../src/processes/contract.js";
 import { api, errorText } from "../api.js";
@@ -12,7 +12,7 @@ const MAX_TEXT = 65536;
 
 
 const ICONS: Record<CommandRecord["state"], LucideIcon> = {
-  starting: LoaderCircle, running: LoaderCircle, stopping: LoaderCircle, exited: CircleCheck, failed: CircleX, timed_out: Clock, stopped: Ban, lost: Unplug,
+  starting: Loader, running: Loader, stopping: Loader, exited: CircleCheck, failed: CircleX, timed_out: Clock, stopped: Ban, lost: Unplug,
 };
 const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
@@ -156,18 +156,19 @@ function Command({ item, sessionId, sessionCwd, now, matches, selection, onInser
   shown.current = { selection, visible };
   const compact = status.compact && !opened;
   const notes = <>
-    {item.error && <p className="command-note" role="note">{item.error}</p>}
+    {item.error && !compact && <p className="command-note" role="note">{item.error}</p>}
     {notice && <p className="command-note" role="status">{notice}</p>}
     {error && <p className="command-note error" role="alert">{error}</p>}
   </>;
+  // A compact row already leads with the state's glyph: its chip is the word alone.
   const chip = <span className="command-chip" data-tone={status.tone}>
-    <Icon size={11} aria-hidden="true" className={status.tone === "running" ? "panel-spin" : undefined} />{status.chip}
+    {!compact && <Icon size={11} aria-hidden="true" className={status.tone === "running" ? "panel-spin" : undefined} />}{status.chip}
   </span>;
   return <li ref={card} tabIndex={-1} className="command-card" data-id={item.id} data-state={item.state} data-tone={status.tone} data-kind={item.kind} data-compact={compact || undefined} hidden={!visible}
     aria-label={`${name}: ${status.label}`}
     onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false); }}>
     {compact ? <>
-      <button ref={openButton} type="button" className="command-card-open" aria-expanded={false} title={item.command}
+      <button ref={openButton} type="button" className="command-card-open" aria-expanded={false} title={item.error ? `${item.command}\n${item.error}` : item.command}
         onClick={() => { focusAfter.current = outputButton; setOpened(true); }}>
         <span className="command-card-glyph" data-tone={status.tone}><Icon size={14} aria-hidden="true" /><span className="sr-only">{status.label}</span></span>
         <span className="command-card-title">{name}</span>
@@ -277,20 +278,27 @@ export function Commands({ items, sessionId, sessionCwd, omitted = 0, onInsert }
   const [selection, setSelection] = useState(0);
   const list = useRef<HTMLUListElement>(null);
   useScrollAnchor(list, items);
-  // Newest first in every filter, so a card never jumps when it finishes.
-  const sorted = [...items].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+  // Running commands first, then the others under "Earlier"; newest first in each. A card that finishes moves below the
+  // label, and the scroll anchor keeps the card being read in place.
+  const newest = (a: CommandRecord, b: CommandRecord) => b.createdAt - a.createdAt || b.id.localeCompare(a.id);
+  const running = items.filter(commandRunning).sort(newest);
+  const earlier = items.filter((item) => !commandRunning(item)).sort(newest);
+  const split = running.some((item) => commandMatches(item, filter)) && earlier.some((item) => commandMatches(item, filter));
   const counts = Object.fromEntries(COMMAND_FILTERS.map(value => [value, items.filter(item => commandMatches(item, value)).length])) as Record<CommandFilter, number>;
   if (!items.length && !omitted) return <div className="commands"><p className="muted small">No commands yet.</p></div>;
   return <div className="commands">
     <div className="command-filter" role="group" aria-label="Filter commands">
       {COMMAND_FILTERS.map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => { setFilter(value); setSelection(count => count + 1); }}>
-        {FILTER_LABELS[value]} <span className="command-filter-count">{counts[value]}</span>
+        {`${FILTER_LABELS[value]} ${counts[value]}`}
       </button>)}
     </div>
     {!counts[filter] && <p className="muted small command-empty">{EMPTY[filter]}</p>}
     <ul ref={list} className="commands-list">
-      {sorted.map(item => <Command key={`${sessionId}:${item.id}`} item={item} sessionId={sessionId} sessionCwd={sessionCwd} now={now}
-        matches={commandMatches(item, filter)} selection={selection} onInsert={onInsert} />)}
+      {[...running, ...earlier].map((item, index) => <Fragment key={`${sessionId}:${item.id}`}>
+        {index === running.length && split && <li className="command-group-label">Earlier</li>}
+        <Command item={item} sessionId={sessionId} sessionCwd={sessionCwd} now={now}
+          matches={commandMatches(item, filter)} selection={selection} onInsert={onInsert} />
+      </Fragment>)}
     </ul>
     {omitted > 0 && <p className="command-more">Older commands not shown</p>}
   </div>;

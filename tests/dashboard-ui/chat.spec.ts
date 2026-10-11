@@ -347,11 +347,12 @@ test.describe("context usage and title", () => {
     const tokens = Number(shown![1]!.replaceAll(",", ""));
     expect(Number(shown![2])).toBeCloseTo(tokens / 4000 * 100, 1);
     await expect(footer.locator(".context-ring")).toContainText(`${Math.round(tokens / 40)}%`);
-    // Details keeps the exact trigger next to the rounded one in its summary line.
+    // Details keeps the rounded trigger in the context line and the exact one in Context limits.
     await page.getByRole("button", { name: "Side panel", exact: true }).click();
     await page.getByRole("tab", { name: "Details", exact: true }).click();
     const context = page.locator('.details-card[data-card="context"]');
     await expect(context.locator(".details-line")).toContainText("auto compact at 4k");
-    await expect(context.locator(".details-kv div", { has: page.locator("dt", { hasText: /^Auto compact at$/ }) }).locator("dd")).toHaveText("4,000");
+    const limits = page.locator('.details-card[data-card="limits"]');
+    await expect(limits.locator(".details-kv div", { has: page.locator("dt", { hasText: /^Auto compact at$/ }) }).locator("dd")).toHaveText("4,000");
   });
 });

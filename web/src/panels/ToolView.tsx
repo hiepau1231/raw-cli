@@ -22,6 +22,7 @@ export function ToolView({ item, scope = "", onInsert, hideCompleted, onHideComp
   const displayed = sidebarPresentation(item, actions?.interactions ?? []);
   return <ActionScope value={actions && { item, host: actions }}>
     {item.stale && <p className="panel-banner" role="note">The tool that owns this panel is not selected by this agent.</p>}
+    {item.closed && !inline && <p className="panel-banner" role="note">The tool closed this panel; it shows its last update.</p>}
     {children}
     <PanelScope.Provider value={`${inline ? "inline" : "panel"}:${scope}:${item.instanceId ?? item.panel}`}>
       {displayed.document ? <Blocks document={displayed.document} title={inline ? heading : item.title} inline={inline} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={onHideCompleted} /> : <p className="muted small">No data yet.</p>}

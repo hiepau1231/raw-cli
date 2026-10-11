@@ -327,7 +327,7 @@ test.describe("Commands background", () => {
     await expect(page.locator(".inspector")).toHaveCount(0);
     await page.getByRole("button", { name: "Side panel", exact: true }).click();
     await page.getByRole("tab", { name: "Commands", exact: true }).click();
-    await section(page).getByRole("button", { name: /menu/i }).click();
+    await page.getByRole("button", { name: "Commands panel menu", exact: true }).click();
     await page.getByRole("menuitem", { name: /Hide/ }).click();
     await expect(section(page)).toHaveCount(0);
     await expect(page.getByRole("tab", { name: "Commands", exact: true })).toHaveCount(0);

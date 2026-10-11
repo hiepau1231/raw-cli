@@ -27,6 +27,8 @@ export interface TabSpec {
   unseen?: boolean | undefined;
   /** Overview and Details stay in place. */
   movable: boolean;
+  /** The document's explanation (its subtitle), in the tab's tooltip and description. */
+  about?: string | undefined;
 }
 
 /**
@@ -114,7 +116,10 @@ export function TabStrip({ tabs, active, panelId, idOf, onSelect, onDrop }: {
     <div className="sp-tabs" role="tablist" aria-label="Side panel tabs" ref={strip} onKeyDown={move}>
       {tabs.map((tab) => {
         const selected = tab.id === active;
-        const describe = [tab.badge?.label, tab.status === "done" ? "Done" : tab.status === "failed" ? "Failed" : undefined, tab.unseen ? "New update" : undefined].filter(Boolean).join(", ");
+        // The panel's explanation as a sentence, then its state: "Tracks the plan. 2 of 5 done, New update".
+        const about = tab.about?.trim() ? (/[.!?…:]$/.test(tab.about.trim()) ? tab.about.trim() : `${tab.about.trim()}.`) : undefined;
+        const facts = [tab.badge?.label, tab.status === "done" ? "Done" : tab.status === "failed" ? "Failed" : undefined, tab.unseen ? "New update" : undefined].filter(Boolean).join(", ");
+        const describe = [about, facts].filter(Boolean).join(" ");
         const dragState = drag?.tab === tab.id ? "dragging" : drag?.over === tab.id ? "target" : "";
         return (
           <button

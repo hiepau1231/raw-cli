@@ -15,7 +15,7 @@ const raw = await dashboardFixture(stressScenario);
 installStressTools(raw);
 const browser = await chromium.launch();
 try {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
   await page.emulateMedia({ colorScheme: "dark" });
   await seedStress(page, raw);
   const titles = (await page.getByRole("tab").evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute("aria-label") ?? ""))).filter(Boolean);
@@ -23,6 +23,10 @@ try {
     await page.emulateMedia({ colorScheme: scheme });
     for (const title of titles) {
       await page.getByRole("tab", { name: title, exact: true }).click();
+      // As in the mockup, Files changed shows its first file's diff.
+      const first = page.getByRole("tabpanel").locator("button.panel-file").first();
+      if (title === "Files changed" && (await first.getAttribute("aria-expanded")) === "false") await first.click();
+      await page.mouse.move(0, 0);
       await page.waitForTimeout(300);
       const file = `side-panel-${slug(title)}-${scheme}.png`;
       await page.locator(".inspector").screenshot({ path: join(out, file), animations: "disabled" });

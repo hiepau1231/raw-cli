@@ -69,7 +69,7 @@ export default function CodeEditor({
               fontSize: "var(--code-size)",
             },
             ".cm-content": {
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontFamily: "\"JetBrains Mono Variable\", monospace",
               minHeight: "180px",
             },
             ".cm-gutters": {

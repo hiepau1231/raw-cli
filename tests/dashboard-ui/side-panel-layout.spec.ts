@@ -1,8 +1,9 @@
 import { AxeBuilder } from "@axe-core/playwright";
+import { readdirSync, readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 import { test, expect, openChat } from "./fixtures.js";
 import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
-import { ACTIVE_TODO, BACKGROUND, FAILING, FOREGROUND, installStressTools, seedStress, stressScenario } from "./side-panel-stress.js";
+import { ACTIVE_TODO, BACKGROUND, FAILING, FOREGROUND, TIMED_OUT, installStressTools, seedStress, stressScenario } from "./side-panel-stress.js";
 
 // Geometry and content of the side panel with real-length data (docs/side-panel-design.md §10), at the supported widths.
 const PREFERENCES = "raw.dashboard.preferences.v1";
@@ -69,12 +70,12 @@ test.describe("side panel layout", () => {
       expect(Math.round((await page.locator(".inspector").boundingBox())!.width)).toBe(width);
 
       const card = (title: string) => page.locator(".sp-overview-card", { has: page.locator(".sp-card-title", { hasText: new RegExp(`^${title}$`) }) });
-      await expect(card("Todo").locator(".sp-meta")).toHaveText("3 of 5");
+      await expect(card("Todo").locator(".sp-meta")).toHaveText("2 of 5");
       await expect(card("Todo").locator(".sp-card-line.glyph-running")).toContainText(ACTIVE_TODO);
-      await expect(card("Todo").locator(".sp-bar > i")).toHaveAttribute("style", /width: 60%/);
+      await expect(card("Todo").locator(".sp-bar > i")).toHaveAttribute("style", /width: 40%/);
       await expect(card("Files changed").locator(".sp-stat.added")).toHaveText(/^\+\d+$/);
-      await expect(card("Files changed").locator(".sp-card-line")).toHaveText("component-file-name-that-is-long.ts, README.md");
-      await expect(card("Commands").locator(".sp-chip")).toHaveText(["1 running", "1 failed"]);
+      await expect(card("Files changed").locator(".sp-card-line")).toHaveText("component-file-name-that-is-long.ts, README.md, old-config.json");
+      await expect(card("Commands").locator(".sp-chip")).toHaveText(["1 running", "2 failed"]);
       await expect(card("Commands").locator(".sp-card-line.glyph-running")).toContainText(BACKGROUND.description);
       await expect(card("Commands").locator(".sp-card-line.glyph-failed")).toContainText(FAILING.description);
       await expect(card("Commands").locator(".sp-card-line.glyph-failed .sp-line-meta")).toHaveText("exit 2");
@@ -82,8 +83,8 @@ test.describe("side panel layout", () => {
       await expect(card("Context").locator(".sp-chip")).toHaveText(/^\d+%$/);
       await expect(page.locator(".sp-overview-card").last()).toHaveAttribute("data-card", "__details");
 
-      await expect(tab(page, "Todo")).toHaveAccessibleDescription(/^3 of 5 done/);
-      await expect(tab(page, "Files changed")).toHaveAccessibleDescription(/^2 files/);
+      await expect(tab(page, "Todo")).toHaveAccessibleDescription(/^2 of 5 done/);
+      await expect(tab(page, "Files changed")).toHaveAccessibleDescription(/^Successful tool writes in this session; not Git status or Bash edits\. 3 files/);
       await expect(tab(page, "Commands")).toHaveAccessibleDescription(/^1 running/);
       await expect(tab(page, "Gadget")).toHaveAccessibleDescription(/^1 of 2 done/);
       await expect(tab(page, "Details")).toHaveAccessibleDescription(/^\d+% of the (context window|auto-compact trigger) used$/);
@@ -131,14 +132,15 @@ test.describe("side panel layout", () => {
       // The mock provider reports no token counts: one note, request counts, and no "Unavailable" rows anywhere.
       const usage = body.locator('.details-card[data-card="usage"]');
       await expect(usage.locator(".details-note")).toHaveText("This provider does not report token counts.");
-      await expect(usage.locator("tbody th")).toHaveText(["Requests"]);
+      await expect(usage.locator("dt")).toHaveText(["Last turn", "This session", "Cache reads"]);
+      await expect(usage.locator("dd").first()).toHaveText(/^\d+ requests?$/);
       await expect(body).not.toContainText("Unavailable");
       await expect(body.locator('.details-card[data-card="resume"] code')).toHaveText(/^raw --resume \S+ "Your next message"$/);
       await expect(body.getByRole("button", { name: "Copy resume command" })).toBeVisible();
       await expect(body.locator('.details-card[data-card="capabilities"]')).toContainText("Tools");
       const session = body.locator('.details-card[data-card="session"]');
       for (const label of ["ID", "Workspace", "Config for next turn", "Model"]) await expect(session.locator("dt", { hasText: new RegExp(`^${label}$`) })).toHaveCount(1);
-      expect(await cards.evaluateAll((list) => list.map((card) => (card as HTMLElement).dataset.card))).toEqual(["context", "usage", "resume", "capabilities", "session"]);
+      expect(await cards.evaluateAll((list) => list.map((card) => (card as HTMLElement).dataset.card))).toEqual(["context", "usage", "resume", "limits", "capabilities", "session"]);
       for (const theme of ["dark", "light"]) {
         await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
         expect(await body.evaluate((root) => [root.scrollWidth - root.clientWidth, ...[...root.querySelectorAll<HTMLElement>(".details-card")].map((card) => card.scrollWidth - card.clientWidth)].filter((overflow) => overflow > 0))).toEqual([]);
@@ -155,8 +157,11 @@ test.describe("side panel layout", () => {
       await seedStress(page, raw);
       await tab(page, "Commands").click();
       const cards = page.getByRole("tabpanel").locator("li.command-card");
-      await expect(cards).toHaveCount(3);
-      const [running, failed, succeeded] = [cards.nth(0), cards.nth(1), cards.nth(2)];
+      await expect(cards).toHaveCount(4);
+      const [running, failed, succeeded, timedOut] = [cards.nth(0), cards.nth(1), cards.nth(2), cards.nth(3)];
+      // commands.png: the running job, then "Earlier" over the others, newest first.
+      await expect(page.getByRole("tabpanel").locator(".commands-list > li")).toHaveClass([/command-card/, /command-group-label/, /command-card/, /command-card/, /command-card/]);
+      await expect(page.getByRole("tabpanel").locator(".command-group-label")).toHaveText("Earlier");
       await expect(running.locator(".command-chip")).toHaveText("Running");
       await expect(running.locator(".command-card-title")).toHaveText(BACKGROUND.description);
       await expect(running.locator("code.command-card-line")).toHaveAttribute("title", BACKGROUND.command);
@@ -167,6 +172,14 @@ test.describe("side panel layout", () => {
       await expect(succeeded.locator(".command-card-title")).toHaveText(FOREGROUND.description);
       // Compact: one line for the title, one for the command.
       expect((await succeeded.boundingBox())!.height).toBeLessThanOrEqual(56);
+      // A timed-out row: the clock glyph, the title, the chip as a word only; the reason is in the row's tooltip, not a line.
+      await expect(timedOut).toHaveAttribute("data-compact", "true");
+      await expect(timedOut.locator(".command-card-title")).toHaveText(TIMED_OUT.description);
+      await expect(timedOut.locator(".command-chip")).toHaveText("Timed out");
+      await expect(timedOut.locator(".command-chip svg")).toHaveCount(0);
+      await expect(timedOut.locator(".command-card-glyph svg")).toHaveCount(1);
+      await expect(timedOut.locator(".command-note")).toHaveCount(0);
+      await expect(timedOut.locator("code.command-card-sub")).toHaveText(TIMED_OUT.command);
       for (const theme of ["dark", "light"]) {
         await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
         expect(await commandFaults(page)).toEqual([]);
@@ -176,10 +189,78 @@ test.describe("side panel layout", () => {
   }
 });
 
+test.describe("side panel type", () => {
+  test.use({ scenario: stressScenario });
+  for (const width of [320, 360]) {
+    test(`at ${width} px the panel uses the bundled OFL fonts and the mockups' sizes and spacing`, async ({ page, raw }) => {
+      installStressTools(raw);
+      await page.addInitScript(([key, value]) => {
+        if (!localStorage.getItem(key!)) localStorage.setItem(key!, JSON.stringify({ version: 1, inspectorWidth: Number(value) }));
+      }, [PREFERENCES, String(width)]);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await seedStress(page, raw);
+      await tab(page, "Commands").click();
+      // Inter and JetBrains Mono ship with the dashboard (docs/dashboard.md): loaded from 'self', never a platform font.
+      await page.evaluate(() => document.fonts.ready);
+      expect(await page.evaluate(() => [document.fonts.check('13px "Inter Variable"'), document.fonts.check('11px "JetBrains Mono Variable"')])).toEqual([true, true]);
+      const loaded = await page.evaluate(() => [...document.fonts].filter((face) => face.status === "loaded").map((face) => face.family.replaceAll('"', "")));
+      expect(new Set(loaded)).toEqual(new Set(["Inter Variable", "JetBrains Mono Variable"]));
+      const sheets = await page.evaluate(() => [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules].map((rule) => rule.cssText)).join("\n"));
+      expect(sheets).not.toMatch(/-apple-system|BlinkMacSystemFont|SF Pro|SFMono|ui-monospace|system-ui|Segoe UI|Helvetica|Menlo|Consolas/i);
+      const style = (selector: string, ...names: string[]) => page.locator(selector).first().evaluate((element, list) => {
+        const computed = getComputedStyle(element);
+        return list.map((name) => computed.getPropertyValue(name));
+      }, names);
+      expect((await style(".inspector", "font-family"))[0]).toMatch(/^"Inter Variable"/);
+      expect((await style(".command-card-line", "font-family"))[0]).toMatch(/^"JetBrains Mono Variable"/);
+      expect(await style(".sp-tab", "padding-top", "padding-bottom")).toEqual(["8px", "9px"]);
+      // docs/design/side-panel/mockups.tsx: the title row, the tabs, the body and a command card.
+      expect(await style(".side-panel-title h2", "font-size", "font-weight")).toEqual(["14px", "600"]);
+      expect(await style(".side-panel-title", "padding-top", "padding-left")).toEqual(["12px", "12px"]);
+      expect(await style(".sp-tab", "font-size", "padding-left", "padding-right")).toEqual(["12.5px", "7px", "7px"]);
+      expect(await style('.sp-tab[aria-selected="true"]', "font-weight", "background-color")).toEqual(["400", "rgba(0, 0, 0, 0)"]);
+      expect(await style(".sp-badge", "font-size")).toEqual(["10.5px"]);
+      expect(await style(".sp-content", "padding-top", "padding-left", "padding-bottom", "font-size")).toEqual(["10px", "10px", "12px", "13px"]);
+      expect(await style("li.command-card:not([data-compact])", "padding-top", "padding-left", "border-radius", "row-gap")).toEqual(["10px", "11px", "10px", "6px"]);
+      expect(await style("li.command-card:not([data-compact]) .command-card-title", "font-size", "font-weight")).toEqual(["13px", "550"]);
+      expect(await style(".command-chip", "font-size", "font-weight")).toEqual(["11px", "600"]);
+      expect(await style(".command-card-line", "font-size", "padding-top", "padding-left", "border-radius")).toEqual(["11.5px", "5px", "7px", "6px"]);
+      expect(await style(".command-group-label", "font-size", "letter-spacing", "text-transform")).toEqual(["11px", "0.8px", "uppercase"]);
+      // No header inside a tab: its menu is in the title row, next to Close.
+      await expect(page.locator(".sp-tab-header")).toHaveCount(0);
+      await expect(page.locator(".side-panel-title").getByRole("button", { name: "Commands panel menu", exact: true })).toBeVisible();
+      await tab(page, "Todo").click();
+      expect(await style('.todo-group[data-group="next"] .todo-row', "padding-top", "padding-left", "column-gap")).toEqual(["5px", "4px", "9px"]);
+      await tab(page, "Files changed").click();
+      expect(await style("button.panel-file", "padding-top", "column-gap")).toEqual(["6px", "9px"]);
+      expect(await style(".panel-file-name", "font-weight")).toEqual(["550"]);
+      expect(await style(".panel-file-dir", "font-size")).toEqual(["11.5px"]);
+      expect(await style(".panel-files li", "padding-top", "padding-bottom")).toEqual(["0px", "0px"]);
+      // Every code element uses the bundled monospace: the resume command in Details, the bars at the mockup's 6 px.
+      await tab(page, "Details").click();
+      expect((await style('.details-card[data-card="resume"] code', "font-family"))[0]).toMatch(/^"JetBrains Mono Variable"/);
+      expect(await style('.details-card[data-card="context"] .sp-bar', "height")).toEqual(["6px"]);
+      // The dark palette of the mockups: the canvas surface and solid status tints.
+      await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+      expect(await style(".inspector", "background-color")).toEqual(["rgb(15, 12, 22)"]);
+      await tab(page, "Commands").click();
+      expect(await style('.command-chip[data-tone="failed"]', "background-color")).toEqual(["rgb(42, 15, 26)"]);
+      expect(await style('li.command-card[data-tone="running"]', "border-top-color")).toEqual(["rgb(76, 58, 134)"]);
+    });
+  }
+});
+
+test("the bundled fonts' licences ship with the dashboard", () => {
+  for (const font of ["inter", "jetbrains-mono"]) expect(readFileSync(`dist/dashboard/licenses/${font}-OFL.txt`, "utf8")).toContain("SIL Open Font License, Version 1.1");
+  // Only the two OFL families are bundled.
+  expect(readdirSync("dist/dashboard/assets").filter((file) => file.endsWith(".woff2")).every((file) => /^(inter|jetbrains-mono)-/.test(file))).toBe(true);
+});
+
 test.describe("Details with reported usage", () => {
-  const usage = (prompt: number, completion: number, cached: number) => `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [], usage: { prompt_tokens: prompt, completion_tokens: completion, prompt_tokens_details: { cached_tokens: cached } } })}\n\n`;
+  const usage = (prompt: number, completion: number, cached?: number) => `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [], usage: { prompt_tokens: prompt, completion_tokens: completion, ...(cached === undefined ? {} : { prompt_tokens_details: { cached_tokens: cached } }) } })}\n\n`;
   test.use({ scenario: { responses: [
-    { frames: [openAiFrame({ content: "First." }, "stop"), usage(1200, 30, 0), openAiDone] },
+    // The first request reports no cache counts: the session's cache values cover one of its two requests.
+    { frames: [openAiFrame({ content: "First." }, "stop"), usage(1200, 30), openAiDone] },
     { frames: [openAiFrame({ content: "Second." }, "stop"), usage(1500, 40, 1000), openAiDone] },
   ] } });
   test("the usage card lists the reported counts for the last turn and the session, without the no-report note", async ({ page, raw }) => {
@@ -192,24 +273,19 @@ test.describe("Details with reported usage", () => {
     await page.getByRole("button", { name: "Side panel", exact: true }).click();
     await tab(page, "Details").click();
     const card = page.getByRole("tabpanel").locator('.details-card[data-card="usage"]');
-    await expect(card.locator("thead th")).toHaveText(["", "Last turn", "Session"]);
-    const row = (name: string) => card.locator("tbody tr", { has: page.locator("th", { hasText: new RegExp(`^${name}$`) }) }).locator("td");
-    await expect(row("Requests")).toHaveText(["1", "2"]);
-    await expect(row("Input tokens")).toHaveText(["1,500", "2,700"]);
-    await expect(row("Output tokens")).toHaveText(["40", "70"]);
-    await expect(row("Cache read")).toHaveText(["1,000", "1,000"]);
+    // Key/value rows as in details.png: each scope's requests and reported tokens, then the cache.
+    await expect(card.locator("dt")).toHaveText(["Last turn", "This session", "Cache reads", "Session cache reads", "Cache read share", "Uncached input"]);
+    await expect(card.locator("dd")).toHaveText(["1 request · 1,500 in · 40 out", "2 requests · 2,700 in · 70 out", "1 of 1 · 1,000 tokens", "1 of 2 · 1,000 tokens",
+      "66.7% (1 of 1) · 66.7% (1 of 2) in session", "500 · — in session"]);
     await expect(card.locator(".details-note")).toHaveCount(0);
     await expect(page.getByRole("tabpanel")).not.toContainText("Unavailable");
     await expect(page.getByRole("tabpanel").locator('.details-card[data-card="context"] .details-of')).toBeVisible();
-    // Long sessions: coverage and share phrases for hundreds of requests wrap inside the card at the default width.
-    await expect(row("Cache coverage")).toHaveText(["1 of 1 requests", "2 of 2 requests"]);
-    await row("Cache coverage").nth(1).evaluate((cell) => { cell.textContent = "1,000 of 1,000 requests"; });
-    await row("Cache read share").nth(1).evaluate((cell) => { cell.textContent = "50.0% (1,000 of 1,000)"; });
-    await row("Requests").nth(1).evaluate((cell) => { cell.textContent = "1,000"; });
+    // Long sessions: values for thousands of requests and millions of tokens wrap inside the card at the default width.
+    await card.locator("dd").nth(1).evaluate((cell) => { cell.textContent = "1,000 requests · 12,345,678 in · 1,234,567 out"; });
+    await card.locator("dd").nth(3).evaluate((cell) => { cell.textContent = "1,000 of 1,000 · 12,345,678 tokens"; });
     const fits = await card.evaluate((element) => {
       const box = element.getBoundingClientRect();
-      const table = element.querySelector("table")!.getBoundingClientRect();
-      return { overflow: element.scrollWidth - element.clientWidth, right: Math.round(table.right - box.right) };
+      return { overflow: element.scrollWidth - element.clientWidth, right: Math.max(...[...element.querySelectorAll("dd")].map((cell) => Math.round(cell.getBoundingClientRect().right - box.right))) };
     });
     expect(fits.overflow).toBeLessThanOrEqual(0);
     expect(fits.right).toBeLessThan(0);

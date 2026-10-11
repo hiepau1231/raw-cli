@@ -11,34 +11,35 @@ import { contextUsage } from "./composer/context-usage.js";
 
 const resume = (id: string) => `raw --resume ${id} "Your next message"`;
 const count = (value: number) => value.toLocaleString();
-type Scope = "turn" | "session";
-/** One usage row per measure either scope reports; a scope that did not report it shows a dash. */
+const requests = (value: number) => `${count(value)} ${value === 1 ? "request" : "requests"}`;
+const percent = (value: number | undefined) => (value === undefined ? undefined : `${(value * 100).toFixed(1)}%`);
+/** The cache read share and how many requests it covers: "50.0% (1 of 2)". */
+const share = (value: UsageSummary) => (value.cacheReadRatio === undefined ? undefined : `${percent(value.cacheReadRatio)} (${value.cacheRatioCoverage} of ${value.requests})`);
+/** A measure of the last turn and the session, written as one value: "1,000 · 1,200 in session". */
+const both = (turn: string | undefined, session: string | undefined) => (turn ?? session) === undefined ? undefined : `${turn ?? "—"} · ${session ?? "—"} in session`;
+const uncached = (value: UsageSummary) => (value.requests > 0 && value.inputCoverage === value.requests && value.cacheReadCoverage === value.requests
+  ? count(Math.max(0, value.inputTokensKnown - value.cacheReadTokensKnown)) : undefined);
+/** Usage as key/value rows (details.png): each scope's requests and reported tokens, then the cache; a row only for what was reported. */
 function UsageCard({ turn, session }: { turn: UsageSummary; session: UsageSummary }) {
-  const both = { turn, session };
-  const rows: Array<[string, (value: UsageSummary) => string | undefined]> = [
-    ["Requests", (value) => count(value.requests)],
-    ["Input tokens", (value) => value.inputCoverage ? count(value.inputTokensKnown) : undefined],
-    ["Output tokens", (value) => value.outputCoverage ? count(value.outputTokensKnown) : undefined],
-    ["Cache read", (value) => value.cacheReadCoverage ? count(value.cacheReadTokensKnown) : undefined],
-    ["Cache write", (value) => value.cacheWriteCoverage ? count(value.cacheWriteTokensKnown) : undefined],
-    ["Cache coverage", (value) => value.cacheReadCoverage ? `${value.cacheReadCoverage} of ${value.requests} requests` : undefined],
-    ["Cache read share", (value) => value.cacheReadRatio === undefined ? undefined : `${(value.cacheReadRatio * 100).toFixed(1)}% (${value.cacheRatioCoverage} of ${value.requests})`],
-    ["Uncached input (derived)", (value) => value.requests > 0 && value.inputCoverage === value.requests && value.cacheReadCoverage === value.requests
-      ? count(Math.max(0, value.inputTokensKnown - value.cacheReadTokensKnown)) : undefined],
+  const scope = (value: UsageSummary) => [requests(value.requests), value.inputCoverage ? `${count(value.inputTokensKnown)} in` : undefined,
+    value.outputCoverage ? `${count(value.outputTokensKnown)} out` : undefined].filter(Boolean).join(" · ");
+  const cache = (value: UsageSummary) => `${value.cacheReadCoverage} of ${value.requests}${value.cacheReadCoverage ? ` · ${count(value.cacheReadTokensKnown)} tokens` : ""}`;
+  const rows: Array<[string, string | undefined]> = [
+    ["Last turn", scope(turn)],
+    ["This session", scope(session)],
+    ["Cache reads", cache(turn)],
+    ["Session cache reads", session.cacheReadCoverage ? cache(session) : undefined],
+    ["Cache writes", both(turn.cacheWriteCoverage ? count(turn.cacheWriteTokensKnown) : undefined, session.cacheWriteCoverage ? count(session.cacheWriteTokensKnown) : undefined)],
+    ["Cache read share", both(share(turn), share(session))],
+    ["Uncached input", both(uncached(turn), uncached(session))],
   ];
-  const shown = rows.filter(([, read]) => (["turn", "session"] as Scope[]).some((scope) => read(both[scope]) !== undefined));
   const reported = [turn, session].some(reportsTokens);
   return (
     <section className="sp-card details-card" data-card="usage" aria-labelledby="details-usage">
       <h3 className="details-label" id="details-usage">Usage</h3>
-      <table className="details-usage">
-        <thead><tr><th /><th scope="col">Last turn</th><th scope="col">Session</th></tr></thead>
-        <tbody>
-          {shown.map(([name, read]) => (
-            <tr key={name}><th scope="row">{name}</th><td>{read(turn) ?? "—"}</td><td>{read(session) ?? "—"}</td></tr>
-          ))}
-        </tbody>
-      </table>
+      <dl className="details-kv">
+        {rows.filter(([, value]) => value !== undefined).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}
+      </dl>
       {!reported && <p className="details-note"><Info size={12} aria-hidden="true" />This provider does not report token counts.</p>}
     </section>
   );
@@ -82,21 +83,11 @@ function Details({
         ) : <p className="details-note">Measured after the first turn.</p>}
         {use?.progress && <span className="sp-bar" aria-hidden="true"><i className={`tone-${use.progress.tone}`} style={{ width: `${use.progress.value * 100}%` }} /></span>}
         <p className="details-line">{line}</p>
-        {limits.some(([, value]) => value !== undefined) && (
-          <dl className="details-kv">
-            {limits.filter(([, value]) => value !== undefined).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{count(value!)}</dd></div>)}
-            {context && <div><dt>{context.source === "provider" ? "Context tokens" : "Estimated tokens"}</dt><dd>{count(context.estimatedTokens)}</dd></div>}
-          </dl>
-        )}
         {compact && (
           <div className="details-actions">
             <button type="button" className="command-action" disabled={compact.disabled} title="Summarize model context while keeping visible history" onClick={compact.run}>Compact now</button>
           </div>
         )}
-        <p className="details-hint">
-          History shows what happened. Model context contains the current summary and retained messages.
-          {metrics && <> Measured {new Date(metrics.measuredAt).toLocaleString()}{state?.metricsStale ? " · earlier context" : ""}.</>}
-        </p>
       </section>
       {metrics && <UsageCard turn={metrics.turn} session={metrics.session} />}
       {summary && (
@@ -115,6 +106,19 @@ function Details({
           <code title={resume(id)}>{resume(id)}</code>
           <CopyButton value={resume(id)} label="Copy resume command" />
         </div>
+      </section>
+      <section className="sp-card details-card" data-card="limits" aria-labelledby="details-limits">
+        <h3 className="details-label" id="details-limits">Context limits</h3>
+        {context ? (
+          <dl className="details-kv">
+            {limits.filter(([, value]) => value !== undefined).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{count(value!)}</dd></div>)}
+            <div><dt>{context.source === "provider" ? "Context tokens" : "Estimated tokens"}</dt><dd>{count(context.estimatedTokens)}</dd></div>
+          </dl>
+        ) : <p className="details-note">Measured after the first turn.</p>}
+        <p className="details-hint">
+          History shows what happened. Model context contains the current summary and retained messages.
+          {metrics && <> Measured {new Date(metrics.measuredAt).toLocaleString()}{state?.metricsStale ? " · earlier context" : ""}.</>}
+        </p>
       </section>
       <section className="sp-card details-card" data-card="capabilities" aria-labelledby="details-capabilities">
         <h3 className="details-label" id="details-capabilities">Last attached capabilities</h3>
@@ -172,7 +176,7 @@ export function Inspector({
   narrow: boolean;
   resizeInspector: (width: number) => void;
   keepFocus: { current: boolean };
-  stack: Omit<SidePanelProps, "details" | "sessionId" | "context">;
+  stack: Omit<SidePanelProps, "details" | "sessionId" | "context" | "heading" | "close">;
   compact?: CompactAction | undefined;
 }) {
   return (
@@ -228,14 +232,6 @@ export function Inspector({
             }}
             onDoubleClick={() => resizeInspector(320)}
           />
-          <div className="section-heading side-panel-title">
-            <Dialog.Title asChild>
-              <h2>Side panel</h2>
-            </Dialog.Title>
-            <Dialog.Close className="icon-button" aria-label="Close side panel">
-              <X size={18} aria-hidden="true" />
-            </Dialog.Close>
-          </div>
           <Dialog.Description className="sr-only">
             Tool panels and session details for this chat.
           </Dialog.Description>
@@ -247,6 +243,8 @@ export function Inspector({
             sessionCwd={state?.session.cwd}
             sessionId={id}
             details={<Details id={id} state={state} bootstrap={bootstrap} compact={compact} />}
+            heading={<Dialog.Title asChild><h2>Side panel</h2></Dialog.Title>}
+            close={<Dialog.Close className="icon-button sp-close" aria-label="Close side panel"><X size={16} aria-hidden="true" /></Dialog.Close>}
           />
         </aside>
       </Dialog.Content>

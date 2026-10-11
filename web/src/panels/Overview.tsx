@@ -1,15 +1,15 @@
 import { useState, type ReactNode } from "react";
-import { ChevronRight, Circle, CircleCheck, CircleX, LoaderCircle } from "lucide-react";
+import { ChevronRight, Circle, CircleCheck, CircleX, Loader } from "lucide-react";
 import type { PanelSummary, SummaryLine } from "./summaries.js";
 import { DocumentStatus } from "./Tabs.js";
 
 export interface OverviewCard { id: string; title: string; icon: ReactNode; summary: PanelSummary }
 
 const lineGlyph = (glyph: SummaryLine["glyph"]) =>
-  glyph === "running" ? <LoaderCircle size={14} aria-hidden="true" className="panel-spin" />
-  : glyph === "failed" ? <CircleX size={14} aria-hidden="true" />
-  : glyph === "done" ? <CircleCheck size={14} aria-hidden="true" />
-  : glyph === "pending" ? <Circle size={14} aria-hidden="true" /> : null;
+  glyph === "running" ? <Loader size={13} aria-hidden="true" className="panel-spin" />
+  : glyph === "failed" ? <CircleX size={13} aria-hidden="true" />
+  : glyph === "done" ? <CircleCheck size={13} aria-hidden="true" />
+  : glyph === "pending" ? <Circle size={13} aria-hidden="true" /> : null;
 const glyphWord = { running: "Running", failed: "Failed", done: "Done", pending: "Next" } as const;
 
 /** Badge, chips and totals at the right of a card header. */
@@ -17,7 +17,7 @@ export function SummaryStatus({ summary }: { summary: PanelSummary }) {
   return (
     <span className="sp-card-status">
       {summary.chips.map((chip) => (
-        <span key={chip.text} className={`sp-chip tone-${chip.tone}`}>{chip.spin && <LoaderCircle size={11} aria-hidden="true" className="panel-spin" />}{chip.text}</span>
+        <span key={chip.text} className={`sp-chip tone-${chip.tone}`}>{chip.spin && <Loader size={10} aria-hidden="true" className="panel-spin" />}{chip.text}</span>
       ))}
       {summary.stats?.added !== undefined && <span className="sp-stat added">+{summary.stats.added}</span>}
       {summary.stats?.removed !== undefined && <span className="sp-stat removed">−{summary.stats.removed}</span>}
@@ -43,7 +43,8 @@ export function Overview({ cards, hidden, onOpen, onShow }: {
             <span className="sp-card-icon">{icon}</span>
             <span className="sp-card-title">{title}</span>
             <SummaryStatus summary={summary} />
-            <ChevronRight size={14} aria-hidden="true" className="sp-card-chevron" />
+            {/* Two chips fill the header; the whole card still opens the tab. */}
+            {summary.chips.length < 2 && <ChevronRight size={14} aria-hidden="true" className="sp-card-chevron" />}
           </span>
           {summary.progress && (
             <span className="sp-bar" aria-hidden="true"><i className={`tone-${summary.progress.tone}`} style={{ width: `${Math.round(summary.progress.value * 100)}%` }} /></span>
