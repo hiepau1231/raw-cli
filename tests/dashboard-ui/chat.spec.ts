@@ -5,13 +5,17 @@ for (const outcome of ["failure", "cancelled", "not_smaller"] as const)
   test.describe(`compact ${outcome}`, () => {
     test.use({
       scenario: {
-        agent: { compact: { keep_recent_turns: 0, max_output_tokens: 64 } },
+        // Two turns, and a one-token tail: the first answer is older than the tail, so there is something to summarize.
+        agent: { compact: { keep_recent_turns: 0, keep_recent_tokens: 1, max_output_tokens: 64 } },
         responses: [
           {
             frames: [
               openAiFrame({ content: "Seed context. ".repeat(140) }, "stop"),
               openAiDone,
             ],
+          },
+          {
+            frames: [openAiFrame({ content: "Second answer." }, "stop"), openAiDone],
           },
           outcome === "failure"
             ? {
@@ -37,6 +41,9 @@ for (const outcome of ["failure", "cancelled", "not_smaller"] as const)
       await page.getByRole("textbox", { name: "Message" }).fill("Seed");
       await page.getByRole("button", { name: "Send", exact: true }).click();
       await expect(page.getByTestId("assistant-message")).toBeVisible();
+      await page.getByRole("textbox", { name: "Message" }).fill("More");
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+      await expect(page.getByTestId("assistant-message")).toHaveCount(2);
       await expect(
         page.getByRole("button", { name: "Compact context", exact: true }),
       ).toBeEnabled();
@@ -46,7 +53,7 @@ for (const outcome of ["failure", "cancelled", "not_smaller"] as const)
         .getByRole("button", { name: "Compact context", exact: true })
         .click();
       if (outcome === "cancelled") {
-        await expect.poll(() => raw.provider.requests.length).toBe(2);
+        await expect.poll(() => raw.provider.requests.length).toBe(3);
         await page.getByRole("button", { name: "Stop", exact: true }).click();
       }
       await expect(page.locator(".compaction")).toContainText(
@@ -57,7 +64,7 @@ for (const outcome of ["failure", "cancelled", "not_smaller"] as const)
             : "Summary was not smaller",
       );
       expect(raw.server.context.store!.getContextSummary(id)).toEqual(before);
-      await expect(page.getByTestId("user-message")).toHaveCount(1);
+      await expect(page.getByTestId("user-message")).toHaveCount(2);
     });
   });
 
@@ -92,13 +99,16 @@ test("real chat renders highlighted Markdown, reasoning and context without dupl
 test.describe("compaction", () => {
   test.use({
     scenario: {
-      agent: { compact: { keep_recent_turns: 0, max_output_tokens: 64 } },
+      agent: { compact: { keep_recent_turns: 0, keep_recent_tokens: 1, max_output_tokens: 64 } },
       responses: [
         {
           frames: [
             openAiFrame({ content: "Detailed context. ".repeat(120) }, "stop"),
             openAiDone,
           ],
+        },
+        {
+          frames: [openAiFrame({ content: "Noted." }, "stop"), openAiDone],
         },
         {
           frames: [
@@ -119,6 +129,9 @@ test.describe("compaction", () => {
       .fill("Remember these details");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByTestId("assistant-message")).toBeVisible();
+    await page.getByRole("textbox", { name: "Message" }).fill("Thanks");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByTestId("assistant-message")).toHaveCount(2);
     await expect(
       page.getByRole("button", { name: "Compact context", exact: true }),
     ).toBeEnabled();
@@ -135,11 +148,11 @@ test.describe("compaction", () => {
     ).toBeVisible();
     await page.reload();
     await expect(marker).toHaveCount(1);
-    await expect(page.getByTestId("user-message")).toHaveCount(1);
-    await expect(page.getByTestId("assistant-message")).toContainText(
+    await expect(page.getByTestId("user-message")).toHaveCount(2);
+    await expect(page.getByTestId("assistant-message").first()).toContainText(
       "Detailed context.",
     );
-    expect(raw.provider.requests.length).toBe(2);
+    expect(raw.provider.requests.length).toBe(3);
   });
   test("empty compact is a visible no-op without a user turn or inference", async ({
     page,
@@ -163,6 +176,7 @@ test.describe("automatic compaction", () => {
       agent: {
         compact: {
           keep_recent_turns: 1,
+          keep_recent_tokens: 1,
           trigger_tokens: 800,
           max_output_tokens: 64,
         },
