@@ -1,6 +1,6 @@
-import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, statSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 /** Safety bound for one saved output file: runaway output stops being saved, it never fails the tool. */
@@ -44,6 +44,20 @@ function spillDirectory(): string {
   sweep(root);
   directory ??= mkdtempSync(join(root, PREFIX));
   return directory;
+}
+
+/**
+ * Whether `path` names a file directly inside a saved-output directory of any Raw process under this temp root
+ * (`<tmpdir>/raw-output-*`). Lexical only; a caller that opens the file checks its realpath with this too.
+ */
+export function isSpillFilePath(path: string): boolean {
+  if (!isAbsolute(path)) return false;
+  const parent = dirname(resolve(path));
+  const name = basename(parent);
+  if (!name.startsWith(PREFIX) || name.length === PREFIX.length) return false;
+  const roots = new Set([resolve(tmpdir())]);
+  try { roots.add(realpathSync(tmpdir())); } catch { /* the lexical root still applies */ }
+  return roots.has(dirname(parent));
 }
 
 /** Keeps this process's saved files within SPILL_TOTAL_BYTES by deleting the oldest ones other than `keep`. */

@@ -34,14 +34,20 @@ export function renderTerminalHistory(item: HistoryItem, ui: UiOptions = resolve
   if (item.kind === "runtime_transition") return `${paint("thinking", icon("attention", ui, caps), ui, caps)} ${safeTerminalText(String(payload.text ?? ""))}\n`;
   if (item.kind === "tool_call") {
     const display = payload.display as VisibleToolCall | undefined;
+    // An ACP declaration with a projection is printed by its start or, for a call that never ran, by its result.
+    if (display && payload.update) return "";
     if (display) return formatToolStart(display, ui, caps, width);
-    const update = payload.update as { name?: string; title?: string; rawInput?: unknown; status?: string } | undefined;
+    const update = payload.update as { name?: string; title?: string; kind?: string; rawInput?: unknown; status?: string } | undefined;
+    // An ACP declaration carries its projected heading and kind; the heading already includes the summary.
+    if (update?.title && update.kind) return formatToolStart({ name: update.name ?? update.title, title: update.title, summary: "",
+      kind: update.kind as NonNullable<VisibleToolCall["kind"]>, started: true, arguments: {} }, ui, caps, width);
     return update ? `${icon(update.status === "failed" ? "failure" : "generic", ui, caps)} ${safeTerminalText(update.name ?? update.title ?? "tool")}`
       + `${update.rawInput === undefined ? "" : `  ${safeTerminalText(JSON.stringify(update.rawInput))}`}\n` : "";
   }
   if (item.kind === "tool_result") {
     const display = payload.display as VisibleToolResult | undefined;
-    if (display) return formatToolResult(display, ui, caps, width);
+    const call = payload.call as VisibleToolCall | undefined;
+    if (display) return (call ? formatToolStart(call, ui, caps, width) : "") + formatToolResult(display, ui, caps, width);
     const update = payload.update as { toolCallId?: string; rawOutput?: unknown; status?: string } | undefined;
     const raw = update?.rawOutput as { isError?: boolean; content?: Array<{ type: "text"; text: string }> } | undefined;
     const projected = raw && Array.isArray(raw.content)
@@ -51,6 +57,7 @@ export function renderTerminalHistory(item: HistoryItem, ui: UiOptions = resolve
     return formatToolResult(projected, ui, caps, width);
   }
   if (item.kind === "acp_update") {
+    if (payload.display) return formatToolStart(payload.display as VisibleToolCall, ui, caps, width);
     const update = payload.update as { content?: { text?: string } } | undefined;
     return update?.content?.text ? `${safeTerminalText(update.content.text)}\n` : "";
   }

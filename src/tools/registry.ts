@@ -10,6 +10,7 @@ import { bindWhenToSchema, compileWhen, matchesWhen, type CompiledWhen, type Too
 import { RE2JS } from "re2js";
 import type { ConditionSource } from "./policy.js";
 import { compileObjectSchema } from "./plugins/manifest.js";
+import { callSummary, callTitle, displayArguments, type ToolDisplay } from "./display.js";
 
 export interface ToolDefinition {
   readonly conditionSources?: readonly ConditionSource[];
@@ -57,6 +58,8 @@ export interface ToolRegistration extends ToolDefinition {
   canonicalName?: string;
   handler: (args: Record<string, unknown>, context: ToolContext) => Promise<ToolHandlerResult>;
   validateArgs?: (args: unknown) => string | undefined;
+  /** How surfaces show the tool: tool.json `display`, or MCP annotations merged with the config override (§5.1). */
+  display?: ToolDisplay;
   /** raw.panel/2 panels this tool declares (tool.json, MCP config or ACP registration). */
   panels?: readonly PanelDeclaration[];
   /** MCP and ACP tools may also write panels they never declared (docs/panels-design.md §5). */
@@ -176,6 +179,11 @@ export class ToolRegistry {
       ...(tool.effectsSchema ? { effectsSchema: tool.effectsSchema } : {}) } : undefined;
   }
 
+  /** Display hints of a registered tool, when it has any. */
+  display(name: string): ToolDisplay | undefined {
+    return this.tools.get(name)?.display;
+  }
+
   /** Panel declarations of a registered tool, without importing or invoking anything. */
   panelDeclarations(name: string): { owner: string; declarations: readonly PanelDeclaration[]; implicit: boolean } | undefined {
     const tool = this.tools.get(name);
@@ -250,7 +258,9 @@ export class ToolRegistry {
         if (context.signal!.aborted) onAbort();
       }) : undefined;
       let allowed: boolean;
-      const request = { identity: tool.canonicalName ?? name, name, arguments: args as Record<string, unknown>,
+      const shown = displayArguments(tool.canonicalName ?? name, args as Record<string, unknown>);
+      const request = { identity: tool.canonicalName ?? name, name, title: callTitle(name, shown, tool.display),
+        summary: callSummary(shown, tool.display), arguments: args as Record<string, unknown>,
         ...(effects ? { effects } : {}), ...(context.signal ? { signal: context.signal } : {}),
         ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}) };
       try {

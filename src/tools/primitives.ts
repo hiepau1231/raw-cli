@@ -19,6 +19,9 @@ import type { HookEventName } from "../hooks/contract.js";
 export interface ToolApprovalRequest {
   identity: string;
   name: string;
+  /** The display title and one-line summary of the call (docs/tool-ux-design.md §5.4), content-free for file tools. */
+  title: string;
+  summary: string;
   arguments: Record<string, unknown>;
   effects?: Readonly<Record<string, unknown>>;
   toolCallId?: string;

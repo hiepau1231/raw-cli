@@ -53,9 +53,9 @@ function truncateBytes(value, max) {
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
 // src/tools/spill.ts
-import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeSync } from "fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, statSync, writeSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, dirname, isAbsolute, join, resolve } from "path";
 import { randomUUID } from "crypto";
 var SPILL_MAX_BYTES = 64 * 1024 * 1024;
 var SPILL_TOTAL_BYTES = 1024 * 1024 * 1024;

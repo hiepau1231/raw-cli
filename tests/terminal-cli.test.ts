@@ -37,8 +37,8 @@ test("shared PTY shows header, tool activity and highlighted streamed code", asy
     const result = await run(["--config", config, "--display", "normal", "find code"], env, true);
     assert.equal(result.code, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /◆ raw.*agent fixture/);
-    assert.match(result.stdout, /↳ read_file/);
-    assert.match(result.stdout, /✓ read_file/);
+    assert.match(result.stdout, /↳ Read/);
+    assert.match(result.stdout, /✓ ok/);
     assert.match(result.stdout, /Found/);
     assert.match(result.stdout, /\u001b\[(?:3[0-7]|9[0-7])mconst/);
     const visible = terminalScreen(result.stdout, 80).join("\n");
@@ -100,8 +100,8 @@ test("ASCII icons still distinguish read and success when color is disabled", as
       XDG_STATE_HOME: join(root, "state"), XDG_CONFIG_HOME: join(root, "config"),
     }, true);
     assert.equal(result.code, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /\[read\] read_file/);
-    assert.match(result.stdout, /\[ok\] read_file/);
+    assert.match(result.stdout, /\[read\] Read/);
+    assert.match(result.stdout, /\[ok\] ok/);
     assert.doesNotMatch(result.stdout, /\u001b\[/);
   } finally { await provider.close(); }
 });

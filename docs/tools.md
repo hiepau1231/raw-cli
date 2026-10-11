@@ -66,6 +66,46 @@ and objects keep their first entries followed by `"… N more items"` (or a
 `"…"` key counting the omitted keys), and long strings keep their start and
 end.
 
+### Display hints
+
+A `tool.json` may declare how surfaces show the tool. Every field is optional:
+
+```json
+"display": {
+  "title": "Fetch page",
+  "kind": "search",
+  "icon": "search",
+  "summary": "{url}",
+  "result": "markdown"
+}
+```
+
+- `title`: text of at most 80 characters, a template like `summary`. Default: the tool name in sentence case (`fetch_page` → `Fetch page`).
+- `kind`: `read`, `edit`, `execute`, `search`, `fetch`, `think` or `other` (the default). It picks the CLI icon and the ACP kind.
+- `icon`: an icon name of lowercase letters, digits and `-` (at most 40). The CLI uses it when it has that symbol (`read`, `write`, `bash`, `skill`, `mcp`, `generic`); otherwise the kind decides.
+- `summary`: a template of at most 200 characters over the normalized arguments. `{name}` is the argument's value, `{name|text}` falls back to `text`, and a `[…]` part is shown only when every placeholder inside it has a value. A list of plain values is joined with ` · `, an object is compact JSON, and newlines become ` ⏎ `. When a required placeholder has no value, the default summary is used.
+- `result`: `text`, `markdown`, `code`, `json`, `terminal` or `diff`. Without it, a result made only of JSON blocks is `json`, MCP text that starts with Markdown structure is `markdown`, and everything else is `text`. A `code` result with `host.path` is shown as path-tagged code without the line-number gutter.
+
+The default summary is the first present value among `command`, `path`, `url`, `query`, `pattern`, `name`, `id` and `title` (otherwise the first string argument), followed by up to two short `key=value` pairs for the other scalar arguments: `{"query":"x","limit":5}` shows `x · limit=5`. An argument whose name contains `token`, `secret`, `password` or `key` shows `•••`, in templates too. A summary is one line, cut to 120 characters with `…`. An unknown field or an invalid value makes the manifest invalid.
+
+The bundled tools declare these hints:
+
+| Tool | Title | Kind | Summary | Result |
+| --- | --- | --- | --- | --- |
+| `bash` | `{description\|Run command}` | execute | `$ {command}` | terminal |
+| `read_file` | Read | read | `{path}[:{offset}][ +{limit}]` | code |
+| `write_file` | Write | edit | `{path}` | text |
+| `edit_file` | Edit | edit | `{path}` | diff |
+| `apply_patch` | Patch | edit | `{patch_paths}` (the changed paths) | diff |
+| `process` | Process | execute | `{action}[ {id}][ {command}]` | text |
+| `todo` | Todo | think | `[{title}]` | |
+| `ask_user` | Ask user | other | `{question\|Several questions}` | |
+| `list_skills`, `load_skill` | List skills, Load skill | read (icon `skill`) | (none), `{name}` | |
+| `list_vars`, `read_var` | List variables, Read variable | read | (none), `{name}` | |
+| `view_image` | View image | read | `{path}` | |
+
+Summaries of `write_file`, `edit_file` and `apply_patch` are built from their content-free display arguments (path and byte counts, or the patch's paths), never from file contents. MCP tools get their hints from annotations and config ([MCP](mcp.md#display-hints)). The hints are projected into each call's display record when it runs, so history and replay keep them after the tool is unselected. An approval request carries the call's `title` and `summary`, computed from the normalized arguments, and every approval surface uses them as its headline.
+
 ## Selected plugin folders
 
 The loader accepts exact IDs from three roots: `builtin/<folder>` in the

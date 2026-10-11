@@ -5,15 +5,15 @@ import { constants as fsConstants } from "fs";
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 import { constants } from "fs";
 import { chmod, link, lstat, mkdir, open, rename, unlink } from "fs/promises";
-import { dirname, join as join2, parse, relative, resolve, sep } from "path";
+import { dirname as dirname2, join as join2, parse, relative, resolve as resolve2, sep } from "path";
 
 // src/tools/types.ts
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
 // src/tools/spill.ts
-import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeSync } from "fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, statSync, writeSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, dirname, isAbsolute, join, resolve } from "path";
 import { randomUUID } from "crypto";
 var SPILL_MAX_BYTES = 64 * 1024 * 1024;
 var SPILL_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -45,7 +45,7 @@ var SOURCE_BYTES = 16 * 1024 * 1024;
 var STAGED_BYTES = 64 * 1024 * 1024;
 
 // src/tools/write-changes.ts
-import { isAbsolute, relative as relative2 } from "path";
+import { isAbsolute as isAbsolute2, relative as relative2 } from "path";
 
 // src/panels/contract.ts
 var PANEL_LIMITS = {
@@ -260,7 +260,7 @@ function counts(change) {
 }
 function displayPath(path, cwd) {
   const inside = relative2(cwd, path);
-  return inside && !inside.startsWith("..") && !isAbsolute(inside) ? inside : path;
+  return inside && !inside.startsWith("..") && !isAbsolute2(inside) ? inside : path;
 }
 function changeHostData(changes, cwd, withDiff) {
   const files = changes.map((change) => {
@@ -364,7 +364,7 @@ async function publishWriteChanges(context, changes) {
 
 // src/tools/primitives.ts
 import { open as open2, mkdir as mkdir2, writeFile, readFile, stat } from "fs/promises";
-import { dirname as dirname2, resolve as resolve2 } from "path";
+import { dirname as dirname3, resolve as resolve3 } from "path";
 
 // src/tools/process.ts
 import { spawn } from "child_process";
@@ -441,7 +441,7 @@ Nearest lines:
 ${scored.map((item) => `${item.index + 1}\u2502${[...item.line.replace(/\r$/, "")].slice(0, 200).join("")}`).join("\n")}` : "";
 }
 async function editFileTool(args, context) {
-  const path = resolve2(context.cwd, args.path);
+  const path = resolve3(context.cwd, args.path);
   const shown = displayPath(path, context.cwd);
   const failed = (code, message) => ({ ...errorResult(code, message), host: { summary: shown, status: "error" } });
   let source;
@@ -495,7 +495,7 @@ function renameArgument(args, notes, from, to, convert = (value) => value) {
 var PATH_ALIASES = ["file_path", "filePath", "absolute_path"];
 
 // src/tools/bundled/edit_file/index.ts
-import { resolve as resolve3 } from "path";
+import { resolve as resolve4 } from "path";
 var example = { path: "src/app.ts", old_string: "const a = 1;", new_string: "const a = 2;" };
 function normalizeArguments(input) {
   const args = { ...input };
@@ -515,7 +515,7 @@ function normalizeArguments(input) {
   return { args, notes };
 }
 function describeEffects(args, context) {
-  return { files: [{ path: resolve3(context.cwd, String(args.path)), operation: "edit" }] };
+  return { files: [{ path: resolve4(context.cwd, String(args.path)), operation: "edit" }] };
 }
 function validateArgs(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "arguments must be an object";

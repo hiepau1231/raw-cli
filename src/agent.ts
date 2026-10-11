@@ -39,6 +39,7 @@ import type { AgentMetadata, VisibleRecord } from "./sessions/store.js";
 import type { HookDispatcher, HookReceipt } from "./hooks/dispatcher.js";
 import type { HookEventName } from "./hooks/contract.js";
 import { projectToolCall, projectToolResult, type VisibleToolCall, type VisibleToolResult } from "./sessions/visible.js";
+import type { ToolDisplay } from "./tools/display.js";
 
 export type AgentState = "idle" | "running" | "cancelling" | "compacting" | "closing" | "closed";
 
@@ -69,7 +70,7 @@ export interface RunResult {
 export type RunEvent = (
   | { type: "text_delta"; text: string }
   | { type: "reasoning_delta"; text: string }
-  | { type: "tool_call"; id: string; name: string; arguments: Record<string, unknown> }
+  | { type: "tool_call"; id: string; name: string; arguments: Record<string, unknown>; display?: VisibleToolCall }
   | { type: "tool_start"; id: string; name: string; arguments: Record<string, unknown>; display?: VisibleToolCall }
   | { type: "tool_result"; id: string; name: string; result: ToolResult; display?: VisibleToolResult;
       /** The normalized arguments, when normalization changed the call (docs/tool-ux-design.md §4.3). */
@@ -315,6 +316,12 @@ export class AgentSession {
   get contextRevision(): number { return this.contextGenerationRevision; }
   get toolDefinitions(): readonly ToolDefinition[] { return structuredClone(this.schemaView); }
   toolIdentity(name: string): string | undefined { return this.options.registry.canonicalIdentity(name); }
+  /** The display hints of a registered tool (docs/tool-ux-design.md §5.1). */
+  toolDisplay(name: string): ToolDisplay | undefined { return this.options.registry.display(name); }
+  /** The display record of a call, projected from the tool's hints. */
+  private callDisplay(name: string, args: Record<string, unknown>, started: boolean): VisibleToolCall {
+    return projectToolCall(name, this.toolIdentity(name), args, started, this.toolDisplay(name));
+  }
   get requestTimeoutMs(): number { return this.options.requestTimeoutMs; }
   stats(fromRequest = 0): UsageSummary { return summarizeUsage(this.usageEntries.slice(fromRequest)); }
   estimatedContextTokens(): number { return this.contextUsage().tokens; }
@@ -1134,6 +1141,7 @@ export class AgentSession {
     };
     const startedCalls = new Set<string>();
     const startedAt = new Map<string, number>();
+    const dispatchedAt = new Map<string, number>();
     const emit = (event: RunEvent) => {
       if (observerError) return;
       try {
@@ -1141,7 +1149,8 @@ export class AgentSession {
         if (event.type === "text_delta") segmentId = appendVisible("assistant", event.text);
         else if (event.type === "reasoning_delta") segmentId = appendVisible("reasoning", event.text);
         else if (event.type === "tool_start") {
-          for (const item of presentation.start(event.id, event.name, this.toolIdentity(event.name), event.arguments))
+          event = { ...event, display: { ...this.callDisplay(event.name, event.arguments, true), id: event.id } };
+          for (const item of presentation.start(event.id, event.name, event.arguments, event.display!))
             this.recordVisible(item.kind, item.payload, item.status);
           startedCalls.add(event.id);
           startedAt.set(event.id, performance.now());
@@ -1230,11 +1239,13 @@ export class AgentSession {
         : block) };
       const identity = this.toolIdentity(call.name);
       const normalized = normalizedCalls.get(call.id);
+      // Every result has a duration (§5.3): from the handler's start, else from dispatch (a gate refused it), else zero.
+      const began = startedAt.get(call.id) ?? dispatchedAt.get(call.id);
       const projected = { ...projectToolResult(call.name, identity, publicResult,
-        startedAt.has(call.id) ? performance.now() - startedAt.get(call.id)! : undefined), id: call.id };
-      const display = presentation.result({ type: "tool_result", id: call.id, name: call.name, result: publicResult,
+        began === undefined ? 0 : performance.now() - began, this.toolDisplay(call.name)), id: call.id };
+      const display = presentation.result({ type: "tool_result", id: call.id, name: call.name, result: publicResult, display: projected,
         ...(normalized ? { arguments: normalized } : {}) },
-        identity, normalized ?? call.arguments, startedCalls.has(call.id), projected);
+        startedCalls.has(call.id), this.callDisplay(call.name, normalized ?? call.arguments, false), projected);
       try {
         this.commitMessage({ role: "tool", callId: call.id, name: call.name, result: structuredClone(result),
           ...(normalized ? { arguments: structuredClone(normalized) } : {}) },
@@ -1433,9 +1444,10 @@ export class AgentSession {
         this.commitMessage(structuredClone({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls,
           ...(turn.opaque !== undefined ? { opaque: turn.opaque } : {}) }), {}, [
           ...visibleMessage(turn.text),
-          ...turn.toolCalls.flatMap((call) => presentation.declaration(call.id, call.name, call.arguments)),
+          ...turn.toolCalls.flatMap((call) => presentation.declaration(call.id, call.name, call.arguments, this.callDisplay(call.name, call.arguments, false))),
         ]);
-        for (const call of turn.toolCalls) emit({ type: "tool_call", id: call.id, name: call.name, arguments: call.arguments });
+        for (const call of turn.toolCalls) emit({ type: "tool_call", id: call.id, name: call.name, arguments: call.arguments,
+          display: { ...this.callDisplay(call.name, call.arguments, false), id: call.id } });
         for (let index = 0; index < turn.toolCalls.length; index++) {
           const call = turn.toolCalls[index]!;
           if (controller.signal.aborted) {
@@ -1444,6 +1456,7 @@ export class AgentSession {
           }
           const panelInfo = call.argumentError ? undefined : this.options.registry.panelDeclarations(call.name);
           const panelCall = panelInfo ? this.panels.begin(call.id, panelInfo, "tool", this.panelScope()) : undefined;
+          dispatchedAt.set(call.id, performance.now());
           const dispatched = call.argumentError
             ? capResult(errorResult("invalid_arguments", call.argumentError), this.options.maxOutputBytes)
             : await this.options.registry.dispatch(call.name, call.arguments, {

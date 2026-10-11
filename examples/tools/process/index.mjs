@@ -1,13 +1,13 @@
 // src/tools/bundled/process/index.ts
-import { isAbsolute, resolve } from "path";
+import { isAbsolute as isAbsolute2, resolve as resolve2 } from "path";
 
 // src/tools/types.ts
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
 // src/tools/spill.ts
-import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeSync } from "fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, statSync, writeSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, dirname, isAbsolute, join, resolve } from "path";
 import { randomUUID } from "crypto";
 var SPILL_MAX_BYTES = 64 * 1024 * 1024;
 var SPILL_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -70,7 +70,7 @@ function validateArgs(raw) {
   if (extra) return `${extra} is not used by action ${args.action}; example: ${EXAMPLES[args.action]}`;
   if (args.action === "start") {
     if (typeof args.command !== "string" || !args.command.trim() || args.command.length > 65536) return `start needs a nonempty command of at most 65536 characters; example: ${EXAMPLES.start}`;
-    if (args.cwd !== void 0 && (typeof args.cwd !== "string" || !args.cwd || isAbsolute(args.cwd))) return "cwd must be relative to the session";
+    if (args.cwd !== void 0 && (typeof args.cwd !== "string" || !args.cwd || isAbsolute2(args.cwd))) return "cwd must be relative to the session";
     if (args.label !== void 0 && (typeof args.label !== "string" || !args.label || [...args.label].length > 200)) return "label must be 1\u2013200 characters";
     if (args.timeout !== void 0 && (!Number.isSafeInteger(args.timeout) || args.timeout < 1 || args.timeout > 2147483647)) return "timeout must be a positive number of milliseconds";
     if (args.env_refs !== void 0 && (!args.env_refs || typeof args.env_refs !== "object" || Array.isArray(args.env_refs) || Object.entries(args.env_refs).some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== "string" || !value))) return "env_refs must map environment identifiers to variable names";
@@ -101,7 +101,7 @@ async function handler(raw, context) {
       }
       const record2 = await context.processes.start({
         command: args.command,
-        cwd: resolve(context.cwd, args.cwd ?? "."),
+        cwd: resolve2(context.cwd, args.cwd ?? "."),
         ...args.label ? { label: args.label } : {},
         ...args.timeout !== void 0 ? { timeout_ms: args.timeout } : {},
         ...context.signal ? { signal: context.signal } : {},

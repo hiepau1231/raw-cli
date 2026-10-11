@@ -25,6 +25,7 @@ import type { SessionMetrics } from "../sessions/metrics.js";
 import { Approvals, type Approval } from "./approvals.js";
 import { DashboardError, readBody, textField } from "./errors.js";
 import { AttachmentStaging } from "./attachments.js";
+import { sendFullOutput, storedFullOutput } from "./full-results.js";
 import { searchWorkspaceFiles, workspaceFileLink } from "./files.js";
 import { browseDirectory, listWorkspaces } from "./workspaces.js";
 import { LiveOutput, type LiveSegment } from "./live-output.js";
@@ -163,7 +164,8 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
       const selected = [...new Map([...operations.activeIds().map((id) => store.getOperation(id)!).filter(Boolean), ...all].map((op) => [op.id, op])).values()];
       return reply({ operations: selected.slice(0, 100).map((op) => ({ id: op.id, sessionId: op.sessionId, kind: op.kind, state: op.state,
         agentName: op.agentName, acceptedAt: op.acceptedAt, updatedAt: op.updatedAt, controllable: operations.owns(op.id) })),
-      approvals: approvals.list().map(({ arguments: _args, ...metadata }) => metadata) });
+      // The cross-session list never shows call content: the headline comes from the arguments too.
+      approvals: approvals.list().map(({ arguments: _args, title: _title, summary: _summary, ...metadata }) => metadata) });
     }
     if (path === "/api/sessions") {
       if (method === "GET") {
@@ -218,6 +220,14 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
       const raw = url.searchParams.get("limit"); const limit = raw === null ? 20 : Number(raw);
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new DashboardError(400, "invalid_limit", "limit must be 1 to 50");
       return reply({ items: await searchWorkspaceFiles(session.cwd, url.searchParams.get("q") ?? "", limit) });
+    }
+    const fullResult = /^\/api\/sessions\/([^/]+)\/tool-results\/([^/]+)\/full$/.exec(path);
+    if (fullResult && method === "GET") {
+      const id = decodeURIComponent(fullResult[1]!); requireSession(id);
+      const stored = storedFullOutput(store, id, decodeURIComponent(fullResult[2]!));
+      if (!stored) throw new DashboardError(404, "not_found", "Tool call not found in this session");
+      await sendFullOutput(response, stored);
+      return true;
     }
     const commandRoute = /^\/api\/sessions\/([^/]+)\/commands(?:\/([^/]+)(?:\/(output|stop|controls)(?:\/([^/]+))?)?)?$/.exec(path);
     if(commandRoute) {

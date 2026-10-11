@@ -4,6 +4,11 @@
   "version": "1.0.0",
   "name": "read_var",
   "description": "Read a selected variable by name. Only read-access variables are readable; use-only variables must be passed as env_refs to Bash or consuming tools. Results include observed_at and cached. Earlier results are historical; read again when fresh data matters, especially after resume.",
+  "display": {
+    "title": "Read variable",
+    "kind": "read",
+    "summary": "{name}"
+  },
   "input_schema": {
     "type": "object",
     "properties": {

@@ -4,6 +4,10 @@
   "version": "1.0.0",
   "name": "list_vars",
   "description": "List selected variable names, descriptions, types and read/use access without resolving values or running providers. Read accessible values with read_var; pass use references to consuming tools. No variables are added automatically.",
+  "display": {
+    "title": "List variables",
+    "kind": "read"
+  },
   "input_schema": {
     "type": "object",
     "properties": {},

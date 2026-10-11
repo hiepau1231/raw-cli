@@ -12,7 +12,7 @@ import { DEFAULT_REQUEST_TIMEOUT_MS } from "./llm/types.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./tools/results.js";
 import { ANTHROPIC_EFFORTS, ANTHROPIC_TIERS, DEEPSEEK_EFFORTS, GOOGLE_LEVELS, OPENAI_EFFORTS, OPENAI_TIERS, requestKind } from "./request-controls.js";
 import type { ApiMethod, CacheOptions, ModelRequestOptions, ProviderName, ResolvedModelConfig } from "./llm/types.js";
-import { parseMcpPanels, type McpServerConfig } from "./tools/mcp-client.js";
+import { parseMcpDisplay, parseMcpPanels, type McpServerConfig } from "./tools/mcp-client.js";
 import type { ToolPolicyRule } from "./tools/registry.js";
 import { compileWhen } from "./tools/policy.js";
 import { createPackageResolutionContext, resolvePackageAgentBinding, resolvePackageDefinitions,
@@ -333,15 +333,17 @@ function mcpServersSpec(raw: unknown): Map<string, McpServerConfig> {
     const transport = enumValue(spec.transport, new Set<"stdio" | "streamable-http">(["stdio", "streamable-http"]), where + ".transport");
     const timeout = spec.timeout_ms === undefined ? {} : { timeoutMs: timerMs(spec.timeout_ms, where + ".timeout_ms") };
     if (transport === "stdio") {
-      keys(spec, ["transport", "command", "args", "env", "panels", "timeout_ms"], where);
+      keys(spec, ["transport", "command", "args", "env", "panels", "display", "timeout_ms"], where);
       result.set(name, { command: string(spec.command, where + ".command"), ...timeout,
         ...(spec.panels !== undefined ? { panels: parseMcpPanels(spec.panels, where + ".panels") } : {}),
+        ...(spec.display !== undefined ? { display: parseMcpDisplay(spec.display, where + ".display") } : {}),
         ...(spec.args !== undefined ? { args: argumentStrings(spec.args, where + ".args") } : {}),
         ...(spec.env !== undefined ? { env: stringMap(spec.env, where + ".env") } : {}) });
     } else {
-      keys(spec, ["transport", "url", "headers", "panels", "timeout_ms"], where);
+      keys(spec, ["transport", "url", "headers", "panels", "display", "timeout_ms"], where);
       result.set(name, { transport: "streamable-http", url: endpoint(spec.url, where + ".url"), ...timeout,
         ...(spec.panels !== undefined ? { panels: parseMcpPanels(spec.panels, where + ".panels") } : {}),
+        ...(spec.display !== undefined ? { display: parseMcpDisplay(spec.display, where + ".display") } : {}),
         ...(spec.headers !== undefined ? { headers: stringMap(spec.headers, where + ".headers") } : {}) });
     }
   }

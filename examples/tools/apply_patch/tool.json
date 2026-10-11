@@ -4,6 +4,12 @@
   "version": "1.0.0",
   "name": "apply_patch",
   "description": "Apply a patch that adds, updates, moves or deletes files. Format: *** Begin Patch, then per file *** Add File: path (lines prefixed with +), *** Update File: path (optional *** Move to: path, then @@ hunks with space, - and + lines and unique exact context), or *** Delete File: path, then *** End Patch. Example: {\"patch\":\"*** Begin Patch\\n*** Update File: src/app.ts\\n@@\\n-const a = 1;\\n+const a = 2;\\n*** End Patch\"}. All files are checked before any change; a failure while writing stops the remaining files and is reported per file. Limits: 1 MiB patch, 64 paths, 16 MiB per file. The result lists one line per changed file with its line counts. Successful changes appear in the Files changed panel.",
+  "display": {
+    "title": "Patch",
+    "kind": "edit",
+    "summary": "{patch_paths}",
+    "result": "diff"
+  },
   "entry": "./index.mjs",
   "input_schema": {
     "type": "object",

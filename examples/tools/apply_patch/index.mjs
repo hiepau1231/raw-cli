@@ -2,15 +2,15 @@
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 import { constants } from "fs";
 import { chmod, link, lstat, mkdir, open, rename, unlink } from "fs/promises";
-import { dirname, join as join2, parse, relative, resolve, sep } from "path";
+import { dirname as dirname2, join as join2, parse, relative, resolve as resolve2, sep } from "path";
 
 // src/tools/types.ts
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
 // src/tools/spill.ts
-import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeSync } from "fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, statSync, writeSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, dirname, isAbsolute, join, resolve } from "path";
 import { randomUUID } from "crypto";
 var SPILL_MAX_BYTES = 64 * 1024 * 1024;
 var SPILL_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -84,7 +84,7 @@ function parsePatch(source, cwd, checkResolvedTargets) {
   let targetCount = 0;
   const target = (raw) => {
     if (!raw || raw.trim() !== raw || /[\r\n\0]/.test(raw)) fail("patch_invalid_path");
-    const path = resolve(cwd, raw);
+    const path = resolve2(cwd, raw);
     if (++targetCount > 64) fail("patch_too_many_paths");
     if (!checkResolvedTargets) return path;
     if (targets.has(path)) fail("patch_repeated_target");
@@ -139,7 +139,7 @@ function describePatchEffects(parsed) {
 async function safeParents(path) {
   const root = parse(path).root;
   let current = root;
-  const parts = relative(root, dirname(path)).split(sep).filter(Boolean);
+  const parts = relative(root, dirname2(path)).split(sep).filter(Boolean);
   for (const component of ["", ...parts]) {
     if (component) current = join2(current, component);
     try {
@@ -340,9 +340,9 @@ async function applyStagedFilePatch(staged, options) {
         await notify(options, { path: change.path, kind: "deleted", before: source.bytes });
       } else {
         const destination = change.destination ?? change.path;
-        await mkdir(dirname(destination), { recursive: true });
+        await mkdir(dirname2(destination), { recursive: true });
         await safeParents(destination);
-        temporary = join2(dirname(destination), `.raw-patch-${randomUUID2()}.tmp`);
+        temporary = join2(dirname2(destination), `.raw-patch-${randomUUID2()}.tmp`);
         const handle = await open(temporary, "wx", source?.mode ?? 438);
         try {
           await handle.writeFile(after);
@@ -402,7 +402,7 @@ async function applyFilePatch(parsed, options) {
 import { constants as fsConstants } from "fs";
 
 // src/tools/write-changes.ts
-import { isAbsolute, relative as relative2 } from "path";
+import { isAbsolute as isAbsolute2, relative as relative2 } from "path";
 
 // src/panels/contract.ts
 var PANEL_LIMITS = {
@@ -617,7 +617,7 @@ function counts(change) {
 }
 function displayPath(path, cwd) {
   const inside = relative2(cwd, path);
-  return inside && !inside.startsWith("..") && !isAbsolute(inside) ? inside : path;
+  return inside && !inside.startsWith("..") && !isAbsolute2(inside) ? inside : path;
 }
 function changeHostData(changes, cwd, withDiff) {
   const files = changes.map((change) => {
@@ -721,7 +721,7 @@ async function publishWriteChanges(context, changes) {
 
 // src/tools/primitives.ts
 import { open as open2, mkdir as mkdir2, writeFile, readFile, stat } from "fs/promises";
-import { dirname as dirname2, resolve as resolve2 } from "path";
+import { dirname as dirname3, resolve as resolve3 } from "path";
 
 // src/tools/process.ts
 import { spawn } from "child_process";

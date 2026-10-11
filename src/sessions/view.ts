@@ -83,6 +83,9 @@ export function projectHistoryItem(item: HistoryItem): HistoryView {
     view.toolCall = display ? structuredClone(display) : {
       id: String(update.toolCallId ?? ""), name: String(update.name ?? update.title ?? "tool"),
       arguments: structuredClone(object(update.rawInput)), started: update.status === "in_progress",
+      // An ACP declaration carries the projected heading ("<title> <summary>") and kind.
+      ...(typeof update.title === "string" ? { title: update.title, summary: "" } : {}),
+      ...(typeof update.kind === "string" ? { kind: update.kind as NonNullable<VisibleToolCall["kind"]> } : {}),
     };
     view.callId = view.toolCall.id ?? `unknown:${item.sequence}`;
     view.toolState = view.toolCall.started ? "running" : "requested";
@@ -94,16 +97,22 @@ export function projectHistoryItem(item: HistoryItem): HistoryView {
         ...(typeof raw.code === "string" ? { code: raw.code } : {}),
         content: [{ type: "text", text: String(raw.preview ?? JSON.stringify(raw)) }] });
     view.callId = display?.id ?? (typeof update.toolCallId === "string" ? update.toolCallId : `unknown:${item.sequence}`);
+    // An ACP result of a call that never ran carries that call's final projection.
+    if (payload.call) view.toolCall = structuredClone(payload.call as VisibleToolCall);
     const code = view.toolResult.code;
     view.toolState = code === "outcome_unknown" ? "outcome_unknown" : code === "cancelled" || code === "aborted" ? "cancelled"
       : code === "denied" || code === "approval_denied" || code === "tool_denied" ? "denied"
       : view.toolResult.failed ? "failed" : "succeeded";
     view.previewOnly = true;
-    view.previewAbbreviated = view.toolResult.segments.some((segment) => /\[middle (?:lines|characters) hidden\]/.test(segment.text));
+    // Older records have no flag; their markers named what was hidden.
+    view.previewAbbreviated = view.toolResult.abbreviated
+      ?? view.toolResult.segments.some((segment) => /\[middle (?:lines|characters) hidden\]/.test(segment.text));
   } else if (item.kind === "acp_update") {
     if (update.sessionUpdate === "tool_call_update") {
       view.kind = "tool_state"; view.callId = String(update.toolCallId ?? "");
       view.toolState = update.status === "in_progress" ? "running" : "requested";
+      // An ACP start carries the normalized call projection, which replaces the declared one.
+      if (payload.display) view.toolCall = structuredClone(payload.display as VisibleToolCall);
     } else view.text = String(object(update.content).text ?? "");
   }
   return view;

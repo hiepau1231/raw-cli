@@ -218,7 +218,7 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
     const tty = await run("python3", [join(repo, "tests", "fixtures", "pty-bridge.py"), bin,
       "--config", terminalConfig, "--theme", "dark", "--icons", "unicode", "installed terminal"], consumer, terminalEnv, true);
     assert.equal(tty.code, 0, tty.stdout + tty.stderr);
-    assert.match(tty.stdout, /↳ read_file/);
+    assert.match(tty.stdout, /↳ Read/);
     const ttyPlain = tty.stdout.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
     assert.match(ttyPlain, /const installedPreview = 7;/);
     assert.match(tty.stdout, /Installed result/);

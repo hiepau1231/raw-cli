@@ -1,8 +1,9 @@
 import { fstatSync } from "node:fs";
 import type { AgentSession, RunEvent, RunResult } from "../agent.js";
+import type { ToolApprovalRequest } from "../tools/primitives.js";
 import type { RuntimeConfig } from "../config.js";
 import { toolArguments } from "../sessions/display.js";
-import { projectToolCall, projectToolResult, renderPlainToolResult } from "../sessions/visible.js";
+import { projectToolCall, projectToolResult, renderPlainToolResult, statusLabel, type VisibleToolCall } from "../sessions/visible.js";
 import { MarkdownStream } from "./markdown.js";
 import { terminalCapabilities } from "./options.js";
 import { icon, paint } from "./theme.js";
@@ -10,6 +11,12 @@ import { formatToolResult, formatToolStart } from "./tools.js";
 import { TerminalWriter } from "./writer.js";
 import { safeTerminalText } from "./safe.js";
 import { receiptLine } from "../panels/render.js";
+
+/** Redirected output: the call's title and summary, then its name and complete display arguments for logs (§5.4). */
+function plainCall(call: VisibleToolCall): string {
+  const heading = [call.title ?? call.name, call.summary].filter(Boolean).join("  ");
+  return safeTerminalText(`${heading} (${call.name} ${JSON.stringify(call.arguments)})`);
+}
 
 export function sharedInteractiveTerminal(): boolean {
   if (!process.stdout.isTTY || !process.stderr.isTTY || process.env.TERM === "dumb") return false;
@@ -136,12 +143,14 @@ export class TerminalRenderer {
     else { this.finishThinking(); this.finishTextLine(); }
   }
 
-  approvalPrompt(name: string, args: Record<string, unknown>, identity?: string): string {
+  /** The approval headline is the call's title and summary from its normalized arguments; the arguments follow (§5.4). */
+  approvalPrompt(request: Pick<ToolApprovalRequest, "name" | "arguments" | "identity" | "title" | "summary">): string {
     this.beforeInput();
-    if (!this.rich && !this.decoratedPlain) return `raw: allow ${name} ${toolArguments(name, args, true, identity)}? [y/N] `;
-    const call = projectToolCall(name, identity, args, false);
-    return `${paint("warning", `${icon("attention", this.runtime.ui, this.caps)} Allow ${name}?`, this.runtime.ui, this.caps)}\n`
-      + `  ${JSON.stringify(call.arguments)}\n  [y/N] `;
+    const headline = safeTerminalText([request.title, request.summary].filter(Boolean).join("  "));
+    const args = safeTerminalText(toolArguments(request.name, request.arguments, true, request.identity));
+    if (!this.rich && !this.decoratedPlain) return `raw: allow ${headline}? (${request.name} ${args}) [y/N] `;
+    return `${paint("warning", `${icon("attention", this.runtime.ui, this.caps)} Allow ${headline}?`, this.runtime.ui, this.caps)}\n`
+      + `  ${paint("muted", `${safeTerminalText(request.name)} ${args}`, this.runtime.ui, this.caps)}\n  [y/N] `;
   }
 
   event = (event: RunEvent): void => {
@@ -162,7 +171,7 @@ export class TerminalRenderer {
     if (event.type === "tool_start") {
       this.pendingCalls.delete(event.id);
       this.flushAnswer(); this.finishThinking();
-      const display = event.display ?? projectToolCall(event.name, this.session.toolIdentity(event.name), event.arguments, true);
+      const display = event.display ?? projectToolCall(event.name, this.session.toolIdentity(event.name), event.arguments, true, this.session.toolDisplay(event.name));
       process.stderr.write(formatToolStart(display, this.runtime.ui, this.caps, this.width));
       this.statusWriter.activity(`Running ${event.name}`);
       return;
@@ -172,10 +181,10 @@ export class TerminalRenderer {
       const pending = this.pendingCalls.get(event.id);
       if (pending) {
         this.pendingCalls.delete(event.id);
-        process.stderr.write(formatToolStart(projectToolCall(pending.name, this.session.toolIdentity(pending.name), pending.arguments, false),
+        process.stderr.write(formatToolStart(projectToolCall(pending.name, this.session.toolIdentity(pending.name), event.arguments ?? pending.arguments, false, this.session.toolDisplay(pending.name)),
           this.runtime.ui, this.caps, this.width));
       }
-      process.stderr.write(formatToolResult(event.display ?? projectToolResult(event.name, this.session.toolIdentity(event.name), event.result),
+      process.stderr.write(formatToolResult(event.display ?? projectToolResult(event.name, this.session.toolIdentity(event.name), event.result, undefined, this.session.toolDisplay(event.name)),
         this.runtime.ui, this.caps, this.width));
       this.panelReceipts(event);
       return;
@@ -228,40 +237,39 @@ export class TerminalRenderer {
       this.pendingCalls.delete(event.id);
       this.finishTextLine(); this.finishThinking();
       if (this.decoratedPlain) {
-        process.stderr.write(formatToolStart(event.display ?? projectToolCall(event.name, this.session.toolIdentity(event.name), event.arguments, true),
+        process.stderr.write(formatToolStart(event.display ?? projectToolCall(event.name, this.session.toolIdentity(event.name), event.arguments, true, this.session.toolDisplay(event.name)),
           this.runtime.ui, this.caps, this.width));
         return;
       }
-      const args = JSON.stringify(event.display?.arguments ?? projectToolCall(event.name, this.session.toolIdentity(event.name), event.arguments, true).arguments);
-      process.stderr.write(`raw: ${event.name} ${args}\n`);
+      process.stderr.write(`raw: ${plainCall(event.display ?? projectToolCall(event.name, this.session.toolIdentity(event.name), event.arguments, true, this.session.toolDisplay(event.name)))}\n`);
     } else if (event.type === "tool_result") {
       this.finishTextLine(); this.finishThinking();
       const pending = this.pendingCalls.get(event.id);
       if (this.decoratedPlain) {
         if (pending) {
           this.pendingCalls.delete(event.id);
-          process.stderr.write(formatToolStart(projectToolCall(pending.name, this.session.toolIdentity(pending.name), pending.arguments, false),
+          process.stderr.write(formatToolStart(projectToolCall(pending.name, this.session.toolIdentity(pending.name), event.arguments ?? pending.arguments, false, this.session.toolDisplay(pending.name)),
             this.runtime.ui, this.caps, this.width));
         }
-        process.stderr.write(formatToolResult(event.display ?? projectToolResult(event.name, this.session.toolIdentity(event.name), event.result),
+        process.stderr.write(formatToolResult(event.display ?? projectToolResult(event.name, this.session.toolIdentity(event.name), event.result, undefined, this.session.toolDisplay(event.name)),
           this.runtime.ui, this.caps, this.width));
         this.panelReceipts(event);
         return;
       }
       if (pending) {
         this.pendingCalls.delete(event.id);
-        const args = JSON.stringify(projectToolCall(pending.name, this.session.toolIdentity(pending.name), pending.arguments, false).arguments);
-        process.stderr.write(`raw: ⚠ ${pending.name} ${args}\n`);
+        process.stderr.write(`raw: ⚠ ${plainCall(projectToolCall(pending.name, this.session.toolIdentity(pending.name), event.arguments ?? pending.arguments, false, this.session.toolDisplay(pending.name)))}\n`);
       }
       const result = event.result;
-      const display = event.display ?? projectToolResult(event.name, this.session.toolIdentity(event.name), result);
+      const display = event.display ?? projectToolResult(event.name, this.session.toolIdentity(event.name), result, undefined, this.session.toolDisplay(event.name));
+      const status = statusLabel(display);
       const meta = [
-        ...(typeof result.exitCode === "number" ? [`exit ${result.exitCode}`] : []),
-        ...(result.code ? [result.code] : []),
+        ...(display.code && display.failed && display.code !== status ? [display.code] : []),
         ...(result.truncated ? ["model output capped"] : []),
+        ...(typeof display.durationMs === "number" ? [`${display.durationMs}ms`] : []),
       ];
       const preview = renderPlainToolResult(display);
-      process.stderr.write(`raw: ${display.failed ? "✗" : "↳"} ${event.name} result${meta.length ? ` (${meta.join(", ")})` : ""}${preview ? "" : " (empty)"}\n`);
+      process.stderr.write(`raw: ${display.failed ? "✗" : "↳"} ${event.name} ${[status, ...meta].join(" · ")}${preview ? "" : " (empty)"}\n`);
       if (preview) process.stderr.write(`${preview}\n`);
       this.panelReceipts(event);
     } else if (event.type === "compact_start") {

@@ -4,6 +4,12 @@
   "version": "1.0.0",
   "name": "edit_file",
   "description": "Replace exact text in an existing file. Example: {\"path\":\"src/app.ts\",\"old_string\":\"const a = 1;\",\"new_string\":\"const a = 2;\"}. old_string must match the file exactly, including indentation, and occur once; include surrounding lines to make it unique, or set replace_all to change every occurrence. An empty new_string deletes the match. When old_string is not found the error shows the most similar lines. The result reports the replacements and the lines added and removed. Successful edits appear in the Files changed panel.",
+  "display": {
+    "title": "Edit",
+    "kind": "edit",
+    "summary": "{path}",
+    "result": "diff"
+  },
   "entry": "./index.mjs",
   "input_schema": {
     "type": "object",

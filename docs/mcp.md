@@ -28,6 +28,17 @@ declare `mcp.servers.search` in that file and add `mcp/search/web_search` to
 the agent's ordered `tools.use` list. The recipient must provide the server
 command or URL and any credentials it requires.
 
+## Display hints
+
+Each selected MCP tool gets [display hints](tools.md#display-hints) from the server's tool listing: the title from `annotations.title` (or the tool's own `title`), the kind `read` when `annotations.readOnlyHint` is true, otherwise `fetch` when `annotations.openWorldHint` is true, otherwise `other`. Config can override any field per original tool name with `display` on the server; each override field replaces the annotation's:
+
+```json
+"mcp":{"servers":{"search":{"transport":"stdio","command":"my-search-server",
+  "display":{"web_search":{"title":"Search the web","kind":"search","summary":"{query}","result":"markdown"}}}}}
+```
+
+Override values follow the `tool.json` rules; an unknown field or value fails config validation. Without a `summary`, the default summary applies, so `{"query":"x","limit":5}` shows `x · limit=5`. Text results that start with a heading, a list, a quote or a code fence are shown as Markdown. Tools from a package's MCP server (`<package>#mcp/…`) are shown the same way as config MCP tools, with the MCP icon in the CLI.
+
 ## Panels
 
 A server may publish a side panel (`raw.panel/2`, [panels design](panels-design.md)) by returning updates in the tool result's `_meta["raw/panel"]`: one update object or an array of them, each `{ "panel": "<id>", "op": "replace" | "patch" | "close", ... }`. Raw validates them exactly like updates from a local tool, keeps them out of the model-visible content and adds only a short confirmation line. Undeclared MCP panels are accepted with an implicit declaration (the title is the document title or the panel id). To give a panel a title, icon or actions, declare it in config: `"panels": [{ "tool": "<original MCP tool name>", "id": "todo", "title": "Todo" }]` on the server (at most four per tool). Panels are owned by the tool's canonical identity (`mcp/<server>/<tool>`, or the package identity for a package-provided server).

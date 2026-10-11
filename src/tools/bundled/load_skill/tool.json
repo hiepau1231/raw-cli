@@ -4,6 +4,12 @@
   "version": "1.0.0",
   "name": "load_skill",
   "description": "Load the full Markdown instructions for one skill selected for this agent. Use list_skills to find a valid name. The complete Markdown arrives in this call's tool result at the end of the conversation.",
+  "display": {
+    "title": "Load skill",
+    "kind": "read",
+    "icon": "skill",
+    "summary": "{name}"
+  },
   "input_schema": {
     "type": "object",
     "properties": {

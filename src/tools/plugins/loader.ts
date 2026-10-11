@@ -145,6 +145,7 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
       ...(item.manifest.effects_schema ? { effectsSchema: item.manifest.effects_schema,
         describeEffects: entry.describeEffects as NonNullable<ToolRegistration["describeEffects"]> } : {}),
       ...(item.manifest.panels?.length ? { panels: item.manifest.panels } : {}),
+      ...(item.manifest.display ? { display: item.manifest.display } : {}),
       ...(bundled && typeof entry.normalizeArguments === "function"
         ? { normalizeArguments: entry.normalizeArguments as NonNullable<ToolRegistration["normalizeArguments"]> } : {}),
       ...(bundled && plainObject(entry.example) ? { example: entry.example } : {}),

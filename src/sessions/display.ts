@@ -4,24 +4,34 @@ import type { PanelReceipt } from "../panels/contract.js";
 import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
 import type { UserInput } from "../llm/types.js";
 import type { HistoryItem } from "./store.js";
-import { projectToolCall, renderPlainToolResult, type VisibleToolCall, type VisibleToolResult } from "./visible.js";
+import { projectToolCall, renderPlainToolResult, statusLabel, toolStatus, type VisibleToolCall, type VisibleToolResult } from "./visible.js";
+import type { ToolKind } from "../tools/display.js";
 
 export function toolArguments(name: string, args: Record<string, unknown>, full = false, identity?: string): string {
   const json = JSON.stringify(projectToolCall(name, identity, args, true).arguments);
   return full || identity === "builtin/bash" || json.length <= 240 ? json : `${json.slice(0, 239)}…`;
 }
 
+/** The ACP title and kind of a call: its display title and summary, and the hint's kind (docs/tool-ux-design.md §5.4). */
+export function acpToolHeading(display: Pick<VisibleToolCall, "name" | "title" | "summary" | "kind"> | undefined, name: string): { title: string; kind: ToolKind } {
+  const title = [display?.title ?? name, display?.summary].filter(Boolean).join(" ");
+  return { title, kind: display?.kind ?? "other" };
+}
+
 
 export function acpUpdate(event: RunEvent): SessionUpdate | undefined {
   if (event.type === "text_delta") return { sessionUpdate: "agent_message_chunk", content: { type: "text", text: event.text } };
-  if (event.type === "tool_call") return { sessionUpdate: "tool_call", toolCallId: event.id, title: event.name,
-    name: event.name, kind: event.name === "read_file" ? "read" : ["write_file", "edit_file", "apply_patch"].includes(event.name) ? "edit" : "execute",
-    status: "pending", rawInput: event.arguments };
+  if (event.type === "tool_call") return { sessionUpdate: "tool_call", toolCallId: event.id, ...acpToolHeading(event.display, event.name),
+    name: event.name, status: "pending", rawInput: event.arguments };
   // Start and result updates carry the arguments the tool actually received, which differ from the declared call
-  // when Raw normalized an alias (docs/tool-ux-design.md §4.3).
-  if (event.type === "tool_start") return { sessionUpdate: "tool_call_update", toolCallId: event.id, status: "in_progress", rawInput: event.arguments };
+  // when Raw normalized an alias (docs/tool-ux-design.md §4.3); the start also retitles the call from them.
+  if (event.type === "tool_start") return { sessionUpdate: "tool_call_update", toolCallId: event.id, status: "in_progress",
+    ...(event.display ? acpToolHeading(event.display, event.name) : {}), rawInput: event.arguments };
   if (event.type === "tool_result") return { sessionUpdate: "tool_call_update", toolCallId: event.id,
-    status: event.result.isError ? "failed" : "completed", ...(event.arguments ? { rawInput: event.arguments } : {}), rawOutput: event.result };
+    // A nonzero exit is a failure even though the tool reported no error (§5.3), live and on replay alike.
+    status: (event.display ? event.display.failed : toolStatus(event.result) !== "ok") ? "failed" : "completed",
+    ...(event.display?.kind ? { kind: event.display.kind } : {}),
+    ...(event.arguments ? { rawInput: event.arguments } : {}), rawOutput: event.result };
   if (event.type === "compact_start") return { sessionUpdate: "agent_thought_chunk",
     content: { type: "text", text: `Compacting context (${event.estimatedTokens} estimated input tokens).` } };
   if (event.type === "compact_end") return { sessionUpdate: "agent_thought_chunk",
@@ -58,13 +68,13 @@ export function storedAcpUpdates(item: HistoryItem): SessionUpdate[] {
     content: { type: "text", text: String(payload.text ?? "") } }];
   if (item.kind === "tool_call") {
     const display = payload.display as VisibleToolCall;
-    return [{ sessionUpdate: "tool_call", toolCallId: String(display.id), title: display.name,
-      name: display.name, kind: "execute", status: display.started ? "pending" : "failed", rawInput: display.arguments }];
+    return [{ sessionUpdate: "tool_call", toolCallId: String(display.id), ...acpToolHeading(display, display.name),
+      name: display.name, status: display.started ? "pending" : "failed", rawInput: display.arguments }];
   }
   if (item.kind === "tool_result") {
     const display = payload.display as VisibleToolResult;
     return [{ sessionUpdate: "tool_call_update", toolCallId: String(display.id), status: display.failed ? "failed" : "completed",
-      rawOutput: { isError: display.failed, code: display.code, exitCode: display.exitCode,
+      rawOutput: { isError: display.failed, status: statusLabel(display), code: display.code, exitCode: display.exitCode,
         truncated: display.truncated, preview: renderPlainToolResult(display) } }];
   }
   return [];

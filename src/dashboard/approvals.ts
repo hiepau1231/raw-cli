@@ -5,6 +5,8 @@ import { DashboardError } from "./errors.js";
 
 export interface Approval {
   id: string; sessionId: string; operationId: string; callId: string; name: string;
+  /** The headline (docs/tool-ux-design.md §5.4): the call's title and summary from its normalized arguments. */
+  title: string; summary: string;
   arguments: Record<string, unknown>; createdAt: number; deadline: number;
   effects?: Record<string, unknown>;
 }
@@ -12,12 +14,12 @@ export class Approvals {
   private readonly pending = new Map<string, { value: Approval; finish: (allow: boolean) => void }>();
   constructor(private readonly publish: (approval: Approval, status: "pending" | "allowed" | "denied" | "expired" | "cancelled") => void) {}
   forOperation(operation: Pick<SessionOperation, "id" | "sessionId">, timeout: () => number): NonNullable<ToolContext["approve"]> {
-    return ({ name, arguments: args, signal, toolCallId: callId, effects }) => {
+    return ({ name, title, summary, arguments: args, signal, toolCallId: callId, effects }) => {
       if (signal?.aborted || !callId) return false;
       return new Promise<boolean>((resolve) => {
         const createdAt = Date.now();
         const value: Approval = { id: randomUUID(), sessionId: operation.sessionId, operationId: operation.id,
-          callId, name, arguments: structuredClone(args), ...(effects ? { effects: structuredClone(effects) } : {}), createdAt, deadline: createdAt + timeout() };
+          callId, name, title, summary, arguments: structuredClone(args), ...(effects ? { effects: structuredClone(effects) } : {}), createdAt, deadline: createdAt + timeout() };
         const finish = (allow: boolean, status: "allowed" | "denied" | "expired" | "cancelled" = allow ? "allowed" : "denied") => {
           if (!this.pending.delete(value.id)) return;
           clearTimeout(timer); signal?.removeEventListener("abort", abort);

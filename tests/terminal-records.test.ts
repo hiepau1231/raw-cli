@@ -6,6 +6,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projectToolCall, projectToolResult, renderPlainToolResult } from "../src/sessions/visible.js";
+import readManifest from "../src/tools/bundled/read_file/tool.json" with { type: "json" };
+import type { ToolDisplay } from "../src/tools/display.js";
 import { initializeSessionSchema, SESSION_SCHEMA_VERSION } from "../src/sessions/schema.js";
 import { openSessionStore } from "../src/sessions/store.js";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
@@ -27,9 +29,8 @@ test("long read results keep both ends within the preview bounds, failed or not"
     const projected = projectToolResult("read_file", "builtin/read_file", {
       isError, content: [{ type: "text", text: `${body}\n[lines 1–800 of 900; next: offset 801]` }],
       host: { path: "src/a.ts", range: { start: 1, end: 800, total: 900 } },
-    }, 23);
+    }, 23, readManifest.display as ToolDisplay);
     assert.equal(projected.failed, isError);
-    assert.deepEqual(projected.rows, []);
     assert.ok(projected.segments.reduce((count, segment) => count + [...segment.text].length, 0) <= 2000);
     assert.ok(projected.segments.length <= 9);
     assert.equal(projected.durationMs, 23);
@@ -50,13 +51,12 @@ test("custom and MCP tools that mimic a built-in name remain generic", () => {
   } }] };
   for (const identity of ["local/fake_read", "mcp/server/read_file", undefined]) {
     const projected = projectToolResult("read_file", identity, result);
-    assert.deepEqual(projected.rows, []);
     assert.ok(projected.segments.every((segment) => segment.kind !== "code"));
     assert.match(renderPlainToolResult(projected), /"results"/);
   }
 });
 
-test("character cap keeps both ends across nine medium-sized preview lines", () => {
+test("long lines end in an ellipsis instead of losing the lines around them", () => {
   const content = Array.from({ length: 9 }, (_, index) =>
     `${index === 0 ? "HEAD" : index === 8 ? "TAIL" : `middle${index}`}${"x".repeat(220)}`).join("\n");
   const projected = projectToolResult("search", "mcp/server/search", { isError: false,
@@ -65,8 +65,8 @@ test("character cap keeps both ends across nine medium-sized preview lines", () 
   assert.ok([...preview].length <= 2000);
   assert.match(preview, /HEAD/);
   assert.match(preview, /TAIL/);
-  assert.match(preview, /hidden/);
-  assert.ok(projected.segments.length <= 9);
+  assert.ok(projected.segments.every((segment) => segment.text.endsWith("…") && [...segment.text].length === 220));
+  assert.equal(projected.segments.length, 9);
 });
 
 test("display calls retain Bash commands and omit write payload values", () => {

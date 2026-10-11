@@ -290,10 +290,10 @@ export function createAcpServer(options: AcpServerOptions): AcpServer {
             if (!peer) throw rawError(rawErrors.upstream, "ACP client disconnected");
             return await withAbort(peer.request<InteractionResponseSubmission>("_raw/interaction/request", request, { cancellationSignal: signal }), signal);
           } } : {}),
-          approve: async ({ name, arguments: args, signal, toolCallId, effects }) => {
+          approve: async ({ name, title, summary, arguments: args, signal, toolCallId, effects }) => {
             if (!peer) throw rawError(rawErrors.upstream, "ACP client disconnected");
             const response = await withAbort(peer.request("session/request_permission", {
-              sessionId, toolCall: { toolCallId: toolCallId ?? randomUUID(), title: name, name, status: "pending", rawInput: args,
+              sessionId, toolCall: { toolCallId: toolCallId ?? randomUUID(), title: [title, summary].filter(Boolean).join(" "), name, status: "pending", rawInput: args,
                 ...(effects ? { _meta: { raw: { effects } } } : {}) },
               options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" },
                 { optionId: "deny", name: "Deny", kind: "reject_once" }],

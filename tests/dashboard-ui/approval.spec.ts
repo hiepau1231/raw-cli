@@ -89,3 +89,50 @@ test("Allow once executes only the pending call and leaves the rule unchanged", 
   expect(existsSync(file)).toBe(false);
   expect(raw.provider.requests.length).toBe(2);
 });
+
+test.describe("approval headline", () => {
+  const bash = (id: string, args: Record<string, unknown>) => ({
+    frames: [
+      openAiFrame(
+        { tool_calls: [{ index: 0, id, type: "function", function: { name: "bash", arguments: JSON.stringify(args) } }] },
+        "tool_calls",
+      ),
+      openAiDone,
+    ],
+  });
+  test.use({
+    scenario: {
+      agent: {
+        request_timeout_ms: 20000,
+        tools: { use: ["builtin/bash"], rules: [{ match: "builtin/bash", effect: "ask" }] },
+      },
+      responses: [
+        bash("canonical", { command: "npm test" }),
+        bash("aliased", { cmd: "npm test" }),
+        { frames: [openAiFrame({ content: "Both denied" }, "stop"), openAiDone] },
+      ],
+    },
+  });
+  test("the card headline is the call summary for canonical and aliased arguments", async ({ page, raw }) => {
+    await openChat(page, raw);
+    await page.getByRole("textbox", { name: "Message" }).fill("run the tests twice");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    for (let index = 0; index < 2; index++) {
+      const card = page.locator("section.approval");
+      await expect(card).toHaveCount(1);
+      const headline = card.locator(".approval-headline");
+      await expect(headline.locator(".approval-title")).toHaveText("Run command");
+      await expect(headline.locator(".approval-summary")).toHaveText("$ npm test");
+      // The arguments stay available below the headline, under a closed disclosure.
+      const details = card.locator("details.approval-arguments");
+      await expect(details.locator("summary")).toHaveText("Arguments");
+      await expect(details).not.toHaveAttribute("open", "");
+      await details.locator("summary").click();
+      await expect(details).toContainText('"command": "npm test"');
+      await card.getByRole("button", { name: "Deny", exact: true }).click();
+      // The denial reaches the model before the next call (or the answer) is requested.
+      await expect.poll(() => raw.provider.requests.length).toBe(index + 2);
+    }
+    await expect(page.getByText("Both denied", { exact: true })).toBeVisible();
+  });
+});

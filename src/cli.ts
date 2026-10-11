@@ -17,6 +17,7 @@ import type { SessionStore, SessionSummary } from "./sessions/store.js";
 import { toolArguments } from "./sessions/display.js";
 import { TerminalRenderer } from "./terminal/renderer.js";
 import { safeTerminalText } from "./terminal/safe.js";
+import type { ToolApprovalRequest } from "./tools/primitives.js";
 import { panelTitle, renderPanelsText, selectPanels } from "./panels/render.js";
 import { effectiveOutputTokens } from "./llm/output.js";
 
@@ -71,11 +72,12 @@ function lineQueue(rl: ReadlineInterface): {
   return { next: (signal) => take(0, signal), nextAfter: take, mark: () => lastId };
 }
 
-async function askPermission(lines: ReturnType<typeof lineQueue>, name: string, args: Record<string, unknown>, signal?: AbortSignal, identity?: string, renderer?: TerminalRenderer): Promise<boolean> {
+async function askPermission(lines: ReturnType<typeof lineQueue>, request: ToolApprovalRequest, renderer?: TerminalRenderer): Promise<boolean> {
+  const { name, arguments: args, signal, identity } = request;
   if (signal?.aborted) return false;
   const mark = lines.mark();
-  process.stderr.write(renderer?.approvalPrompt(name, args, identity)
-    ?? `raw: allow ${name} ${toolArguments(name, args, true, identity)}? [y/N] `);
+  process.stderr.write(renderer?.approvalPrompt(request)
+    ?? `raw: allow ${safeTerminalText(`${request.title}  ${request.summary}`)}? (${name} ${safeTerminalText(toolArguments(name, args, true, identity))}) [y/N] `);
   const answer = await lines.nextAfter(mark, signal);
   return answer !== undefined && /^(?:y|yes)$/i.test(answer.trim());
 }
@@ -137,9 +139,9 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
     ...(process.stdin.isTTY && lines ? { interactionAdapter: (request, signal) => {
       currentRenderer?.beforeInput();
       return terminalInteractionAdapter(lines, text => process.stderr.write(text))(request, signal);
-    }, approve: ({ name, arguments: args, signal, identity, effects }: import("./tools/primitives.js").ToolApprovalRequest) => {
-      if (effects) process.stderr.write(`raw: intended effects ${JSON.stringify(effects)}\n`);
-      return askPermission(lines, name, args, signal, identity, currentRenderer);
+    }, approve: (request: ToolApprovalRequest) => {
+      if (request.effects) process.stderr.write(`raw: intended effects ${JSON.stringify(request.effects)}\n`);
+      return askPermission(lines, request, currentRenderer);
     } } : {}) });
   const hookEvent = (event: import("./agent.js").RunEvent) => {
     if (currentRenderer) currentRenderer.event(event);

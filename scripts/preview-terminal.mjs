@@ -15,6 +15,9 @@ const { formatToolStart, formatToolResult } = await import("../src/terminal/tool
 const { formatTurnFooter } = await import("../src/terminal/footer.ts");
 const { renderTerminalHistory } = await import("../src/terminal/history.ts");
 const { projectToolCall, projectToolResult } = await import("../src/sessions/visible.ts");
+const { readFileSync } = await import("node:fs");
+// The display hints each bundled tool declares in its tool.json.
+const hints = (id) => JSON.parse(readFileSync(new URL(`../src/tools/bundled/${id}/tool.json`, import.meta.url), "utf8")).display;
 
 const options = { width: 80, theme: "terminal", icons: "unicode", display: "normal" };
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -33,11 +36,11 @@ const width = options.width;
 const divider = `${"─".repeat(Math.min(width, 60))}\n`;
 const write = (value) => process.stdout.write(value);
 const sessionId = "11111111-2222-4333-8444-555555555555";
-const call = { ...projectToolCall("read_file", "builtin/read_file", { path: "src/example.ts" }, true), id: "read-1" };
+const call = { ...projectToolCall("read_file", "builtin/read_file", { path: "src/example.ts" }, true, hints("read_file")), id: "read-1" };
 const result = { ...projectToolResult("read_file", "builtin/read_file", { isError: false, content: [{
   type: "text", text: "   1│export const answer = 42;\n   2│console.log(answer);\n[lines 1–2 of 2; end of file]",
-}], host: { summary: "src/example.ts", status: "ok", path: "src/example.ts", range: { start: 1, end: 2, total: 2 } } }, 38), id: "read-1" };
-const denied = { ...projectToolCall("bash", "builtin/bash", { command: "rm -rf scratch" }, false), id: "bash-2" };
+}], host: { summary: "src/example.ts", status: "ok", path: "src/example.ts", range: { start: 1, end: 2, total: 2 } } }, 38, hints("read_file")), id: "read-1" };
+const denied = { ...projectToolCall("bash", "builtin/bash", { command: "rm -rf scratch" }, false, hints("bash")), id: "bash-2" };
 const stats = { requests: 2, inputTokensKnown: 2400, inputCoverage: 2, outputTokensKnown: 180,
   outputCoverage: 2, cacheReadTokensKnown: 600, cacheReadCoverage: 2, cacheWriteTokensKnown: 0,
   cacheWriteCoverage: 0, cacheRatioCoverage: 2, cacheReadRatio: 0.25 };
@@ -51,11 +54,11 @@ write(`${paint("accent", icon("assistant", ui, caps), ui, caps)} ${renderMarkdow
 write(formatTurnFooter({ status: "completed", elapsedMs: 1240, startedToolCalls: 1, notRunToolCalls: 0,
   stats, contextTokens: 3400, contextWindow: 8192, inputBudget: 6700, sessionId, resumable: true, ui, caps }));
 write(`\n${divider}${paint("accent", "Approval and failure", ui, caps)}\n`);
-write(`${paint("warning", `${icon("attention", ui, caps)} Allow bash?`, ui, caps)}\n  [y/N] n\n`);
+write(`${paint("warning", `${icon("attention", ui, caps)} Allow Run command  rm -rf scratch?`, ui, caps)}\n  ${paint("muted", 'bash {"command":"rm -rf scratch"}', ui, caps)}\n  [y/N] n\n`);
 write(formatToolStart(denied, ui, caps, width));
 write(formatToolResult({ ...projectToolResult("bash", "builtin/bash", {
   isError: true, code: "approval_denied", content: [{ type: "text", text: "Approval denied by user" }],
-}, 2), id: "bash-2" }, ui, caps, width));
+}, 2, hints("bash")), id: "bash-2" }, ui, caps, width));
 write(formatTurnFooter({ status: "error", code: "approval_denied", elapsedMs: 55, startedToolCalls: 0, notRunToolCalls: 1,
   stats, contextTokens: 3400, contextWindow: 8192, inputBudget: 6700, sessionId, resumable: true, ui, caps }));
 write(`\n${divider}${paint("accent", "Saved history", ui, caps)}\n`);

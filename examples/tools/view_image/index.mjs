@@ -1,14 +1,14 @@
 // src/tools/image.ts
 import { open, constants } from "fs/promises";
-import { resolve } from "path";
+import { resolve as resolve2 } from "path";
 
 // src/tools/types.ts
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
 // src/tools/spill.ts
-import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeSync } from "fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, statSync, writeSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, dirname, isAbsolute, join, resolve } from "path";
 import { randomUUID } from "crypto";
 var SPILL_MAX_BYTES = 64 * 1024 * 1024;
 var SPILL_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -71,7 +71,7 @@ function jpegValid(data) {
   return false;
 }
 async function viewImageTool(args, context) {
-  const path = resolve(context.cwd, args.path);
+  const path = resolve2(context.cwd, args.path);
   if (context.signal?.aborted) return errorResult("aborted", "image read aborted");
   let handle;
   try {

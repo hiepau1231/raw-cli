@@ -195,7 +195,7 @@ export class SessionStreams {
       return;
     } else if (event.type === "tool_call" || event.type === "tool_start") {
       this.publish(sessionId, "tool", { callId: event.id, state: event.type === "tool_start" ? "running" : "requested",
-        call: projectToolCall(event.name, this.context.operations!.toolIdentity(operationId, event.name), event.arguments, event.type === "tool_start"),
+        call: event.display ?? projectToolCall(event.name, this.context.operations!.toolIdentity(operationId, event.name), event.arguments, event.type === "tool_start"),
         ...(event.turnId ? { turnId: event.turnId } : {}) }, operationId);
     } else if (event.type === "tool_result") {
       this.publish(sessionId, "tool", { callId: event.id, result: event.display ?? projectToolResult(event.name,

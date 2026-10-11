@@ -12,7 +12,7 @@ export { ToolRegistry, BUILTIN_TOOL_DEFINITIONS } from "../../src/tools/registry
 
 export function createTestToolRegistry(rules: readonly ToolPolicyRule[] = [], vision = false): ToolRegistry {
   const registry = new ToolRegistry(rules);
-  const entries: Array<[{ name: string; id: string; description: string; input_schema: unknown }, Pick<ToolRegistration, "handler" | "validateArgs" | "normalizeArguments">
+  const entries: Array<[{ name: string; id: string; description: string; input_schema: unknown; display?: unknown }, Pick<ToolRegistration, "handler" | "validateArgs" | "normalizeArguments">
     & { example?: Record<string, unknown>; renamedArguments?: Record<string, string> }]> =
     [[readManifest, readModule], [writeManifest, writeModule], [bashManifest, bashModule]];
   if (vision) entries.push([imageManifest, imageModule]);
@@ -20,6 +20,7 @@ export function createTestToolRegistry(rules: readonly ToolPolicyRule[] = [], vi
   for (const [manifest, module] of entries) registry.register({
     name: manifest.name, canonicalName: `builtin/${manifest.id}`,
     description: manifest.description, inputSchema: manifest.input_schema as ToolRegistration["inputSchema"],
+    ...(manifest.display ? { display: manifest.display as NonNullable<ToolRegistration["display"]> } : {}),
     ...(manifest.id === "write_file" ? { conditionSources: ["effects"], effectsSchema: writeManifest.effects_schema,
       describeEffects: writeModule.describeEffects } : { conditionSources: ["arguments"] }),
     ...(module.normalizeArguments ? { normalizeArguments: module.normalizeArguments } : {}),

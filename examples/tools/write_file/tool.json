@@ -4,6 +4,12 @@
   "version": "1.0.0",
   "name": "write_file",
   "description": "Create a file or replace its whole content, creating parent directories. Example: {\"path\":\"notes/todo.md\",\"content\":\"# Todo\\n\"}. Relative paths use the session cwd. The result says how many bytes were written and whether the file was created or overwritten. To change part of an existing file use edit_file instead. Successful writes appear in the Files changed panel.",
+  "display": {
+    "title": "Write",
+    "kind": "edit",
+    "summary": "{path}",
+    "result": "text"
+  },
   "entry": "./index.mjs",
   "input_schema": {
     "type": "object",

@@ -4,6 +4,11 @@
   "version": "1.0.0",
   "name": "todo",
   "description": "Tracks a multi-step task as a todo list the user can see. Use it for work with 3 or more distinct steps, or when the user gives several tasks. Create the list before starting. Keep exactly one item in_progress while working. Mark an item done immediately after finishing it, not in batches. Add discovered work as new items. Do not use it for a single trivial step. The result lists every item with its id; use those ids in later merge calls.",
+  "display": {
+    "title": "Todo",
+    "kind": "think",
+    "summary": "[{title}]"
+  },
   "input_schema": {
     "type": "object",
     "additionalProperties": false,

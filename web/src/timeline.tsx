@@ -52,11 +52,18 @@ export function ApprovalActions({ approval }: { approval: Approval }) {
       <strong>
         <ShieldQuestion size={17} aria-hidden="true" /> Permission needed
       </strong>
+      <p className="approval-headline">
+        <span className="approval-title">{approval.title}</span>
+        {approval.summary && <code className="approval-summary">{approval.summary}</code>}
+      </p>
       <p>Allow this call once? This does not change your rules.</p>
-      <CodeBlock
-        code={JSON.stringify(approval.arguments, null, 2)}
-        language="json"
-      />
+      <details className="approval-arguments">
+        <summary>Arguments</summary>
+        <CodeBlock
+          code={JSON.stringify(approval.arguments, null, 2)}
+          language="json"
+        />
+      </details>
       {approval.effects && <><p>Intended effects</p><CodeBlock code={JSON.stringify(approval.effects, null, 2)} language="json" /></>}
       <div className="actions">
         <button
@@ -125,10 +132,9 @@ function ToolCard({
         : CircleDashed;
   const name = call?.name ?? result?.name ?? "Historical tool";
   const args = call?.arguments;
-  const commands = args?.commands;
-  const description = Array.isArray(commands)
-    ? commands.map((item: { command?: string }) => item.command).join("; ")
-    : (call?.identity ?? result?.identity ?? "Details");
+  // The projected title and summary (docs/tool-ux-design.md §5.4); old records fall back to the name and identity.
+  const title = call?.title ?? name;
+  const description = call?.summary ?? call?.identity ?? result?.identity ?? "Details";
   return (
     <details
       className={`tool-card ${failed ? "failed" : ""}`}
@@ -136,7 +142,7 @@ function ToolCard({
     >
       <summary>
         <Terminal size={16} aria-hidden="true" />
-        <strong>{name}</strong>
+        <strong>{title}</strong>
         <span className="tool-summary">{description}</span>
         <span className="tool-status">
           <Icon size={14} aria-hidden="true" />
@@ -170,20 +176,6 @@ function ToolCard({
                     <span>Exit {result.exitCode ?? "unavailable"}</span>
                   )}
                 </div>
-                {result.rows.length > 0 && (
-                  <div className="batch-rows">
-                    {result.rows.map((row) => (
-                      <div key={row.index}>
-                        <span>#{row.index}</span>
-                        <span>{row.path}</span>
-                        <strong>{row.status}</strong>
-                        {row.exitCode !== undefined && (
-                          <span>Exit {row.exitCode}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
                 <CodeBlock
                   code={result.segments
                     .map((segment) => segment.text)

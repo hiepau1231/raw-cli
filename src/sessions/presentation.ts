@@ -1,7 +1,7 @@
 import type { RunEvent } from "../agent.js";
 import { acpUpdate } from "./display.js";
 import type { VisibleRecord } from "./store.js";
-import { projectToolCall, type VisibleToolResult } from "./visible.js";
+import type { VisibleToolCall, VisibleToolResult } from "./visible.js";
 
 export type HistorySurface = "cli" | "acp" | "web";
 
@@ -15,19 +15,22 @@ export function historyPresentation(surface: HistorySurface | undefined) {
         kind: "assistant", payload: { update: acpUpdate({ type: "text_delta", text }), segmentId }, status,
       }));
     },
-    declaration(id: string, name: string, args: Record<string, unknown>): VisibleRecord[] {
-      return canonical ? [] : [{ kind: "tool_call", payload: { update: acpUpdate({ type: "tool_call", id, name, arguments: args }) } }];
+    // Every tool record carries the call's projected display (title, kind, summary), so replay needs no tool lookup.
+    // ACP records keep the projections next to their protocol updates, so the dashboard and CLI replay them like
+    // canonical records: the declared call, the normalized call at start, and the result with the call that never ran.
+    declaration(id: string, name: string, args: Record<string, unknown>, display: VisibleToolCall): VisibleRecord[] {
+      return canonical ? [] : [{ kind: "tool_call", payload: { update: acpUpdate({ type: "tool_call", id, name, arguments: args, display }),
+        display: { ...display, id } } }];
     },
-    start(id: string, name: string, identity: string | undefined, args: Record<string, unknown>): VisibleRecord[] {
-      return canonical ? [{ kind: "tool_call", payload: { display: { ...projectToolCall(name, identity, args, true), id } } }]
-        : [{ kind: "acp_update", payload: { update: acpUpdate({ type: "tool_start", id, name, arguments: args }) } }];
+    start(id: string, name: string, args: Record<string, unknown>, display: VisibleToolCall): VisibleRecord[] {
+      return canonical ? [{ kind: "tool_call", payload: { display: { ...display, id } } }]
+        : [{ kind: "acp_update", payload: { update: acpUpdate({ type: "tool_start", id, name, arguments: args, display }), display: { ...display, id } } }];
     },
-    result(event: Extract<RunEvent, { type: "tool_result" }>, identity: string | undefined,
-      args: Record<string, unknown>, started: boolean, display: VisibleToolResult): VisibleRecord[] {
-      if (!canonical) return [{ kind: "tool_result", payload: { update: acpUpdate(event) } }];
-      return [...(started ? [] : [{ kind: "tool_call", payload: {
-        display: { ...projectToolCall(event.name, identity, args, false), id: event.id },
-      } }]), { kind: "tool_result", payload: { display } }];
+    result(event: Extract<RunEvent, { type: "tool_result" }>, started: boolean, call: VisibleToolCall, display: VisibleToolResult): VisibleRecord[] {
+      if (!canonical) return [{ kind: "tool_result", payload: { update: acpUpdate(event), display,
+        ...(started ? {} : { call: { ...call, id: event.id } }) } }];
+      return [...(started ? [] : [{ kind: "tool_call", payload: { display: { ...call, id: event.id } } }]),
+        { kind: "tool_result", payload: { display } }];
     },
   };
 }

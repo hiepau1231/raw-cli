@@ -4,6 +4,11 @@
   "version": "1.0.0",
   "name": "ask_user",
   "description": "Ask the user one question and wait for the answer. Example: {\"question\":\"Which database should the service use?\",\"options\":[\"Postgres\",\"SQLite\"]}. Without options the answer is free text; with options the user picks one (or several with multi_select) and, unless allow_other is false, may answer in their own words instead. The result is the answer as text, e.g. User answered: Postgres, or User skipped the question. To ask up to 3 related questions in one form, send questions: [{question, header, options, multiSelect}]. This gathers information and never grants tool permission. Hosts without an input adapter (non-TTY CLI, ACP without the extension) fail promptly.",
+  "display": {
+    "title": "Ask user",
+    "kind": "other",
+    "summary": "{question|Several questions}"
+  },
   "entry": "./index.mjs",
   "input_schema": {
     "type": "object",

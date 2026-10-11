@@ -55,7 +55,7 @@ test("T-08a: one-shot streams once and a real write result reaches follow-up inf
       { cwd: root, env: { ...process.env, OPENAI_API_KEY: "key" } });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stdout, "Changed sentinel\n");
-    assert.match(result.stderr, /raw: write_file \{"path":"sentinel.txt","content_bytes":10\}/);
+    assert.match(result.stderr, /raw: Write  sentinel\.txt \(write_file \{"path":"sentinel.txt","content_bytes":10\}\)/);
     assert.doesNotMatch(result.stderr, /real-write/);
     assert.equal(await readFile(join(root, "sentinel.txt"), "utf8"), "real-write");
     assert.match(JSON.stringify(fixture.requests[1]?.body), /real-write/);
@@ -80,8 +80,8 @@ test("CLI streams provider thinking to stderr and shows bash arguments before ex
     assert.equal(result.stdout, "done\n");
     assert.match(result.stderr, /raw: thinking\n/);
     assert.doesNotMatch(result.stderr, /Inspect files\./);
-    assert.match(result.stderr, /raw: bash \{"command":"printf sample","timeout":1000\}/);
-    assert.match(result.stderr, /raw: ↳ bash result \(exit 0\)\n\[stdout\]\nsample\n\[exit 0 · \d+\.\ds\]\n/);
+    assert.match(result.stderr, /raw: Run command  \$ printf sample \(bash \{"command":"printf sample","timeout":1000\}\)/);
+    assert.match(result.stderr, /raw: ↳ bash ok · \d+ms\n\[stdout\]\nsample\n\[exit 0 · \d+\.\ds\]\n/);
     assert.doesNotMatch(result.stderr, /\x1b\[/);
     assert.doesNotMatch(result.stderr, /allow bash|\[y\/N\]/i);
     assert.match(JSON.stringify(fixture.requests[1]?.body), /sample/);
@@ -101,10 +101,10 @@ test("CLI shows rejected bash arguments and the model receives the one-command s
   try {
     const result = await raw(["--config", testConfig("local", "fixture", fixture.url), "inspect"]);
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stderr, /raw: ⚠ bash \{"commands":\[\{"command":"pwd"\}\]\}/);
+    assert.match(result.stderr, /raw: ⚠ Run command \(bash \{"commands":\[\{"command":"pwd"\}\]\}\)/);
     assert.match(result.stderr, /bash takes one command: \{"command":"npm test"\}; call bash once per command/);
-    assert.match(result.stderr, /raw: bash \{"command":"pwd"\}\nraw: ↳ bash result \(exit 0\)/);
-    assert.equal((result.stderr.match(/raw: ⚠ bash/g) ?? []).length, 1);
+    assert.match(result.stderr, /raw: Run command  \$ pwd \(bash \{"command":"pwd"\}\)\nraw: ↳ bash ok · \d+ms/);
+    assert.equal((result.stderr.match(/raw: ⚠ Run command/g) ?? []).length, 1);
     assert.match(JSON.stringify(fixture.requests[1]?.body), /bash takes one command/);
   } finally { await fixture.close(); }
 });
@@ -119,7 +119,7 @@ test("CLI shows rejected write argument keys without printing the payload", asyn
   try {
     const result = await raw(["--config", testConfig("local", "fixture", fixture.url), "inspect"]);
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stderr, /raw: ⚠ write_file \{"argument_keys":\["operations"\]\}/);
+    assert.match(result.stderr, /raw: ⚠ Write \(write_file \{"argument_keys":\["operations"\]\}\)/);
     assert.doesNotMatch(result.stderr, /private-payload/);
     assert.match(result.stderr, /write_file writes one whole file: \{"path":"notes\/todo\.md"/);
   } finally { await fixture.close(); }
@@ -140,7 +140,7 @@ test("TTY starts tool activity on a new line after unfinished assistant text", a
   try {
     const code = await new Promise<number | null>((resolve) => child.once("exit", resolve));
     assert.equal(code, 0, output());
-    assert.match(output().replace(/\r/g, ""), /I will inspect the repo\.\n\$ bash  pwd\n✓ bash/);
+    assert.match(output().replace(/\r/g, ""), /I will inspect the repo\.\n\$ Run command  pwd\n✓ ok/);
   } finally { child.kill("SIGTERM"); await fixture.close(); }
 });
 
@@ -156,11 +156,11 @@ test("tool result preview retains the exit status and bounds body to 2000 charac
     const result = await raw(["--config", testConfig("local", "fixture", fixture.url), "inspect"]);
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stdout, "Done\n");
-    const start = result.stderr.indexOf("raw: ↳ bash result");
+    const start = result.stderr.indexOf("raw: ↳ bash ");
     assert.ok(start >= 0);
     const lines = result.stderr.slice(start).split(/\n\[ok\] Done/, 1)[0]!.trimEnd().split("\n");
     assert.ok(lines.length <= 10, `preview used ${lines.length} lines including the header`);
-    assert.match(lines[0]!, /\(exit 0\)$/);
+    assert.match(lines[0]!, /^raw: ↳ bash ok · \d+ms$/);
     const preview = lines.slice(1).join("\n");
     assert.ok(lines.length - 1 <= 9);
     assert.ok(Array.from(preview).length <= 2000);
@@ -261,7 +261,7 @@ test("explicit agent ask prompts once in a TTY and -y does not bypass it", async
   await writeFile(configPath, JSON.stringify(document));
   const { child, output } = ptyRaw(["--config", configPath, "-y", "write"], { ...process.env, OPENAI_API_KEY: "key" });
   try {
-    await waitFor(output, "Allow write_file?");
+    await waitFor(output, "Allow Write ");
     await assert.rejects(access(join(root, "allowed.txt")));
     assert.match(output(), /allowed\.txt/);
     assert.doesNotMatch(output(), /secret-first-payload/);
@@ -270,7 +270,7 @@ test("explicit agent ask prompts once in a TTY and -y does not bypass it", async
     assert.equal(code, 0, output());
     assert.equal(await readFile(join(root, "allowed.txt"), "utf8"), "secret-first-payload");
     assert.doesNotMatch(output(), /secret-first-payload/);
-    assert.equal((output().match(/Allow write_file\?/g) ?? []).length, 1);
+    assert.equal((output().match(/Allow Write /g) ?? []).length, 1);
   } finally { child.kill("SIGTERM"); await fixture.close(); }
 });
 
@@ -351,7 +351,7 @@ test("T-08b: real PTY executes a write without a permission prompt", async () =>
     const code = await new Promise<number | null>((resolve) => child.once("exit", resolve));
     assert.equal(code, 0, output());
     assert.equal(await readFile(join(root, "marker"), "utf8"), "ok");
-    assert.doesNotMatch(output(), /allow write_file|\[y\/N\]/i);
+    assert.doesNotMatch(output(), /allow write|\[y\/N\]/i);
   } finally { child.kill("SIGTERM"); await fixture.close(); }
 });
 
@@ -372,7 +372,7 @@ test("T-08 review: queued REPL command follows an automatic tool call", async ()
     assert.equal(code, 0, output());
     assert.match(output(), /write handled/);
     assert.equal(await readFile(join(root, "marker"), "utf8"), "written");
-    assert.doesNotMatch(output(), /allow write_file|\[y\/N\]/i);
+    assert.doesNotMatch(output(), /allow write|\[y\/N\]/i);
   } finally { child.kill("SIGTERM"); await fixture.close(); }
 });
 
@@ -384,11 +384,11 @@ test("T-08b: Ctrl-C during an active PTY tool aborts it and exits 130", async ()
   const { child, output } = ptyRaw(["--config", testConfig("openai", "fixture", fixture.url), "-y", "run shell"],
     { ...process.env, OPENAI_API_KEY: "key", NO_COLOR: "", TERM: "xterm-256color" });
   try {
-    await waitFor(output, "$ bash");
+    await waitFor(output, "$ Run command");
     child.stdin.write("\x03");
     const code = await new Promise<number | null>((resolve) => child.once("exit", resolve));
     assert.equal(code, 130, output());
-    assert.match(output(), /\x1b\[36m\$ bash\x1b\[0m/);
+    assert.match(output(), /\x1b\[36m\$ Run command\x1b\[0m/);
     await new Promise((resolve) => setTimeout(resolve, 650));
     await assert.rejects(access(join(root, "marker")));
   } finally { child.kill("SIGTERM"); await fixture.close(); }
@@ -404,7 +404,7 @@ test("T-08b: REPL Ctrl-C aborts active work, then Ctrl-C while idle exits", asyn
   try {
     await waitFor(output, "❯ ");
     child.stdin.write("run shell\n");
-    await waitFor(output, "$ bash");
+    await waitFor(output, "$ Run command");
     child.stdin.write("\x03");
     await waitFor(output, "Cancelled");
     const until = Date.now() + 3000;
@@ -433,7 +433,7 @@ test("T-08b: EOF during an active piped REPL turn aborts owned Bash", async () =
   child.stdout.resume();
   try {
     child.stdin.write("run shell\n");
-    await waitFor(() => stderr, "raw: bash");
+    await waitFor(() => stderr, "raw: Run command");
     child.stdin.end();
     const code = await new Promise<number | null>((resolve) => child.once("exit", resolve));
     assert.equal(code, 0, stderr);

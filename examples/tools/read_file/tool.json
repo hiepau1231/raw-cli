@@ -4,6 +4,12 @@
   "version": "1.0.0",
   "name": "read_file",
   "description": "Read one text file. Example: {\"path\":\"src/app.ts\",\"offset\":120,\"limit\":80}. Relative paths use the session cwd. offset is the 1-based first line (default 1) and limit the number of lines (default 2000). The result shows each line after its number and a gutter (  120│text), then a footer such as [lines 120–199 of 431; next: offset 200] or [lines 1–40 of 40; end of file]. When the output budget ends the window early, the footer names the offset to read next. To read several files, make several calls.",
+  "display": {
+    "title": "Read",
+    "kind": "read",
+    "summary": "{path}[:{offset}][ +{limit}]",
+    "result": "code"
+  },
   "input_schema": {
     "type": "object",
     "properties": {

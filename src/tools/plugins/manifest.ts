@@ -4,9 +4,10 @@ import addFormats from "ajv-formats";
 import { PANEL_LIMITS } from "../../panels/contract.js";
 import { validateDeclaration } from "../../panels/validate.js";
 import type { ToolManifest } from "./contract.js";
+import { parseDisplay } from "../display.js";
 
 const manifestKeys = ["api_version", "id", "version", "name", "description", "input_schema", "entry"];
-const optionalKeys = ["panels", "condition_sources", "effects_schema"];
+const optionalKeys = ["panels", "condition_sources", "effects_schema", "display"];
 
 export function parseToolManifest(value: unknown, expectedId: string, expectedFolder: string, warn?: (message: string) => void): ToolManifest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid tool manifest: ${expectedId}`);
@@ -27,6 +28,7 @@ export function parseToolManifest(value: unknown, expectedId: string, expectedFo
       item.panels = declared;
     } catch { throw new Error(`invalid tool manifest: ${expectedId}`); }
   }
+  if (item.display !== undefined) item.display = parseDisplay(item.display, `invalid tool manifest: ${expectedId}`);
   const sources = item.condition_sources;
   if (sources !== undefined && (!Array.isArray(sources) || !sources.length || sources.length > 2
     || new Set(sources).size !== sources.length || sources.some((source) => source !== "arguments" && source !== "effects"))) throw new Error(`invalid condition_sources: ${expectedId}`);

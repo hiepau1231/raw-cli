@@ -12,6 +12,7 @@ import { ToolRegistry, type ToolRegistration } from "./registry.js";
 import { capResult, errorResult } from "./results.js";
 import { PANEL_LIMITS, type PanelDeclaration } from "../panels/contract.js";
 import { validateDeclaration } from "../panels/validate.js";
+import { mcpDisplay, parseDisplay, type ToolDisplay } from "./display.js";
 import type { ToolHandlerContent, ToolHandlerResult } from "./types.js";
 import { VERSION } from "../version.js";
 
@@ -38,8 +39,8 @@ type Selection = "*" | readonly string[];
 export type McpPanelDeclaration = PanelDeclaration & { tool: string };
 
 export type McpServerConfig =
-  | { command: string; args?: readonly string[]; env?: Readonly<Record<string, string>>; tools?: Selection; panels?: readonly McpPanelDeclaration[]; timeoutMs?: number }
-  | { url: string; transport?: "sse" | "streamable-http"; headers?: Readonly<Record<string, string>>; tools?: Selection; panels?: readonly McpPanelDeclaration[]; timeoutMs?: number };
+  | { command: string; args?: readonly string[]; env?: Readonly<Record<string, string>>; tools?: Selection; panels?: readonly McpPanelDeclaration[]; display?: Readonly<Record<string, ToolDisplay>>; timeoutMs?: number }
+  | { url: string; transport?: "sse" | "streamable-http"; headers?: Readonly<Record<string, string>>; tools?: Selection; panels?: readonly McpPanelDeclaration[]; display?: Readonly<Record<string, ToolDisplay>>; timeoutMs?: number };
 
 /** Validates a server's `panels` list: at most 4 declarations per tool, unique ids per tool. */
 export function parseMcpPanels(value: unknown, where: string, warn?: (message: string) => void): McpPanelDeclaration[] {
@@ -58,6 +59,12 @@ export function parseMcpPanels(value: unknown, where: string, warn?: (message: s
     perTool.set(tool, ids);
     return { ...declaration, tool };
   });
+}
+
+/** Validates a server's `display` map: the server's original tool name to display hints that override its annotations. */
+export function parseMcpDisplay(value: unknown, where: string): Record<string, ToolDisplay> {
+  const data = record(value, where);
+  return Object.fromEntries(Object.entries(data).map(([tool, hints]) => [string(tool, `${where} tool name`), parseDisplay(hints, `${where}.${tool}`)]));
 }
 
 export interface ConnectMcpOptions {
@@ -333,7 +340,7 @@ export async function connectMcpServers(options: ConnectMcpOptions = {}): Promis
         // While degrading, a server failing its own startup must not close the servers already connected.
         transport.onerror = () => { void (ready || !options.onSkip ? close() : client.close()); };
       }
-      const catalog = new Map<string, { description: string; inputSchema: ToolRegistration["inputSchema"] }>();
+      const catalog = new Map<string, { description: string; inputSchema: ToolRegistration["inputSchema"]; annotations?: unknown }>();
       try {
         try {
           await deadline(client.connect(transport as unknown as Transport,
@@ -348,7 +355,9 @@ export async function connectMcpServers(options: ConnectMcpOptions = {}): Promis
           catch { throw new Error(`MCP server ${name} discovery failed`); }
           for (const tool of page.tools) {
             if (catalog.has(tool.name)) throw new Error(`duplicate MCP tool ${tool.name} from ${name}`);
-            catalog.set(tool.name, { description: tool.description ?? "MCP tool", inputSchema: tool.inputSchema as ToolRegistration["inputSchema"] });
+            catalog.set(tool.name, { description: tool.description ?? "MCP tool", inputSchema: tool.inputSchema as ToolRegistration["inputSchema"],
+              // The tool's own `title` (MCP 2025-06-18) stands in for a missing `annotations.title`.
+              annotations: { ...(typeof tool.title === "string" ? { title: tool.title } : {}), ...tool.annotations } });
           }
           cursor = page.nextCursor;
           if (cursor) { if (cursors.has(cursor)) throw new Error(`MCP pagination cycle from ${name}`); cursors.add(cursor); }
@@ -394,6 +403,7 @@ export async function connectMcpServers(options: ConnectMcpOptions = {}): Promis
             ? `${options.canonicalIdentities[name]}/${originalName}` : `mcp/${name}/${originalName}`,
             description: tool.description, inputSchema: schema,
           ...(declared.length ? { panels: declared } : { implicitPanels: true }),
+          display: mcpDisplay(tool.annotations, spec.display?.[originalName]),
           validateArgs: (args) => validate(args) ? undefined : ajv.errorsText(validate.errors),
           handler: async (args, context) => {
             if (closed) return errorResult("mcp_closed", `MCP server ${name} is closed`);

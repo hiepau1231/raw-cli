@@ -1,95 +1,75 @@
-import { parseFilePatch } from "../tools/file-patch.js";
+import { callSummary, callTitle, displayArguments, isMcpIdentity, type ToolDisplay, type ToolKind, type ToolResultType } from "../tools/display.js";
+import { reduceJson } from "../tools/results.js";
 import type { HostData, ToolResult } from "../tools/types.js";
 
+/**
+ * The display record of a call (docs/tool-ux-design.md §5.4). Title, kind and summary are projected once from the hints
+ * and persisted, so replay shows them even when the tool is no longer selected. Old records lack them.
+ */
 export interface VisibleToolCall {
   id?: string;
   name: string;
   identity?: string;
   started: boolean;
+  /** Content-free for the bundled file tools: paths and sizes, never file contents. */
   arguments: Record<string, unknown>;
+  title?: string;
+  kind?: ToolKind;
+  summary?: string;
+  icon?: string;
+  result?: ToolResultType;
 }
 export interface PreviewSegment {
-  kind: "text" | "json" | "code" | "image";
+  kind: "text" | "markdown" | "json" | "code" | "image";
   text: string;
   path?: string;
   language?: string;
 }
-export interface VisibleBatchRow { index: number; status: string; exitCode?: number; path?: string }
+/** Exactly one per result (§5.3): `exit` is a nonzero exit code, `denied` a policy, hook or approval refusal. */
+export type ToolStatus = "ok" | "error" | "exit" | "timeout" | "cancelled" | "denied";
 export interface VisibleToolResult {
   id?: string;
   name: string;
   identity?: string;
+  kind?: ToolKind;
+  status?: ToolStatus;
+  resultType?: ToolResultType;
   failed: boolean;
   code?: string;
   exitCode?: number | null;
   truncated: boolean;
   durationMs?: number;
-  rows: VisibleBatchRow[];
+  /** Line-safe preview: whole lines, head and tail; JSON comes pretty-printed from its value-safe form. */
   segments: PreviewSegment[];
+  /** The preview hides lines, cuts a long line or shows a reduced JSON value. */
+  abbreviated?: boolean;
+  /** Each JSON block of the result as a value-safe reduction, always valid JSON (for the dashboard tree). */
+  json?: unknown[];
   /** The result's host data (docs/tool-ux-design.md §4.5), kept with the durable history record. */
   host?: HostData;
 }
 
-const PREVIEW_CHARS = 2000;
 const PREVIEW_LINES = 9;
+const LINE_CHARS = 220;
+const JSON_PREVIEW_BYTES = 1500;
+const DENIED = new Set(["denied", "approval_denied", "approval_required", "hook_denied", "tool_denied"]);
+const CANCELLED = new Set(["aborted", "cancelled", "interaction_cancelled", "interaction_interrupted"]);
+const MARKDOWN = /^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|```|> )/;
 
-
-/** The first string among a canonical argument name and the aliases other harnesses send (src/tools/normalize.ts). */
-const pick = (args: Record<string, unknown>, names: readonly string[]) => names.map(name => args[name]).find(value => typeof value === "string") as string | undefined;
-const PATH_NAMES = ["path", "file_path", "filePath", "absolute_path"];
-
-export function projectToolCall(name: string, identity: string | undefined, args: Record<string, unknown>, started: boolean): VisibleToolCall {
-  // File contents never enter the visible record: only paths and sizes. Arguments may still carry aliases, and any other
-  // shape (an old batch, a typo) shows only its keys so a rejected call cannot print its payload.
-  const bytes = (value: string | undefined) => value === undefined ? undefined : Buffer.byteLength(value, "utf8");
-  const path = pick(args, PATH_NAMES);
-  if (identity === "builtin/write_file") {
-    const content = pick(args, ["content", "file_text", "text", "contents"]);
-    if (content !== undefined) return { name, identity, started, arguments: { path, content_bytes: bytes(content) } };
-  } else if (identity === "builtin/edit_file") {
-    const oldString = pick(args, ["old_string", "old_str", "oldString", "old_text"]);
-    const newString = pick(args, ["new_string", "new_str", "newString", "new_text"]);
-    const all = [args.replace_all, args.replaceAll, args.allow_multiple].find(value => typeof value === "boolean");
-    if (oldString !== undefined || newString !== undefined) return { name, identity, started, arguments: { path,
-      old_string_bytes: bytes(oldString), new_string_bytes: bytes(newString), ...(all !== undefined ? { replace_all: all } : {}) } };
-  } else if (identity === "builtin/apply_patch") {
-    const patch = pick(args, ["patch", "input"]);
-    if (patch !== undefined) {
-      let paths: string[] = [];
-      try { paths = parseFilePatch(patch, "/").changes.map(change => change.rawDestination ? `${change.rawPath} → ${change.rawDestination}` : change.rawPath); } catch { /* invalid patch still gets a content-free summary */ }
-      return { name, identity, started, arguments: { patch_bytes: Buffer.byteLength(patch), patch_paths: paths } };
-    }
-  } else return { name, ...(identity ? { identity } : {}), started, arguments: structuredClone(args) };
-  return { name, identity, started, arguments: { argument_keys: Object.keys(args) } };
+export function projectToolCall(name: string, identity: string | undefined, args: Record<string, unknown>, started: boolean,
+  display?: ToolDisplay): VisibleToolCall {
+  const shown = displayArguments(identity, args);
+  return { name, ...(identity ? { identity } : {}), started, arguments: shown,
+    title: callTitle(name, shown, display), kind: display?.kind ?? "other", summary: callSummary(shown, display),
+    ...(display?.icon ? { icon: display.icon } : {}), ...(display?.result ? { result: display.result } : {}) };
 }
 
+/** At most nine whole lines, the first and last four around a marker; a line longer than 220 characters ends in `…`. */
 function bounded(lines: PreviewSegment[]): PreviewSegment[] {
-  const limited = lines.length > PREVIEW_LINES
-    ? [...lines.slice(0, 4), { kind: "text" as const, text: "… [middle lines hidden] …" }, ...lines.slice(-4)] : lines;
-  const bodyCap = PREVIEW_CHARS - (PREVIEW_LINES - 1);
-  const count = limited.reduce((sum, line) => sum + [...line.text].length, 0);
-  if (count <= bodyCap) return limited;
-  const marker = "… [middle characters hidden] …";
-  const allowance = bodyCap - [...marker].length;
-  const head: PreviewSegment[] = [];
-  const tail: PreviewSegment[] = [];
-  let remaining = Math.ceil(allowance / 2);
-  for (const line of limited) {
-    if (remaining <= 0 || head.length >= 4) break;
-    const chars = [...line.text];
-    const take = Math.min(chars.length, remaining);
-    head.push({ ...line, text: chars.slice(0, take).join("") });
-    remaining -= take;
-  }
-  remaining = Math.floor(allowance / 2);
-  for (const line of [...limited].reverse()) {
-    if (remaining <= 0 || tail.length >= 4) break;
-    const chars = [...line.text];
-    const take = Math.min(chars.length, remaining);
-    tail.unshift({ ...line, text: chars.slice(-take).join("") });
-    remaining -= take;
-  }
-  return [...head, { kind: "text" as const, text: marker }, ...tail];
+  const capped = lines.map((line) => [...line.text].length <= LINE_CHARS ? line
+    : { ...line, text: `${[...line.text].slice(0, LINE_CHARS - 1).join("")}…` });
+  return capped.length <= PREVIEW_LINES ? capped
+    : [...capped.slice(0, 4), { kind: "text", text: `… [${capped.length - 8} lines hidden] …` }, ...capped.slice(-4)];
 }
 
 function addLines(lines: PreviewSegment[], kind: PreviewSegment["kind"], value: string, path?: string): void {
@@ -99,41 +79,69 @@ function addLines(lines: PreviewSegment[], kind: PreviewSegment["kind"], value: 
   }
 }
 
-export function projectToolResult(name: string, identity: string | undefined, result: ToolResult, durationMs?: number): VisibleToolResult {
-  const rows: VisibleBatchRow[] = [];
+export function toolStatus(result: Pick<ToolResult, "isError" | "code" | "exitCode" | "timedOut" | "host">): ToolStatus {
+  const exitCode = result.exitCode ?? result.host?.exitCode;
+  if (result.code && DENIED.has(result.code)) return "denied";
+  if (result.host?.status === "timeout" || result.timedOut || /timeout|timed_out/.test(result.code ?? "")) return "timeout";
+  if (result.host?.status === "cancelled" || (result.code && CANCELLED.has(result.code))) return "cancelled";
+  if (result.isError) return "error";
+  return typeof exitCode === "number" && exitCode !== 0 ? "exit" : "ok";
+}
+
+export function projectToolResult(name: string, identity: string | undefined, result: ToolResult, durationMs?: number,
+  display?: ToolDisplay): VisibleToolResult {
+  const text = result.content.find((block) => block.type === "text")?.text ?? "";
+  const resultType: ToolResultType = display?.result
+    ?? (result.content.length && result.content.every((block) => block.type === "json") ? "json"
+      : isMcpIdentity(identity) && MARKDOWN.test(text) ? "markdown" : "text");
   const lines: PreviewSegment[] = [];
-  // A read window stays path-tagged code for highlighting: gutter lines become code, the range footer stays text.
-  const readPath = identity === "builtin/read_file" && !result.isError ? result.host?.path : undefined;
+  const json: unknown[] = [];
+  const jsonBlocks: unknown[] = [];
+  // A code result tagged with a path (read_file) stays path-tagged code: gutter lines become code, the footer stays text.
+  // Any other code result is code line by line, path-tagged when the result names its file.
+  const code = resultType === "code" && !result.isError;
+  const codePath = code ? result.host?.path : undefined;
   for (const block of result.content) {
-    if (block.type === "text" && readPath) {
-      for (const line of block.text.replace(/\n+$/, "").split("\n")) {
-        const gutter = /^ *\d+│(.*)$/.exec(line);
-        lines.push(gutter ? { kind: "code", text: gutter[1]!.replace(/\r$/, ""), path: readPath } : { kind: "text", text: line });
+    if (block.type === "text" && code && !block.channel) {
+      const split = block.text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
+      const numbered = split.some((line) => /^ *\d+│/.test(line));
+      for (const line of split) {
+        const gutter = numbered ? /^ *\d+│(.*)$/.exec(line) : undefined;
+        const text = numbered ? gutter?.[1] : line;
+        lines.push(text !== undefined ? { kind: "code", text, ...(codePath ? { path: codePath } : {}) } : { kind: "text", text: line });
       }
-      continue;
-    }
-    if (block.type === "text") {
-      addLines(lines, "text", block.channel ? `[${block.channel}]\n${block.text}` : block.text);
-      continue;
-    }
-    if (block.type === "image") {
+    } else if (block.type === "text") {
+      addLines(lines, resultType === "markdown" && !block.channel ? "markdown" : "text", block.channel ? `[${block.channel}]\n${block.text}` : block.text);
+    } else if (block.type === "image") {
       addLines(lines, "image", `[${block.mimeType} image, ${block.byteSize ?? Buffer.from(block.data, "base64").length} bytes]`);
-      continue;
+    } else {
+      jsonBlocks.push(block.value);
+      json.push(reduceJson(block.value, JSON_PREVIEW_BYTES) ?? null);
     }
-    addLines(lines, "json", JSON.stringify(block.value));
+  }
+  const preview = bounded(lines);
+  let abbreviated = preview.length !== lines.length || preview.some((line, index) => line !== lines[index]);
+  // JSON is never cut as text: each block is pretty-printed whole from its value-safe reduction.
+  for (const [index, value] of json.entries()) {
+    addLines(preview, "json", JSON.stringify(value, null, 2));
+    abbreviated ||= value !== jsonBlocks[index];
   }
   const exitCode = result.exitCode ?? result.host?.exitCode;
-  return { name, ...(identity ? { identity } : {}), failed: result.isError
-      || (typeof exitCode === "number" && exitCode !== 0)
-      || rows.some((row) => row.status !== "ok"),
+  const status = toolStatus(result);
+  return { name, ...(identity ? { identity } : {}), kind: display?.kind ?? "other",
+    status, resultType, failed: status !== "ok",
     ...(result.code ? { code: result.code } : {}), ...(exitCode !== undefined ? { exitCode } : {}),
     truncated: result.truncated ?? false,
     ...(durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs: Math.round(durationMs) } : {}),
-    rows, segments: bounded(lines), ...(result.host ? { host: structuredClone(result.host) } : {}) };
+    segments: preview, ...(abbreviated ? { abbreviated } : {}), ...(json.length ? { json } : {}), ...(result.host ? { host: structuredClone(result.host) } : {}) };
+}
+
+/** The one status word of a result, for old records too: ok, error, exit N, timed out, cancelled or denied. */
+export function statusLabel(result: Pick<VisibleToolResult, "status" | "failed" | "exitCode">): string {
+  const status = result.status ?? (!result.failed ? "ok" : typeof result.exitCode === "number" && result.exitCode !== 0 ? "exit" : "error");
+  return status === "exit" ? `exit ${String(result.exitCode)}` : status === "timeout" ? "timed out" : status;
 }
 
 export function renderPlainToolResult(result: VisibleToolResult): string {
-  const statuses = result.rows.length ? `statuses: ${result.rows.map((row) =>
-    `${row.index}:${row.status}${row.exitCode === undefined ? "" : `(exit${row.exitCode})`}`).join(" ")}` : "";
-  return [statuses, ...result.segments.map((segment) => segment.text)].filter(Boolean).join("\n");
+  return result.segments.map((segment) => segment.text).join("\n");
 }

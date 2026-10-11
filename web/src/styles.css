@@ -1164,21 +1164,6 @@ summary::-webkit-details-marker {
   color: var(--accent-text);
   border-bottom: 2px solid var(--accent);
 }
-.batch-rows {
-  margin: 8px 0;
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-.batch-rows > div {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border);
-}
-.batch-rows strong {
-  margin-left: auto;
-}
 .approval {
   margin: 12px 0 0;
   padding: 14px;
@@ -1197,6 +1182,25 @@ summary::-webkit-details-marker {
 }
 .approval .actions {
   margin: 12px 0;
+}
+.approval .approval-headline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  margin: 8px 0 4px;
+  font-size: 13px;
+}
+.approval .approval-title {
+  font-weight: 600;
+}
+.approval .approval-summary {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  overflow-wrap: anywhere;
+}
+.approval .approval-arguments summary {
+  cursor: pointer;
+  font-size: 12px;
 }
 .compaction {
   border-top: 1px solid var(--border);

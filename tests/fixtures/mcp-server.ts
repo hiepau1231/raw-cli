@@ -15,6 +15,8 @@ export function fixtureMcpServer(label: string, count = 2, reverse = false, mode
     const split = Math.max(1, Math.floor(count / 2));
     const slice = page ? names.slice(split) : names.slice(0, split);
     return { tools: slice.map((name) => ({ name, description: mode === "large-discovery" ? "x".repeat(17 * 1024 * 1024) : `${label} ${name}`,
+      // MCP_ANNOTATE gives the selected tool display annotations (docs/tool-ux-design.md §5.1).
+      ...(process.env.MCP_ANNOTATE === "1" && name === "selected" ? { annotations: { title: "Fixture lookup", readOnlyHint: true } } : {}),
       inputSchema: mode === "async-schema" ? { ...schema, $async: true }
         : mode === "draft7-schema" ? { ...schema, $schema: "http://json-schema.org/draft-07/schema#" }
         : mode === "numeric-formats-schema" ? { ...schema, properties: { ...schema.properties, limit: { type: "integer", format: "uint32" }, max_hops: { type: "integer", format: "uint8" } } }
