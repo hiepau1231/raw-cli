@@ -6,22 +6,26 @@ import type { DashboardEventData } from "../../../src/dashboard/streams.js";
 import { api, errorText } from "../api.js";
 import { ActionScope, ActionMenu, offeredActions, type ActionHost } from "./actions.js";
 import { Blocks } from "./Blocks.js";
+import { PanelScope } from "./blocks/Checklist.js";
 import type { InsertRef } from "./status.js";
 
 /**
  * The same document/action presentation at either destination. A side-panel section's header already shows the title,
  * summary and subtitle; an inline view (`inline`) shows them itself, minus the `heading` it was given.
  */
-export function ToolView({ item, onInsert, hideCompleted, onHideCompleted, actions, inline = false, heading, children }: {
+export function ToolView({ item, scope = "", onInsert, hideCompleted, onHideCompleted, actions, inline = false, heading, children }: {
   /** Without `onHideCompleted` (a side-panel section, whose menu has the toggle) checklists show no checkbox. */
-  item: PanelStackItem; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted?: ((value: boolean) => void) | undefined;
+  /** Where per-panel choices are remembered: a side panel passes its session, so sessions with the same panel stay apart. */
+  item: PanelStackItem; scope?: string; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted?: ((value: boolean) => void) | undefined;
   actions?: ActionHost | undefined; inline?: boolean; heading?: string | undefined; children?: ReactNode;
 }) {
   const displayed = sidebarPresentation(item, actions?.interactions ?? []);
   return <ActionScope value={actions && { item, host: actions }}>
     {item.stale && <p className="panel-banner" role="note">The tool that owns this panel is not selected by this agent.</p>}
     {children}
-    {displayed.document ? <Blocks document={displayed.document} title={inline ? heading : item.title} inline={inline} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={onHideCompleted} /> : <p className="muted small">No data yet.</p>}
+    <PanelScope.Provider value={`${inline ? "inline" : "panel"}:${scope}:${item.instanceId ?? item.panel}`}>
+      {displayed.document ? <Blocks document={displayed.document} title={inline ? heading : item.title} inline={inline} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={onHideCompleted} /> : <p className="muted small">No data yet.</p>}
+    </PanelScope.Provider>
   </ActionScope>;
 }
 

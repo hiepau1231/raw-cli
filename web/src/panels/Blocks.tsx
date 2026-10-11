@@ -13,10 +13,10 @@ import { BlockActions, useOffered } from "./actions.js";
 import type { InsertRef } from "./status.js";
 
 /** One block. A kind this host does not know shows its `fallback` text, or a plain notice, and never breaks the section. */
-function Block({ block, onInsert, hideCompleted }: { block: PanelBlock; onInsert: InsertRef; hideCompleted: boolean }) {
+function Block({ block, title, onInsert, hideCompleted }: { block: PanelBlock; title?: string | undefined; onInsert: InsertRef; hideCompleted: boolean }) {
   const b = block as any;
   switch (block.kind) {
-    case "checklist": return <Checklist block={block.id} items={b.items} onInsert={onInsert} hideCompleted={hideCompleted} />;
+    case "checklist": return <Checklist block={block.id} title={title} items={b.items} onInsert={onInsert} hideCompleted={hideCompleted} />;
     case "steps": return <Steps block={block.id} items={b.items} />;
     case "progress": return <Progress label={b.label} value={b.value} max={b.max} indeterminate={b.indeterminate} />;
     case "key_value": return <KeyValue entries={b.entries} onInsert={onInsert} />;
@@ -29,15 +29,17 @@ function Block({ block, onInsert, hideCompleted }: { block: PanelBlock; onInsert
     default: return <p className="panel-fallback" data-testid="panel-fallback">{block.fallback ?? "This block type is not supported by this dashboard."}</p>;
   }
 }
-function BlockView({ block, repeats, onInsert, hideCompleted, onHideCompleted }: { block: PanelBlock; repeats: (text: string) => boolean; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted?: ((value: boolean) => void) | undefined }) {
+function BlockView({ block, repeats, docTitle, onInsert, hideCompleted, onHideCompleted }: { block: PanelBlock; repeats: (text: string) => boolean; docTitle?: string | undefined; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted?: ((value: boolean) => void) | undefined }) {
   const toggle = block.kind === "checklist" && onHideCompleted;
   const hasActions = useOffered("block", block.id).length > 0;
-  const title = block.title && !repeats(block.title) ? block.title : undefined;
+  const title = block.title && !repeats(block.title) ? block.title : docTitle;
+  // A checklist puts its title on the line with its count.
+  const heading = block.kind === "checklist" ? undefined : title;
   return (
     <section className="panel-block" data-kind={block.kind}>
-      {(title || toggle || hasActions) && (
+      {(heading || toggle || hasActions) && (
         <div className="panel-block-header">
-          {title && <h4>{title}</h4>}
+          {heading && <h4>{heading}</h4>}
           {toggle && (
             <label className="panel-hide-completed">
               <input type="checkbox" checked={hideCompleted} onChange={(event) => toggle(event.target.checked)} />
@@ -47,7 +49,7 @@ function BlockView({ block, repeats, onInsert, hideCompleted, onHideCompleted }:
           <BlockActions block={block.id} label={`Actions for ${block.title ?? block.kind}`} />
         </div>
       )}
-      <Block block={block} onInsert={onInsert} hideCompleted={hideCompleted} />
+      <Block block={block} title={block.kind === "checklist" ? title : undefined} onInsert={onInsert} hideCompleted={hideCompleted} />
     </section>
   );
 }
@@ -59,12 +61,15 @@ function BlockView({ block, repeats, onInsert, hideCompleted, onHideCompleted }:
  */
 export function Blocks({ document, title, inline = false, onInsert, hideCompleted, onHideCompleted }: { document: PanelDocument; title?: string | undefined; inline?: boolean; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted?: ((value: boolean) => void) | undefined }) {
   const same = (text: string) => text.trim().toLocaleLowerCase() === title?.trim().toLocaleLowerCase();
+  const docTitle = document.title && !same(document.title) ? document.title : undefined;
+  // A lone untitled checklist (the Todo shape) puts the document title on the line with its count.
+  const lone = document.blocks.length === 1 && document.blocks[0]!.kind === "checklist" && !(document.blocks[0]!.title && !same(document.blocks[0]!.title));
   return (
     <>
-      {document.title && !same(document.title) && <h4 className="panel-doc-title">{document.title}</h4>}
+      {docTitle && !lone && <h4 className="panel-doc-title">{docTitle}</h4>}
       {inline && document.subtitle && !same(document.subtitle) && <p className="muted small panel-subtitle">{document.subtitle}</p>}
       {inline && document.summary && <p className="panel-summary">{document.summary}</p>}
-      {document.blocks.map((block) => <BlockView key={block.id} block={block} repeats={same} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={inline ? onHideCompleted : undefined} />)}
+      {document.blocks.map((block) => <BlockView key={block.id} block={block} repeats={same} docTitle={lone ? docTitle : undefined} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={inline ? onHideCompleted : undefined} />)}
     </>
   );
 }

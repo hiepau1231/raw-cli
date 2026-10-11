@@ -2,6 +2,7 @@
 import type { ChecklistItem, FileEntry, PanelBlock, PanelDocument, StepItem } from "../../../src/panels/contract.js";
 import { derivedProgress, derivedSummary } from "../../../src/panels/render.js";
 import type { PanelStackItem } from "../../../src/panels/stack.js";
+import type { UsageSummary } from "../../../src/llm/cache.js";
 import type { CommandRecord } from "../../../src/processes/presentation.js";
 import { contextUsage, type ContextUsageInput } from "../composer/context-usage.js";
 import { commandFailed, commandRunning } from "./commands-state.js";
@@ -134,3 +135,6 @@ export function summarizeContext(context: ContextUsageInput | undefined | null):
     summary: text,
   };
 }
+
+/** Some request in this usage reported a token count: input, output or cache. */
+export const reportsTokens = (usage: UsageSummary) => !!(usage.inputCoverage || usage.outputCoverage || usage.cacheReadCoverage || usage.cacheWriteCoverage);

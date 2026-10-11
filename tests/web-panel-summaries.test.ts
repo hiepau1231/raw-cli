@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { PanelDocument } from "../src/panels/contract.js";
 import type { PanelStackItem } from "../src/panels/stack.js";
 import type { CommandRecord } from "../src/processes/presentation.js";
-import { compactTokens, summarizeCommands, summarizeContext, summarizePanel } from "../web/src/panels/summaries.js";
+import { compactTokens, reportsTokens, summarizeCommands, summarizeContext, summarizePanel } from "../web/src/panels/summaries.js";
 
 const item = (document: PanelDocument | null, extra: Partial<PanelStackItem> = {}): PanelStackItem => ({
   panel: "x#p", owner: "x", title: "Panel", icon: "panel", revision: document ? 1 : 0, updatedAt: document ? 1 : null, closed: false, stale: false,
@@ -132,4 +132,13 @@ test("context use is measured against the compact trigger or the window, coloure
   assert.deepEqual(summarizeContext({ estimatedTokens: 1200 })?.lines, [{ text: "~1.2k tokens" }]);
   assert.equal(summarizeContext({ estimatedTokens: 1200 })?.badge, undefined);
   assert.equal(summarizeContext(undefined), undefined);
+});
+
+test("usage reports token counts when any request reported input, output or cache tokens", () => {
+  const none = { requests: 2, inputTokensKnown: 0, inputCoverage: 0, outputTokensKnown: 0, outputCoverage: 0, cacheReadTokensKnown: 0, cacheWriteTokensKnown: 0, cacheReadCoverage: 0, cacheWriteCoverage: 0, cacheRatioCoverage: 0 };
+  assert.equal(reportsTokens(none), false);
+  assert.equal(reportsTokens({ ...none, inputCoverage: 1, inputTokensKnown: 10 }), true);
+  assert.equal(reportsTokens({ ...none, outputCoverage: 1, outputTokensKnown: 10 }), true);
+  assert.equal(reportsTokens({ ...none, cacheReadCoverage: 1, cacheReadTokensKnown: 100 }), true);
+  assert.equal(reportsTokens({ ...none, cacheWriteCoverage: 2, cacheWriteTokensKnown: 50 }), true);
 });

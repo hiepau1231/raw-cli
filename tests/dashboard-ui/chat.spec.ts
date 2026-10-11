@@ -135,16 +135,23 @@ test.describe("compaction", () => {
     await expect(
       page.getByRole("button", { name: "Compact context", exact: true }),
     ).toBeEnabled();
-    await page
-      .getByRole("button", { name: "Compact context", exact: true })
-      .click();
+    // Details offers the same action next to the context use.
+    await page.getByRole("button", { name: "Side panel", exact: true }).click();
+    await page.getByRole("tab", { name: "Details", exact: true }).click();
+    const details = page.getByRole("tabpanel");
+    await expect(details.locator(".details-line")).toContainText("no summary yet");
+    await details.getByRole("button", { name: "Compact now", exact: true }).click();
     const marker = page
       .locator(".compaction")
       .filter({ hasText: "Context compacted" });
     await expect(marker).toHaveCount(1);
+    // The summary appears in Details, and the context line says one is stored.
+    await expect(details.locator(".details-line")).toContainText("summary stored");
+    await details.locator('.details-card[data-card="summary"] summary').click();
+    await expect(details.locator('.details-card[data-card="summary"] .summary-text')).toContainText("Remember the original task.");
     await marker.locator("summary").click();
     await expect(
-      page.getByText("Remember the original task.", { exact: true }),
+      marker.getByText("Remember the original task.", { exact: true }),
     ).toBeVisible();
     await page.reload();
     await expect(marker).toHaveCount(1);
@@ -340,5 +347,11 @@ test.describe("context usage and title", () => {
     const tokens = Number(shown![1]!.replaceAll(",", ""));
     expect(Number(shown![2])).toBeCloseTo(tokens / 4000 * 100, 1);
     await expect(footer.locator(".context-ring")).toContainText(`${Math.round(tokens / 40)}%`);
+    // Details keeps the exact trigger next to the rounded one in its summary line.
+    await page.getByRole("button", { name: "Side panel", exact: true }).click();
+    await page.getByRole("tab", { name: "Details", exact: true }).click();
+    const context = page.locator('.details-card[data-card="context"]');
+    await expect(context.locator(".details-line")).toContainText("auto compact at 4k");
+    await expect(context.locator(".details-kv div", { has: page.locator("dt", { hasText: /^Auto compact at$/ }) }).locator("dd")).toHaveText("4,000");
   });
 });

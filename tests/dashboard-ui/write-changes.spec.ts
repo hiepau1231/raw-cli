@@ -47,15 +47,23 @@ test.describe("Files changed accumulated successes", () => {
     // alpha: +1 then +1 −1; beta: +1 then +2 −1; gamma: +1.
     await expect(section(page).locator(".sp-tab-summary")).toHaveText("3 files · +6 −2");
     await expect(section(page).locator(".sp-tab-header .sp-chip")).toHaveCount(0);
-    await expect(row(page, "gamma.txt").locator(".panel-file-dir")).toHaveText("src/");
+    // The block's own summary: the count, the totals and a ratio bar of added to removed lines.
+    await expect(section(page).locator(".files-count")).toHaveText("3 files changed");
+    await expect(section(page).locator(".files-head .sp-stat.added")).toHaveText("+6");
+    await expect(section(page).locator(".files-head .sp-stat.removed")).toHaveText("−2");
+    await expect(section(page).locator(".files-ratio > i.added")).toHaveAttribute("style", /width: 75%/);
+    await expect(row(page, "gamma.txt").locator(".panel-file-dir")).toHaveText("src");
     const color = (selector: string) => row(page, "gamma.txt").locator(selector).evaluate((element) => getComputedStyle(element).color);
     expect(await color(".panel-file-dir"), "the directory is muted").not.toBe(await color(".panel-file-name"));
-    await expect(row(page, "alpha.txt").locator(".panel-file-dir")).toHaveCount(0);
+    expect(await row(page, "gamma.txt").locator(".panel-file-name").evaluate((element) => Number(getComputedStyle(element).fontWeight)), "the name is bold").toBeGreaterThanOrEqual(600);
+    await expect(row(page, "alpha.txt").locator(".panel-file-dir")).toHaveText("project root");
     for (const [name, added, removed] of [["alpha.txt", "+2", "−1"], ["beta.txt", "+3", "−1"], ["gamma.txt", "+1", "−0"]]) {
       await expect(row(page, name!).locator(".panel-file-added")).toHaveText(added!);
       await expect(row(page, name!).locator(".panel-file-removed")).toHaveText(removed!);
       await expect(row(page, name!).locator(".panel-file-status")).toHaveText("A");
-      expect((await row(page, name!).boundingBox())!.height).toBe(24);
+      // Two lines: the name, then the folder; a chevron marks the diff.
+      expect((await row(page, name!).boundingBox())!.height).toBeLessThanOrEqual(44);
+      await expect(row(page, name!).locator(".panel-file-chevron")).toHaveCount(1);
     }
     // Hide completed belongs to checklists only.
     await page.getByRole("button", { name: "Files changed panel menu" }).click();
@@ -69,7 +77,11 @@ test.describe("Files changed accumulated successes", () => {
     const beta = row(page, "beta.txt").locator("button[aria-expanded]");
     await expect(beta).toHaveAttribute("aria-expanded", "false");
     await expect(row(page, "beta.txt").locator(".diff-view")).toHaveCount(0);
+    // The closed menu hands focus back to its button first; focus the row after that.
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Files changed panel menu" })).toBeFocused();
     await beta.focus();
+    await expect(beta).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(beta).toHaveAttribute("aria-expanded", "true");
     await expect(row(page, "beta.txt").locator(".diff-add")).toHaveText(["+beta edited", "+second line"]);

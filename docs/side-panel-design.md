@@ -72,9 +72,11 @@ One card per command, newest first by start time ([commands.png](design/side-pan
 
 - A header line "N of M done" (with the document title when it differs from the tab title) and a progress bar.
 - **Groups by top-level subtree,** so hierarchy is never split: an item goes to **Now** when it or any descendant is in progress; else to **Next** when it or any descendant is unfinished (pending, blocked, failed); else to **Completed** (the whole subtree done or skipped).
-- **Now** is a highlighted card: the active item's spinner glyph, its full label (wrapping allowed) and its note. A done parent shows its in-progress child under it.
-- **Next** items keep the glyph on the first line and clamp labels to two lines with the full text in `title`. Blocked and failed show their colour and status word.
-- **Completed** is one toggle row, "Completed N · skipped M", whose open state is kept per panel.
+- **Now** is a highlighted card: the active item's spinner glyph, its full label (wrapping allowed) and its note. A done parent shows its in-progress child under it, and the child's siblings stay with them.
+- **Next** items keep the glyph on the first line and clamp labels to two lines with the label and note in `title`. Blocked and failed show their colour and status word.
+- **Completed** is one toggle row, "Completed N · skipped M" (N counts the finished top-level items, M those skipped; "· skipped M" only when M > 0). Its open state is kept per session, panel and block for the page, so switching tabs keeps it and another chat's same panel starts closed; a reload closes it.
+- The block title, when it differs from the tab title, sits on the count line; a document with one untitled checklist (the Todo shape) puts its document title there instead. An empty checklist keeps its title, without count or bar.
+- An update that moves a subtree to another group keeps its disclosure state, and a focused control in it stays focused at its new place without scrolling.
 - **Hide completed** hides the Completed row and finished items inside unfinished subtrees, never an unfinished item.
 - The primary status action, item `⋯` actions, priority tag and ref chip are kept.
 
@@ -83,17 +85,17 @@ One card per command, newest first by start time ([commands.png](design/side-pan
 ([files.png](design/side-panel/files.png))
 
 - A summary line "N files changed" with `+a −r` (each only when known) and a ratio bar when both are known.
-- Rows: a coloured status letter (A, M, D, R), the file name in bold with an ellipsis, its folder on a muted second line ("project root" for the session directory; `~/…` or the absolute path outside it), `+N −M`, and a chevron when a diff exists. Clicking opens the diff inline (400 px at most, scrolling); `@` on hover or focus inserts the path. A footer appears only when older history was omitted.
+- Rows: a coloured status letter (A, M, D, R; a file icon when the entry has no status), the file name (or its `label`) in bold with an ellipsis, its folder on a muted second line ("project root" for the session directory; the absolute folder outside it), `+N −M`, and a chevron when a diff exists. Clicking opens the diff inline (400 px at most, scrolling); `@` on hover or focus inserts the path. A footer appears only when older history was omitted.
 
 ## 7. Details
 
 ([details.png](design/side-panel/details.png))
 
-- **Context card.** Tokens in large type (`6.9k / 8.2k tokens`), the percent chip and a bar coloured by fill (warning from 80 %, error from 95 %), then retained messages, whether a summary exists and the auto-compact trigger; **Compact now** when available.
-- **Usage card.** Last turn and session totals, with rows only for reported values; one note when the provider reports no token counts; cache coverage when measured.
+- **Context card.** Tokens in large type (`6.9k / 8.2k tokens`), the percent chip and a bar coloured by fill (warning from 80 %, error from 95 %), then one line with the retained messages, whether a summary exists and the auto-compact trigger ("auto compact off" without one, rounded), the window, input budget, output reserve and exact auto-compact trigger when known, **Compact now** (the composer's Compact context, disabled while it is), and the history note with the measurement time.
+- **Usage card.** A table with Last turn and Session columns and a row only for a measure either reports (requests always; input, output, cache read and write tokens, cache coverage, cache read share and derived uncached input when measured; a dash for the column that did not report it); one note when the provider reports no input, output or cache token counts.
 - **Summary card** when a summary exists (expandable, copyable).
 - **Continue in terminal** with the copyable resume command.
-- **Session paths** (ID, workspace, config, model, attached capabilities) in a final card. Nothing Details shows today is dropped; unreported values are covered by the note.
+- **Last attached capabilities** (tools, skills, variables) and **Session** (ID, workspace, config for the next turn, a previously saved config when it differs, model) in the final cards. Nothing Details shows today is dropped; unreported values are covered by the note.
 
 ## 8. Plugin blocks
 

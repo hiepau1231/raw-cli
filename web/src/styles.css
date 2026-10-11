@@ -3487,6 +3487,9 @@ code.tool-summary {
   --sp-tint-success: color-mix(in srgb, var(--success) 14%, transparent);
   --sp-tint-warning: color-mix(in srgb, var(--warning) 16%, transparent);
   --sp-tint-error: color-mix(in srgb, var(--error) 14%, transparent);
+  /* Text on its own tint: the plain colours miss 4.5:1 there in the light theme. */
+  --sp-warning-text: color-mix(in srgb, var(--warning) 70%, var(--text));
+  --sp-success-text: color-mix(in srgb, var(--success) 75%, var(--text));
 }
 :root[data-theme="dark"] .inspector {
   --sp-card: #141020;
@@ -3579,7 +3582,7 @@ code.tool-summary {
 }
 .sp-badge.tone-warning {
   background: var(--sp-tint-warning);
-  color: var(--warning);
+  color: var(--sp-warning-text);
 }
 .sp-unseen {
   position: absolute;
@@ -3733,11 +3736,11 @@ button.sp-card:hover:not(:disabled) {
 }
 .sp-chip.tone-success {
   background: var(--sp-tint-success);
-  color: var(--success);
+  color: var(--sp-success-text);
 }
 .sp-chip.tone-warning {
   background: var(--sp-tint-warning);
-  color: var(--warning);
+  color: var(--sp-warning-text);
 }
 .sp-chip.tone-error {
   background: var(--sp-tint-error);
@@ -3973,14 +3976,187 @@ button.sp-card:hover:not(:disabled) {
   overflow-wrap: anywhere;
   text-align: left;
 }
-/* Files: one 24 px row per file, like a source-control list (docs/tool-ux-design.md §6.3). */
+/* Todo (docs/side-panel-design.md §5): count and bar, then Now, Next and one Completed row. */
+.todo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.todo-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.panel-block .todo-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--panel-font-lg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.todo-count {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.sp-bar.todo-bar {
+  height: 6px;
+}
+.todo-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.todo-now {
+  gap: 2px;
+  padding: 8px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 10px;
+  background: var(--sp-tint-accent);
+}
+.todo-kicker,
+.todo-group-label,
+.todo-completed-toggle {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.todo-kicker {
+  padding: 0 4px 2px;
+  color: var(--accent-text);
+  font-weight: 700;
+}
+.todo-group-label {
+  padding: 4px 4px 2px;
+  color: var(--muted);
+}
+.todo .panel-checklist li {
+  min-height: 0;
+  padding: 0;
+}
+.todo-row {
+  flex-wrap: nowrap;
+  padding: 4px;
+  border-radius: 7px;
+  line-height: 20px;
+}
+.todo-row:hover {
+  background: var(--panel-hover);
+}
+.todo-now .todo-row:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.todo-row > .panel-disclosure {
+  margin-top: 2px;
+}
+.todo-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+.todo-label {
+  overflow-wrap: anywhere;
+}
+/* Next and Completed clamp to two lines (the full text is in the title); Now wraps in full. */
+.todo-group:not(.todo-now) .todo-label {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.todo-current {
+  font-weight: 500;
+}
+.todo-note {
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.todo-state {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+}
+.todo-state.status-blocked {
+  color: var(--warning);
+}
+.todo-state.status-failed {
+  color: var(--error);
+}
+.todo-completed-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-height: 0;
+  padding: 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.todo-completed-toggle:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+.todo-completed-toggle[aria-expanded="true"] .panel-chevron {
+  transform: rotate(90deg);
+}
+/* Files changed (docs/side-panel-design.md §6): a summary with totals and a ratio bar, then a two-line review row per file. */
+.files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.files-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.files-count {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--panel-font-lg);
+  font-weight: 600;
+}
+.files-ratio {
+  display: flex;
+  height: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--panel-hover);
+}
+.files-ratio > i.added {
+  background: var(--success);
+}
+.files-ratio > i.removed {
+  flex: 1;
+  background: var(--error);
+}
+.panel-files li {
+  padding: 0;
+}
 .panel-file-row {
   flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-1);
-  margin: 0 calc(-1 * var(--space-1));
-  padding: 0 var(--space-1);
-  border-radius: 4px;
+  padding: 0 4px 0 0;
+  border-radius: 8px;
 }
 .panel-file-row:hover {
   background: var(--panel-hover);
@@ -3990,17 +4166,17 @@ button.sp-card:hover:not(:disabled) {
   flex: 1 1 auto;
   align-items: center;
   justify-content: flex-start;
-  gap: var(--space-1);
+  gap: 9px;
   min-width: 0;
   min-height: 0;
-  padding: 0;
+  padding: 5px 6px;
   border: 0;
-  border-radius: 0;
+  border-radius: 8px;
   background: transparent;
   color: inherit;
   font: inherit;
   font-size: var(--panel-font-md);
-  line-height: 20px;
+  line-height: 18px;
   text-align: left;
 }
 button.panel-file {
@@ -4008,7 +4184,14 @@ button.panel-file {
 }
 .panel-file-icon {
   flex: none;
+  width: 16px;
   color: var(--muted);
+}
+.panel-file-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
 }
 .panel-file-name,
 .panel-file-dir {
@@ -4018,44 +4201,66 @@ button.panel-file {
   white-space: nowrap;
 }
 .panel-file-name {
-  flex: 0 1 auto;
-}
-.panel-file-name.outside {
-  color: var(--muted);
+  font-weight: 600;
 }
 .panel-file-dir {
-  flex: 0 1000 auto;
   color: var(--muted);
   font-size: var(--panel-font-sm);
+  line-height: 16px;
 }
 .panel-file-stats {
   display: inline-flex;
   flex: none;
   gap: var(--space-1);
-  margin-left: auto;
   font-size: var(--panel-font-sm);
   font-variant-numeric: tabular-nums;
 }
-.panel-file-added,
-.panel-file-status.file-added {
+.panel-file-added {
   color: var(--success);
 }
-.panel-file-removed,
-.panel-file-status.file-deleted {
+.panel-file-removed {
   color: var(--error);
 }
-.panel-file-status {
+.panel-file-chevron {
   flex: none;
-  width: 14px;
-  font-size: var(--panel-font-sm);
-  font-weight: 600;
-  text-align: center;
+  color: var(--muted);
+}
+.panel-file[aria-expanded="true"] .panel-file-chevron {
+  transform: rotate(90deg);
+}
+/* The status letter is a small tinted square: A added, M modified, D deleted, R referenced. */
+.panel-file-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--panel-hover);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+.panel-file-status.file-added {
+  background: var(--sp-tint-success);
+  color: var(--sp-success-text);
 }
 .panel-file-status.file-modified {
-  color: var(--warning);
+  background: var(--sp-tint-warning);
+  color: var(--sp-warning-text);
+}
+.panel-file-status.file-deleted {
+  background: var(--sp-tint-error);
+  color: var(--error);
 }
 .panel-file-status.file-referenced {
+  background: var(--sp-tint-accent);
   color: var(--accent-text);
+}
+.panel-file-diff {
+  margin-left: 25px;
 }
 .panel-file-diff .code-block {
   margin: 2px 0 var(--space-1);
@@ -4270,6 +4475,134 @@ button.panel-file {
 .interaction-receipt dl { flex-basis: 100%; margin: 0; }
 .interaction-receipt dd { white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* Details (docs/side-panel-design.md §7): the context first, then usage, summary, resume command and session. */
+.details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.details-card {
+  gap: 8px;
+}
+.details-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.details-label {
+  flex: 1 1 auto;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.details-meter {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.details-big {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  font-variant-numeric: tabular-nums;
+}
+.details-of,
+.details-line,
+.details-hint,
+.details-note {
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
+}
+.details-line,
+.details-hint,
+.details-note {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.details-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.details-note svg {
+  flex: none;
+}
+.details-kv {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: var(--panel-font-sm);
+}
+.details-kv > div {
+  display: contents;
+}
+.details-kv dt {
+  color: var(--muted);
+}
+.details-kv dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.details-actions {
+  display: flex;
+}
+.details-usage {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--panel-font-sm);
+  font-variant-numeric: tabular-nums;
+}
+.details-usage th,
+.details-usage td {
+  padding: 3px 0;
+  text-align: right;
+  font-weight: 400;
+}
+.details-usage thead th {
+  color: var(--muted);
+  font-size: 11px;
+}
+.details-usage tbody th {
+  color: var(--muted);
+  text-align: left;
+}
+.details-usage td {
+  padding-left: 10px;
+  /* Counts never break; coverage and share phrases wrap at their spaces. */
+  overflow-wrap: normal;
+}
+.details-card .resume-command {
+  border: 0;
+  padding: 6px 8px;
+  background: var(--code);
+}
+.details-card .resume-command code {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.details-card .path-list {
+  margin: 0;
+}
+.details-card .path-list dd {
+  margin: 2px 0 10px;
+}
+.details-card .path-list > div:last-child dd,
+.details-card .path-list > dd:last-child {
+  margin-bottom: 0;
+}
+.details-card details summary {
+  min-height: 0;
+  font-size: var(--panel-font-sm);
+}
 /* Commands (docs/side-panel-design.md §4): a status filter and one card per command. */
 .sp-content:has(.commands) {
   overflow-anchor: none;
@@ -4377,12 +4710,11 @@ button.panel-file {
 }
 .command-chip[data-tone="warning"] {
   background: var(--sp-tint-warning);
-  color: var(--warning);
+  color: var(--sp-warning-text);
 }
 .command-chip[data-tone="success"] {
   background: var(--sp-tint-success);
-  /* The plain success colour misses 4.5:1 on its own tint in the light theme. */
-  color: color-mix(in srgb, var(--success) 75%, var(--text));
+  color: var(--sp-success-text);
 }
 .command-card-time {
   flex: none;

@@ -95,12 +95,20 @@ test.describe("todo panel", () => {
     const content = page.getByRole("tabpanel");
     expect(await content.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
     await content.evaluate((element) => { element.scrollTop = 200; });
+    // The first row in view, and where it is: an update that moves a row above it to Now keeps it in place.
+    const reading = () => content.evaluate((element) => {
+      const top = element.getBoundingClientRect().top;
+      const row = [...element.querySelectorAll<HTMLElement>(".todo-group[data-group=next] .todo-row")].find((item) => item.getBoundingClientRect().top >= top)!;
+      return { label: row.querySelector(".todo-label")!.textContent, offset: Math.round(row.getBoundingClientRect().top - top) };
+    });
+    const before = await reading();
     await page.getByRole("textbox", { name: "Message" }).fill("again");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByTestId("assistant-message")).toHaveCount(3);
     await expect(tab(page, "Todo")).toHaveAccessibleDescription("1 of 60 done");
     await expect(tab(page, "Todo")).toHaveAttribute("aria-selected", "true");
-    expect(await content.evaluate((element) => element.scrollTop)).toBe(200);
+    expect(await content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    expect(await reading()).toEqual(before);
     expect(await page.evaluate(() => !!document.activeElement?.closest(".inspector"))).toBe(false);
   });
 
@@ -306,20 +314,23 @@ test.describe("tab chrome", () => {
     await expect(code).toHaveCSS("border-radius", "0px");
   });
 
-  test("rows are 24 px with 13 px text and file references keep the row size", async ({ page, raw }) => {
+  test("rows keep one height with 13 px text and file references keep the row size", async ({ page, raw }) => {
     seed(raw);
     await openChat(page, raw);
     await send(page, "publish");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
     await side(page).click();
     await tab(page, "Notes").click();
-    // Checklist rows (one with a file reference) and table rows share the row geometry.
-    const rows = page.getByRole("tabpanel").locator(".panel-checklist li, .panel-table tbody tr");
-    await expect(rows).toHaveCount(4);
-    for (const row of await rows.all()) {
-      expect((await row.boundingBox())!.height).toBe(24);
-      expect(await row.evaluate((element) => getComputedStyle(element).fontSize)).toBe("13px");
-    }
+    // Checklist rows (one with a file reference) keep one height; table rows are 24 px; both use 13 px text.
+    const items = page.getByRole("tabpanel").locator(".panel-checklist .todo-row");
+    await expect(items).toHaveCount(2);
+    const heights = await items.evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height));
+    expect(heights[0]).toBe(heights[1]);
+    expect(heights[0]).toBeLessThanOrEqual(32);
+    const rows = page.getByRole("tabpanel").locator(".panel-table tbody tr");
+    await expect(rows).toHaveCount(2);
+    for (const row of await rows.all()) expect((await row.boundingBox())!.height).toBe(24);
+    for (const row of [...await items.all(), ...await rows.all()]) expect(await row.evaluate((element) => getComputedStyle(element).fontSize)).toBe("13px");
     await expect(page.getByRole("tabpanel").locator(".panel-ref").first()).toHaveCSS("font-size", "13px");
   });
 });
@@ -442,16 +453,28 @@ test.describe("panel widgets", () => {
     await expect(body.locator('[data-kind="timeline"] li').first()).toContainText("Newer event");
     await expect(body.locator('[data-kind="timeline"] li').last()).toContainText("Older event");
     await expect(body.locator('[data-kind="timeline"] time').first()).toHaveText(/ago$/);
-    // Files: name, muted directory, +/− and the status letter; a path outside the cwd is shown whole.
+    // Files: a summary with totals and a ratio bar, then the status letter, the name, its folder below, and +/−.
+    const block = body.locator('[data-kind="files"]');
+    await expect(block.locator(".files-count")).toHaveText("3 files changed");
+    await expect(block.locator(".files-head .sp-stat.added")).toHaveText("+15");
+    await expect(block.locator(".files-head .sp-stat.removed")).toHaveText("−3");
+    await expect(block.locator(".files-ratio > i.added")).toHaveAttribute("style", /width: 83\.3/);
     const files = body.locator('[data-kind="files"] li');
     await expect(files.first().locator(".panel-file-name")).toHaveText("c.ts");
-    await expect(files.first().locator(".panel-file-dir")).toHaveText("src/");
+    await expect(files.first().locator(".panel-file-dir")).toHaveText("src");
     await expect(files.first().locator(".panel-file-added")).toHaveText("+12");
     await expect(files.first().locator(".panel-file-removed")).toHaveText("−3");
     await expect(files.first().locator(".panel-file-status")).toHaveText("M");
-    await expect(files.nth(1).locator(".panel-file-name")).toHaveText("/opt/shared/notes.md");
-    await expect(files.nth(1).locator(".panel-file-dir, .panel-file-added")).toHaveCount(0);
+    // A path outside the cwd: its name, and the absolute folder below.
+    await expect(files.nth(1).locator(".panel-file-name")).toHaveText("notes.md");
+    await expect(files.nth(1).locator(".panel-file-dir")).toHaveText("/opt/shared");
+    await expect(files.nth(1).locator(".panel-file-added")).toHaveCount(0);
     await expect(files.nth(1).locator(".panel-file-status")).toHaveText("R");
+    // The status letter, then the name on the first line and the folder on the second.
+    const box = async (selector: string) => (await files.first().locator(selector).boundingBox())!;
+    const [letter, name, dir] = [await box(".panel-file-status"), await box(".panel-file-name"), await box(".panel-file-dir")];
+    expect(letter.x).toBeLessThan(name.x);
+    expect(dir.y).toBeGreaterThanOrEqual(name.y + name.height - 1);
     // A count that is not given is not shown as zero, and the line number does not hide the file type.
     await expect(files.last().locator(".panel-file-name")).toHaveText("api.ts:42");
     await expect(files.last().locator(".panel-file-added")).toHaveText("+3");
@@ -463,13 +486,14 @@ test.describe("panel widgets", () => {
     // Only the item in progress shows its note; another item's note is in its tooltip.
     await expect(body.getByText("a note", { exact: true })).toBeVisible();
     await expect(body.getByText("failing note")).toHaveCount(0);
-    await expect(body.getByText("Failing", { exact: true })).toHaveAttribute("title", "failing note");
+    await expect(body.getByText("Failing", { exact: true })).toHaveAttribute("title", "Failing\nfailing note");
     // Checklist: children collapse, and "Hide completed" in the tab menu is remembered by the browser.
     await expect(body.getByText("Child", { exact: true })).toBeVisible();
     await body.getByRole("button", { name: "Collapse Parent" }).click();
     await expect(body.getByText("Child", { exact: true })).toHaveCount(0);
     await body.getByRole("button", { name: "Expand Parent" }).click();
     await expect(body.getByText("Child", { exact: true })).toBeVisible();
+    await body.getByRole("button", { name: "Completed 1", exact: true }).click();
     await expect(body.getByText("Finished chore")).toBeVisible();
     await expect(body.getByLabel("Hide completed")).toHaveCount(0);
     const hideCompleted = async () => {
@@ -485,7 +509,7 @@ test.describe("panel widgets", () => {
     await expect(page.getByRole("tabpanel").getByText("Finished chore")).toHaveCount(0);
     await expect(await hideCompleted()).toHaveAttribute("aria-checked", "true");
     await page.getByRole("menuitemcheckbox", { name: "Hide completed" }).click();
-    await expect(page.getByRole("tabpanel").getByText("Finished chore")).toBeVisible();
+    await expect(page.getByRole("tabpanel").getByRole("button", { name: "Completed 1", exact: true })).toBeVisible();
     await body.getByRole("button", { name: "src/a.ts:3" }).click();
     await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue(/@src\/a\.ts /);
     expect(await body.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -493,6 +517,187 @@ test.describe("panel widgets", () => {
       await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
       expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
     }
+  });
+});
+
+test.describe("checklist groups", () => {
+  test.use({ scenario: { agent: { tools: { use: ["local/lists"], rules: [{ match: "local/lists", effect: "allow" }] } }, responses: [call("l1", "lists", {}), answer] } });
+  const LONG_BLOCKED = "Chờ phê duyệt của nhóm tài liệu trước khi gửi báo cáo tổng hợp kèm danh sách liên kết hỏng cho toàn bộ người đọc";
+  const lists = {
+    title: "Lists",
+    blocks: [
+      { id: "release", kind: "checklist", title: "Release", items: [
+        { id: "p1", label: "Parent done with an active child", status: "done", children: [
+          { id: "c1", label: "Active child", status: "in_progress", note: "child note" },
+          { id: "c2", label: "Pending sibling", status: "pending" },
+        ] },
+        { id: "p2", label: "Parent done with a pending child", status: "done", children: [
+          { id: "c3", label: "Pending grandchild", status: "pending" },
+          { id: "c4", label: "Finished child", status: "done" },
+        ] },
+        { id: "b1", label: LONG_BLOCKED, status: "blocked", note: "waiting for ops" },
+        { id: "f1", label: "Failed item", status: "failed" },
+        { id: "d1", label: "Done item", status: "done" },
+        { id: "d2", label: "Another done item", status: "done" },
+        { id: "s1", label: "Skipped item", status: "skipped" },
+      ] },
+      { id: "cleanup", kind: "checklist", title: "Cleanup", items: [{ id: "x1", label: "Removed temp files", status: "done" }, { id: "x2", label: "Not needed", status: "skipped" }] },
+      { id: "waiting", kind: "checklist", title: "Waiting", items: [] },
+      { id: "refs", kind: "files", title: "References", entries: [{ path: "docs/guide.md", status: "referenced" }, { path: "notes.md" }] },
+    ],
+  };
+  const publish = `await context.panels.update("l", { op: "replace", document: ${JSON.stringify(lists)} });`;
+
+  test("items group by top-level subtree into Now, Next and Completed without splitting the hierarchy; files without counts show no totals", async ({ page, raw }) => {
+    plugin(raw, "lists", [decl("l", "Lists", { open: "first_update" })], publish);
+    await openChat(page, raw);
+    await send(page, "lists");
+    await expect(tab(page, "Lists")).toHaveAttribute("aria-selected", "true");
+    const body = page.getByRole("tabpanel");
+    const release = body.locator('[data-kind="checklist"]').first();
+    const cleanup = body.locator('[data-kind="checklist"]').nth(1);
+    const group = (block: typeof release, name: string) => block.locator(`.todo-group[data-group="${name}"]`);
+    const exact = (text: string) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+    const item = (block: typeof release, label: string) => block.locator(".todo-item", { has: page.locator(":scope > .todo-row .todo-label", { hasText: exact(label) }) });
+    // Leaves: c1 c2 c3 c4 b1 f1 d1 d2 s1; done or skipped: c4 d1 d2 s1.
+    await expect(release.locator(".todo-count")).toHaveText("4 of 9 done");
+    await expect(release.locator(".todo-bar > i")).toHaveAttribute("style", /width: 44\.4/);
+    // Now: the done parent with its active child and that child's sibling, in tree order.
+    const now = group(release, "now");
+    await expect(now.locator(".todo-kicker")).toHaveText("Now");
+    await expect(now.locator(".todo-label")).toHaveText(["Parent done with an active child", "Active child", "Pending sibling"]);
+    await expect(item(now, "Active child").locator(".todo-note").first()).toHaveText("child note");
+    await expect(item(now, "Active child").locator(".panel-status").first()).toHaveClass(/status-in_progress/);
+    await expect(item(now, "Parent done with an active child").locator(".panel-status").first()).toHaveClass(/status-done/);
+    // Next: subtrees with unfinished work, a done parent keeping its pending child; blocked and failed say so in words.
+    const next = group(release, "next");
+    await expect(next.locator(".todo-group-label")).toHaveText("Next");
+    await expect(next.locator(".todo-label")).toHaveText(["Parent done with a pending child", "Pending grandchild", "Finished child", LONG_BLOCKED, "Failed item"]);
+    await expect(item(next, LONG_BLOCKED).locator(".todo-state").first()).toHaveText("Blocked");
+    await expect(item(next, "Failed item").locator(".todo-state").first()).toHaveText("Failed");
+    // A long Next label is clamped to two lines with the full text in its title, and the glyph sits on the first line.
+    const label = item(next, LONG_BLOCKED).locator(".todo-label").first();
+    await expect(label).toHaveAttribute("title", `${LONG_BLOCKED}\nwaiting for ops`);
+    const lines = await label.evaluate((element) => Math.round(element.getBoundingClientRect().height / parseFloat(getComputedStyle(element).lineHeight)));
+    expect(lines).toBe(2);
+    const glyph = (await item(next, LONG_BLOCKED).locator(".panel-status").first().boundingBox())!;
+    const text = (await label.boundingBox())!;
+    expect(glyph.y + glyph.height / 2).toBeGreaterThan(text.y);
+    expect(glyph.y + glyph.height / 2).toBeLessThan(text.y + text.height / 2);
+    // Completed: one collapsed row with its counts; its open state is kept when the tab is left and reopened.
+    const toggle = group(release, "completed").getByRole("button", { name: "Completed 3 · skipped 1" });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(release.getByText("Done item", { exact: true })).toHaveCount(0);
+    await toggle.click();
+    await expect(group(release, "completed").locator(".todo-label")).toHaveText(["Done item", "Another done item", "Skipped item"]);
+    await tab(page, "Overview").click();
+    await tab(page, "Lists").click();
+    await expect(group(release, "completed").getByRole("button", { name: "Completed 3 · skipped 1" })).toHaveAttribute("aria-expanded", "true");
+    // A finished list has only its Completed row.
+    await expect(cleanup.locator(".todo-count")).toHaveText("2 of 2 done");
+    await expect(group(cleanup, "now")).toHaveCount(0);
+    await expect(group(cleanup, "next")).toHaveCount(0);
+    await expect(group(cleanup, "completed").getByRole("button", { name: "Completed 2 · skipped 1" })).toHaveAttribute("aria-expanded", "false");
+    // An empty list keeps its title, with no count and no bar.
+    const waiting = body.locator('[data-kind="checklist"]').nth(2);
+    await expect(waiting.locator(".todo-title")).toHaveText("Waiting");
+    await expect(waiting.locator(".todo-count, .todo-bar, .todo-group")).toHaveCount(0);
+    // Files without counts show neither totals nor a bar, never "+0"; a file at the project root says so.
+    const refs = body.locator('[data-kind="files"]');
+    await expect(refs.locator(".files-count")).toHaveText("2 files changed");
+    await expect(refs.locator(".files-ratio, .sp-stat, .panel-file-added, .panel-file-removed")).toHaveCount(0);
+    await expect(refs.locator("li").last().locator(".panel-file-dir")).toHaveText("project root");
+    // Hide completed: no Completed rows and no finished item inside unfinished subtrees, but every unfinished one and its parents stay.
+    await page.getByRole("button", { name: "Lists panel menu" }).click();
+    await page.getByRole("menuitemcheckbox", { name: "Hide completed" }).click();
+    await expect(body.locator('.todo-group[data-group="completed"]')).toHaveCount(0);
+    await expect(next.locator(".todo-label")).toHaveText(["Parent done with a pending child", "Pending grandchild", LONG_BLOCKED, "Failed item"]);
+    await expect(now.locator(".todo-label")).toHaveText(["Parent done with an active child", "Active child", "Pending sibling"]);
+    expect(await body.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      expect((await new AxeBuilder({ page }).include(".inspector").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
+    }
+  });
+});
+
+test.describe("checklist regrouping", () => {
+  test.use({ scenario: { agent: { tools: { use: ["local/work"], rules: [{ match: "local/work", effect: "allow" }] } }, responses: [call("w1", "work", {}), answer] } });
+  const doc = (alpha: string, beta: string, gamma = "pending") => ({ blocks: [{ id: "work", kind: "checklist", items: [
+    { id: "a", label: "Alpha", status: "pending", children: [{ id: "a1", label: "Alpha child", status: alpha }] },
+    { id: "b", label: "Beta", status: beta },
+    { id: "z", label: "Zeta", status: "pending", children: [{ id: "z1", label: "Zeta child", status: "pending" }] },
+    { id: "g", label: "Gamma", status: gamma, ref: { path: "src/gamma.ts" } },
+  ] }] });
+  /** The second document arrives 2.5 s after the first, while the test holds focus in the list. */
+  const work = (raw: { env: NodeJS.ProcessEnv }, later: object) => plugin(raw, "work", [decl("w", "Work", { open: "first_update", actions: [
+    { id: "start", label: "Start", scope: "item", blocks: ["work"], kind: "prompt", text: "Start {{item.id}}", primary: true, when: { status: ["pending"] } },
+    { id: "ask", label: "Ask about it", scope: "item", blocks: ["work"], kind: "prompt", text: "About {{item.id}}" },
+  ] })], `await context.panels.update("w", { op: "replace", document: ${JSON.stringify(doc("pending", "in_progress"))} });
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await context.panels.update("w", { op: "replace", document: ${JSON.stringify(later)} });`);
+  test("a subtree moved to another group by an update keeps its disclosure state and the focused control", async ({ page, raw }) => {
+    work(raw, doc("in_progress", "done"));
+    await openChat(page, raw);
+    await send(page, "work");
+    const body = page.getByRole("tabpanel");
+    const group = (name: string) => body.locator(`.todo-group[data-group="${name}"]`);
+    const toggle = (name: string) => body.getByRole("button", { name: new RegExp(`^(Collapse|Expand) ${name}$`) });
+    await expect(group("next").locator(".todo-label")).toHaveText(["Alpha", "Alpha child", "Zeta", "Zeta child", "Gamma"]);
+    await toggle("Zeta").click();
+    await toggle("Alpha").click();
+    await expect(toggle("Alpha")).toBeFocused();
+    // Alpha's child starts: Alpha moves to Now, still collapsed and still focused; Zeta stays collapsed.
+    await expect(group("now").locator(".todo-label")).toHaveText(["Alpha"]);
+    await expect(toggle("Alpha")).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle("Alpha")).toBeFocused();
+    await expect(toggle("Zeta")).toHaveAttribute("aria-expanded", "false");
+    await expect(group("next").locator(".todo-label")).toHaveText(["Zeta", "Gamma"]);
+    await expect(group("completed").getByRole("button", { name: "Completed 1" })).toBeVisible();
+  });
+  test("focus returns to the same control when the update removes another one from its row", async ({ page, raw }) => {
+    work(raw, doc("pending", "in_progress", "in_progress"));
+    await openChat(page, raw);
+    await send(page, "work");
+    const body = page.getByRole("tabpanel");
+    const gamma = body.locator('.todo-item[data-id="g"] > .todo-row');
+    // Pending: Start, the reference and the menu. In progress: Start no longer applies.
+    await expect(gamma.getByRole("button", { name: "Start: Gamma" })).toBeVisible();
+    await gamma.locator(".panel-ref").focus();
+    await expect(body.locator('.todo-group[data-group="now"] .todo-item[data-id="g"]')).toBeVisible();
+    await expect(gamma.getByRole("button", { name: "Start: Gamma" })).toHaveCount(0);
+    await expect(gamma.locator(".panel-ref")).toBeFocused();
+  });
+});
+
+test.describe("todo in two sessions", () => {
+  const list = { title: "Link check", todos: [{ content: "Read the log", status: "done" }, { content: "Fix the parser", status: "in_progress" }, { content: "Run the suite", status: "pending" }] };
+  test.use({ scenario: { agent: { tools: { use: ["builtin/todo"] } }, responses: [call("t1", "todo", list), answer, call("t2", "todo", list), answer] } });
+  test("the document title shares the line with the count, and an opened Completed row stays with its session", async ({ page, raw }) => {
+    await openChat(page, raw);
+    await send(page, "plan");
+    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
+    await tab(page, "Todo").click();
+    const body = page.getByRole("tabpanel");
+    await expect(body.locator(".panel-doc-title")).toHaveCount(0);
+    await expect(body.locator(".todo-head .todo-title")).toHaveText("Link check");
+    await expect(body.locator(".todo-head .todo-count")).toHaveText("1 of 3 done");
+    const title = (await body.locator(".todo-title").boundingBox())!;
+    const count = (await body.locator(".todo-count").boundingBox())!;
+    expect(Math.abs(title.y + title.height / 2 - (count.y + count.height / 2))).toBeLessThan(4);
+    await body.getByRole("button", { name: "Completed 1" }).click();
+    await expect(body.getByRole("button", { name: "Completed 1" })).toHaveAttribute("aria-expanded", "true");
+    // A new chat with the same Todo panel starts with its Completed row closed.
+    const first = page.url();
+    await page.getByRole("button", { name: "New chat", exact: true }).first().click();
+    await expect(page).not.toHaveURL(first);
+    await expect(page.getByTestId("assistant-message")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /^New chat/ })).toBeVisible();
+    await send(page, "plan again");
+    await expect(page.getByTestId("assistant-message")).toHaveCount(1);
+    await tab(page, "Todo").click();
+    await expect(page.getByRole("tabpanel").locator(".todo-count")).toHaveText("1 of 3 done");
+    await expect(page.getByRole("tabpanel").getByRole("button", { name: "Completed 1" })).toHaveAttribute("aria-expanded", "false");
   });
 });
 
@@ -558,6 +763,8 @@ test.describe("panel actions", () => {
     await send(page, "plan it");
     await expect(page.getByText("Step 3", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Mark done: Step 2" }).click();
+    // The finished item moves to the Completed row.
+    await page.getByRole("tabpanel").getByRole("button", { name: "Completed 1", exact: true }).click();
     await expect(row(page, "Step 2").getByText("Done", { exact: true })).toBeAttached();
     await expect(page.getByRole("button", { name: "Mark done: Step 2" })).toHaveCount(0);
     await expect(page.locator(".panel-tag", { hasText: "You" })).toBeVisible();
@@ -567,11 +774,13 @@ test.describe("panel actions", () => {
     await expect(page.getByRole("menuitem", { name: "Mark done" })).toHaveCount(0);
   });
 
-  test("rows with actions stay 24 px and show their menu button on hover or focus", async ({ page, raw }) => {
+  test("one-line rows with actions keep one height and show their menu button on hover or focus", async ({ page, raw }) => {
     await openChat(page, raw);
     await send(page, "plan it");
     await expect(page.getByText("Step 3", { exact: true })).toBeVisible();
-    for (const label of ["Step 1", "Step 2", "Step 3"]) expect((await row(page, label).boundingBox())!.height).toBe(24);
+    const heights = await Promise.all(["Step 1", "Step 2", "Step 3"].map(async (label) => (await row(page, label).locator(".todo-row").boundingBox())!.height));
+    expect(new Set(heights).size).toBe(1);
+    expect(heights[0]).toBeLessThanOrEqual(32);
     const button = row(page, "Step 2").getByRole("button", { name: "Actions for Step 2" });
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.mouse.move(0, 0);

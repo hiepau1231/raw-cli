@@ -132,7 +132,7 @@ export function SidePanel({ commands = [], commandsOmitted, sessionCwd, sessionI
       <>
         <TabHeader title={item.title} tooltip={shownOf(item).document?.subtitle} summary={summaryOf(item)} menu={menuFor(item)} />
         {item.panel === COMMANDS_ID ? <Commands items={commands} omitted={commandsOmitted} sessionId={sessionId} sessionCwd={sessionCwd} onInsert={onInsert} /> : (
-          <ToolView item={item} actions={actions} onInsert={onInsert} hideCompleted={prefs.hideCompleted}>
+          <ToolView item={item} scope={sessionId} actions={actions} onInsert={onInsert} hideCompleted={prefs.hideCompleted}>
             {rejected && <p className="panel-banner error" role="note">Update rejected: {rejected}</p>}
           </ToolView>
         )}

@@ -1,6 +1,7 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
-import { test, expect } from "./fixtures.js";
+import { test, expect, openChat } from "./fixtures.js";
+import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
 import { ACTIVE_TODO, BACKGROUND, FAILING, FOREGROUND, installStressTools, seedStress, stressScenario } from "./side-panel-stress.js";
 
 // Geometry and content of the side panel with real-length data (docs/side-panel-design.md §10), at the supported widths.
@@ -108,6 +109,43 @@ test.describe("side panel layout", () => {
       }
     });
 
+    test(`at ${width} px Details shows the context first, the usage the provider reports, and every session value`, async ({ page, raw }) => {
+      installStressTools(raw);
+      await page.addInitScript(([key, value]) => {
+        if (!localStorage.getItem(key!)) localStorage.setItem(key!, JSON.stringify({ version: 1, inspectorWidth: Number(value) }));
+      }, [PREFERENCES, String(width)]);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await seedStress(page, raw);
+      await tab(page, "Details").click();
+      const body = page.getByRole("tabpanel");
+      const cards = body.locator(".details-card");
+      await expect(cards.first()).toHaveAttribute("data-card", "context");
+      const context = body.locator('.details-card[data-card="context"]');
+      await expect(context.locator(".details-label")).toHaveText("Context");
+      await expect(context.locator(".details-big")).toHaveText(/^~?\d+(\.\d)?k?$/);
+      await expect(context.locator(".details-of")).toHaveText(/^\/ \d+(\.\d)?k? tokens$/);
+      await expect(context.locator(".sp-chip")).toHaveText(/^\d+%$/);
+      await expect(context.locator(".sp-bar > i")).toHaveAttribute("style", /width: \d/);
+      await expect(context.locator(".details-line")).toHaveText(/^\d+ messages kept · no summary yet · auto compact (at [\d.]+k?|off)$/);
+      await expect(context.getByRole("button", { name: "Compact now" })).toBeVisible();
+      // The mock provider reports no token counts: one note, request counts, and no "Unavailable" rows anywhere.
+      const usage = body.locator('.details-card[data-card="usage"]');
+      await expect(usage.locator(".details-note")).toHaveText("This provider does not report token counts.");
+      await expect(usage.locator("tbody th")).toHaveText(["Requests"]);
+      await expect(body).not.toContainText("Unavailable");
+      await expect(body.locator('.details-card[data-card="resume"] code')).toHaveText(/^raw --resume \S+ "Your next message"$/);
+      await expect(body.getByRole("button", { name: "Copy resume command" })).toBeVisible();
+      await expect(body.locator('.details-card[data-card="capabilities"]')).toContainText("Tools");
+      const session = body.locator('.details-card[data-card="session"]');
+      for (const label of ["ID", "Workspace", "Config for next turn", "Model"]) await expect(session.locator("dt", { hasText: new RegExp(`^${label}$`) })).toHaveCount(1);
+      expect(await cards.evaluateAll((list) => list.map((card) => (card as HTMLElement).dataset.card))).toEqual(["context", "usage", "resume", "capabilities", "session"]);
+      for (const theme of ["dark", "light"]) {
+        await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+        expect(await body.evaluate((root) => [root.scrollWidth - root.clientWidth, ...[...root.querySelectorAll<HTMLElement>(".details-card")].map((card) => card.scrollWidth - card.clientWidth)].filter((overflow) => overflow > 0))).toEqual([]);
+        expect((await new AxeBuilder({ page }).include(".inspector").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
+      }
+    });
+
     test(`at ${width} px the Commands tab shows one readable card per command`, async ({ page, raw }) => {
       installStressTools(raw);
       await page.addInitScript(([key, value]) => {
@@ -136,4 +174,44 @@ test.describe("side panel layout", () => {
       }
     });
   }
+});
+
+test.describe("Details with reported usage", () => {
+  const usage = (prompt: number, completion: number, cached: number) => `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [], usage: { prompt_tokens: prompt, completion_tokens: completion, prompt_tokens_details: { cached_tokens: cached } } })}\n\n`;
+  test.use({ scenario: { responses: [
+    { frames: [openAiFrame({ content: "First." }, "stop"), usage(1200, 30, 0), openAiDone] },
+    { frames: [openAiFrame({ content: "Second." }, "stop"), usage(1500, 40, 1000), openAiDone] },
+  ] } });
+  test("the usage card lists the reported counts for the last turn and the session, without the no-report note", async ({ page, raw }) => {
+    await openChat(page, raw);
+    for (const [index, text] of ["one", "two"].entries()) {
+      await page.getByRole("textbox", { name: "Message" }).fill(text);
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+      await expect(page.getByTestId("assistant-message")).toHaveCount(index + 1);
+    }
+    await page.getByRole("button", { name: "Side panel", exact: true }).click();
+    await tab(page, "Details").click();
+    const card = page.getByRole("tabpanel").locator('.details-card[data-card="usage"]');
+    await expect(card.locator("thead th")).toHaveText(["", "Last turn", "Session"]);
+    const row = (name: string) => card.locator("tbody tr", { has: page.locator("th", { hasText: new RegExp(`^${name}$`) }) }).locator("td");
+    await expect(row("Requests")).toHaveText(["1", "2"]);
+    await expect(row("Input tokens")).toHaveText(["1,500", "2,700"]);
+    await expect(row("Output tokens")).toHaveText(["40", "70"]);
+    await expect(row("Cache read")).toHaveText(["1,000", "1,000"]);
+    await expect(card.locator(".details-note")).toHaveCount(0);
+    await expect(page.getByRole("tabpanel")).not.toContainText("Unavailable");
+    await expect(page.getByRole("tabpanel").locator('.details-card[data-card="context"] .details-of')).toBeVisible();
+    // Long sessions: coverage and share phrases for hundreds of requests wrap inside the card at the default width.
+    await expect(row("Cache coverage")).toHaveText(["1 of 1 requests", "2 of 2 requests"]);
+    await row("Cache coverage").nth(1).evaluate((cell) => { cell.textContent = "1,000 of 1,000 requests"; });
+    await row("Cache read share").nth(1).evaluate((cell) => { cell.textContent = "50.0% (1,000 of 1,000)"; });
+    await row("Requests").nth(1).evaluate((cell) => { cell.textContent = "1,000"; });
+    const fits = await card.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const table = element.querySelector("table")!.getBoundingClientRect();
+      return { overflow: element.scrollWidth - element.clientWidth, right: Math.round(table.right - box.right) };
+    });
+    expect(fits.overflow).toBeLessThanOrEqual(0);
+    expect(fits.right).toBeLessThan(0);
+  });
 });

@@ -636,6 +636,7 @@ export function Chat({
             narrow={narrow}
             resizeInspector={resizeInspector}
             keepFocus={keepFocus}
+            compact={{ run: () => { void send("compact"); }, disabled: !state || !!busy || !agent }}
             stack={{
               agent: panels.stackAgent,
               items: panels.items,

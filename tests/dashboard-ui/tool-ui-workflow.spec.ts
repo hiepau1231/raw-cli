@@ -50,6 +50,9 @@ test("Ask, Commands, Todo, patches and Mermaid survive reload and retry while St
   await expect(diagram.locator('svg[role="img"]')).toContainText("Patch");
   await expect(page.getByTestId("assistant-message").last().locator('svg[role="img"]')).toContainText("Answer");
   const todo = await showSection(page, "builtin/todo#todo");
+  // The finished item is under the Completed row.
+  await expect(todo.locator(".todo-count")).toHaveText("1 of 1 done");
+  await todo.getByRole("button", { name: "Completed 1", exact: true }).click();
   await expect(todo).toContainText("Finish integrated workflow");
   expect(readFileSync(join(raw.root, "workflow.txt"), "utf8")).toBe("written exactly once 雪\n");
   await page.screenshot({ path: info.outputPath("workflow-before-reload.png"), fullPage: true });
@@ -63,7 +66,8 @@ test("Ask, Commands, Todo, patches and Mermaid survive reload and retry while St
   await showSection(page, "host/files_changed#files_changed");
   await expect(files.locator(".panel-files li")).toHaveCount(1);
   await showSection(page, "builtin/todo#todo");
-  await expect(todo).toContainText("Finish integrated workflow");
+  await expect(todo.locator(".todo-count")).toHaveText("1 of 1 done");
+  await expect(todo.getByRole("button", { name: "Completed 1", exact: true })).toBeVisible();
   await send(page, "keep model pending");
   await expect.poll(() => raw.provider.requests.length).toBe(9);
   await showSection(page, "__commands");
