@@ -7,7 +7,7 @@ import { safeTerminalText } from "./safe.js";
 
 function typeIcon(identity: string | undefined): IconRole {
   if (identity === "builtin/read_file") return "read";
-  if (identity === "builtin/write_file") return "write";
+  if (identity === "builtin/write_file" || identity === "builtin/edit_file" || identity === "builtin/apply_patch") return "write";
   if (identity === "builtin/bash") return "bash";
   if (identity === "builtin/list_skills" || identity === "builtin/load_skill") return "skill";
   if (identity?.startsWith("mcp/")) return "mcp";
@@ -17,16 +17,10 @@ function typeIcon(identity: string | undefined): IconRole {
 function shortArguments(call: VisibleToolCall): string {
   const args = call.arguments;
   if (call.identity === "builtin/bash" && typeof args.command === "string") return args.command;
-  if (call.identity === "builtin/read_file" && Array.isArray(args.files)) {
-    return args.files.map((item) => item && typeof item === "object" && "path" in item
-      ? String(item.path) : JSON.stringify(item)).join(" · ");
-  }
-  if (call.identity === "builtin/write_file" && Array.isArray(args.patch_paths)) {
+  if ((call.identity === "builtin/read_file" || call.identity === "builtin/write_file" || call.identity === "builtin/edit_file")
+    && typeof args.path === "string") return args.path;
+  if (call.identity === "builtin/apply_patch" && Array.isArray(args.patch_paths)) {
     return `patch (${String(args.patch_bytes)} bytes): ${args.patch_paths.join(" · ")}`;
-  }
-  if (call.identity === "builtin/write_file" && Array.isArray(args.operations)) {
-    return args.operations.map((item) => item && typeof item === "object" && "path" in item
-      ? `${String(item.path)}${"mode" in item ? ` (${String(item.mode)})` : ""}` : JSON.stringify(item)).join(" · ");
   }
   if (call.identity === "builtin/load_skill" && typeof args.name === "string") return args.name;
   return JSON.stringify(args);

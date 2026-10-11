@@ -2,6 +2,7 @@ import type { RuntimeConfig } from "../config.js";
 import { readToolManifests } from "../tools/plugins/loader.js";
 import type { PanelDeclaration } from "./contract.js";
 import { panelWarning } from "./validate.js";
+import { FILE_EDITING_TOOLS, FILES_CHANGED_OWNER } from "../tools/write-changes.js";
 
 export interface KnownPanel { owner: string; declaration: PanelDeclaration }
 
@@ -36,8 +37,13 @@ export async function knownPanelDeclarations(runtime: Pick<RuntimeConfig, "toolI
   const declared: KnownPanel[] = [];
   const implicitOwners: string[] = [];
   for (const id of local) {
-    const owner = runtime.packageTools[id]?.canonicalIdentity ?? id;
-    for (const declaration of manifests.get(id)?.panels ?? []) declared.push({ owner, declaration });
+    // The bundled editing tools declare one shared host-owned panel, listed once (docs/tool-ux-design.md §6.3).
+    const shared = !runtime.packageTools[id] && FILE_EDITING_TOOLS.has(id);
+    const owner = shared ? FILES_CHANGED_OWNER : runtime.packageTools[id]?.canonicalIdentity ?? id;
+    for (const declaration of manifests.get(id)?.panels ?? []) {
+      if (shared && declared.some((item) => item.owner === owner && item.declaration.id === declaration.id)) continue;
+      declared.push({ owner, declaration });
+    }
   }
   const servers: string[] = [];
   for (const id of runtime.toolIds) {

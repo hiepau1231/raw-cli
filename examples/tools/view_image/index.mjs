@@ -108,7 +108,22 @@ async function viewImageTool(args, context) {
   }
 }
 
+// src/tools/normalize.ts
+function renameArgument(args, notes, from, to, convert = (value) => value) {
+  if (!Object.hasOwn(args, from) || args[to] !== void 0) return;
+  args[to] = convert(args[from]);
+  delete args[from];
+  notes.push(`read ${from} as ${to}`);
+}
+var PATH_ALIASES = ["file_path", "filePath", "absolute_path"];
+
 // src/tools/bundled/view_image/index.ts
+function normalizeArguments(input) {
+  const args = { ...input };
+  const notes = [];
+  for (const alias of PATH_ALIASES) renameArgument(args, notes, alias, "path");
+  return { args, notes };
+}
 function validateArgs(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "arguments must be an object";
   const args = value;
@@ -122,5 +137,6 @@ async function handler(args, context) {
 }
 export {
   handler,
+  normalizeArguments,
   validateArgs
 };

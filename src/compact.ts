@@ -6,6 +6,7 @@ import type { ToolDefinition } from "./tools/registry.js";
 import { elideMiddle, utf8Prefix, utf8Suffix } from "./tools/results.js";
 import { SPILL_PATH_RESERVE, savedLabel, spillText } from "./tools/spill.js";
 import type { ToolResult } from "./tools/types.js";
+import { FILE_EDITING_TOOLS } from "./tools/write-changes.js";
 
 export interface CompactOptions {
   provider?: ProviderAdapter;
@@ -605,27 +606,25 @@ export function collectFacts(messages: readonly ModelMessage[], facts: WorkingFa
   };
   const add = (list: string[], value: string) => { if (!list.includes(value)) list.push(value); };
   const bash = new Map<string, unknown>();
-  const writes = new Set<string>();
+  const reads = new Map<string, unknown>();
+  const editing = new Set<string>();
   for (const message of messages) {
     if (message.role === "assistant") {
       for (const call of message.toolCalls) {
-        const args = call.arguments;
         const tool = identity(call.name);
-        if (tool === "builtin/write_file") writes.add(call.id);
-        else if (tool === "builtin/read_file" && Array.isArray(args.files)) {
-          for (const file of args.files.map(record)) if (typeof file?.path === "string") add(next.read, file.path);
-        } else if (tool === "builtin/bash") bash.set(call.id, args.command);
+        if (tool && FILE_EDITING_TOOLS.has(tool)) editing.add(call.id);
+        else if (tool === "builtin/read_file") reads.set(call.id, call.arguments.path);
+        else if (tool === "builtin/bash") bash.set(call.id, call.arguments.command);
       }
     } else if (message.role === "tool") {
       for (const path of savedOutputPaths(message.result)) add(next.outputs, path);
-      const results = record(message.result.content.find((block) => block.type === "json")?.value)?.results;
-      const rows = Array.isArray(results) ? results.map(record) : [];
-      // Only completed writes count: an operation or patch row that is ok, or a patch destination it already created.
-      if (writes.has(message.callId)) for (const row of rows) {
-        const tool = `${message.name}${typeof row?.mode === "string" ? ` ${row.mode}` : ""}`;
-        const destination = typeof row?.destination === "string" ? row.destination : undefined;
-        if (row?.status === "ok" && typeof row.path === "string") touch(destination ?? row.path, tool);
-        else if (row?.destination_created === true && destination) touch(destination, tool);
+      // Only completed writes count: the editing tools list them in host data, also when a later file failed.
+      if (editing.has(message.callId)) {
+        for (const file of message.result.host?.files ?? []) touch(file.destination ?? file.path, `${message.name} ${file.action}`);
+      }
+      if (reads.has(message.callId) && !message.result.isError) {
+        const path = message.result.host?.path ?? message.arguments?.path ?? reads.get(message.callId);
+        if (typeof path === "string") add(next.read, path);
       }
       // The normalized call names the command an alias carried; a background job has no exit yet.
       const command = bash.has(message.callId) ? message.arguments?.command ?? bash.get(message.callId) : undefined;

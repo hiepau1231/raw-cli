@@ -15,7 +15,7 @@ export function toolArguments(name: string, args: Record<string, unknown>, full 
 export function acpUpdate(event: RunEvent): SessionUpdate | undefined {
   if (event.type === "text_delta") return { sessionUpdate: "agent_message_chunk", content: { type: "text", text: event.text } };
   if (event.type === "tool_call") return { sessionUpdate: "tool_call", toolCallId: event.id, title: event.name,
-    name: event.name, kind: event.name === "read_file" ? "read" : event.name === "write_file" ? "edit" : "execute",
+    name: event.name, kind: event.name === "read_file" ? "read" : ["write_file", "edit_file", "apply_patch"].includes(event.name) ? "edit" : "execute",
     status: "pending", rawInput: event.arguments };
   // Start and result updates carry the arguments the tool actually received, which differ from the declared call
   // when Raw normalized an alias (docs/tool-ux-design.md §4.3).

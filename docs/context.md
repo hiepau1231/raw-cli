@@ -62,7 +62,7 @@ A new checkpoint message replaces the previous one; they are never stacked.
 
 **Working state** lists, when known:
 - the working directory and the number of compactions;
-- files written or patched in the session, each with the last tool that touched it;
+- files written, edited or patched in the session, each with the last tool that touched it and its action (for example `edit_file edit`);
 - files read earlier;
 - saved full outputs still on disk;
 - running background processes;

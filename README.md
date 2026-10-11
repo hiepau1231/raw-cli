@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@tlelabs/raw)](https://www.npmjs.com/package/@tlelabs/raw) [![CI](https://github.com/lploc94/raw-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/lploc94/raw-cli/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-`raw` is a local coding agent for models with limited context. Each agent selects ordered tools, skills and hooks, and can supply a system prompt. Raw ships eleven tools as editable plugins: `read_file`, `write_file`, `bash`, `view_image`, `list_skills`, `load_skill`, `list_vars`, `read_var`, `todo`, `ask_user`, and `process`. Todo, Ask, and Process are selected explicitly; they are not added to the starter tool selection. Tools, skills and hooks can also live in the user's config directory or beside a selected agent config. Selected MCP tools remain available. Standard Agent Client Protocol (ACP) lets an IDE or parent agent run sessions.
+`raw` is a local coding agent for models with limited context. Each agent selects ordered tools, skills and hooks, and can supply a system prompt. Raw ships thirteen tools as editable plugins: `read_file`, `write_file`, `edit_file`, `apply_patch`, `bash`, `view_image`, `list_skills`, `load_skill`, `list_vars`, `read_var`, `todo`, `ask_user`, and `process`. Apply patch, Todo, Ask, and Process are selected explicitly; they are not added to the starter tool selection. Tools, skills and hooks can also live in the user's config directory or beside a selected agent config. Selected MCP tools remain available. Standard Agent Client Protocol (ACP) lets an IDE or parent agent run sessions.
 
 ## Install and run
 
@@ -62,10 +62,10 @@ Tool calls run automatically in terminal, headless, dashboard and ACP modes, usi
     }
   },
   "agents": {
-    "raw": { "model": "local", "system_prompt": "You are a coding assistant. For Raw setup tasks, list selected skills and load only relevant instructions.", "tools": { "use": ["builtin/read_file", "builtin/write_file", "builtin/bash", "builtin/list_skills", "builtin/load_skill"] }, "skills": { "use": ["builtin/configure_raw", "builtin/create_skill", "builtin/create_tool", "builtin/create_hook", "builtin/create_agent", "builtin/add_mcp", "builtin/create_package"] } },
+    "raw": { "model": "local", "system_prompt": "You are a coding assistant. For Raw setup tasks, list selected skills and load only relevant instructions.", "tools": { "use": ["builtin/read_file", "builtin/write_file", "builtin/edit_file", "builtin/bash", "builtin/list_skills", "builtin/load_skill"] }, "skills": { "use": ["builtin/configure_raw", "builtin/create_skill", "builtin/create_tool", "builtin/create_hook", "builtin/create_agent", "builtin/add_mcp", "builtin/create_package"] } },
     "deepseek": {
       "model": "flash",
-      "tools": { "use": ["builtin/read_file", "builtin/write_file", "builtin/bash"] },
+      "tools": { "use": ["builtin/read_file", "builtin/write_file", "builtin/edit_file", "builtin/bash"] },
       "request": { "thinking": "enabled", "reasoning_effort": "high", "max_output_tokens": 4096 },
       "compact": { "trigger_tokens": 800000, "keep_recent_turns": 2, "max_output_tokens": 16384 }
     }
@@ -104,13 +104,13 @@ The installed [package examples](examples/packages/) include a complete mixed ag
 
 Raw ships seven English setup skills for configuring Raw, creating skills, creating tools, creating hooks, composing agents, adding MCP servers, and packaging components for sharing. `builtin/create_hook` covers events, filters, scripts, selection and verification; [agent hooks](docs/hooks.md) document the protocol. `builtin/create_package` guides export or manifest authoring, recipient inputs, validation, packing, installation checks and updates. The packaged [skill authoring cheatsheet](docs/skill-authoring.md) explains how to write descriptions, procedures, examples and verification criteria. Skill instructions guide the model; they do not enforce a fixed sequence or amount of work.
 
-`read_file({"files":[...]})` and `write_file({"operations":[...]})` each accept an ordered batch of up to 16 entries; `bash({"command":"npm test"})` runs one command per call. Reads can select full files or 1-based line ranges. A large full read returns complete leading lines with `next_line` for paging. Writes support overwrite, append, unique text replacement, and SHA-256 guarded line replacement. Bash returns its output and a status line such as `[exit 0 · 1.2s]`, and `run_in_background` starts a managed job through `builtin/process`. Results share the configured model-facing `maxOutputBytes` limit; terminal previews separately show at most 2,000 characters and 10 lines. See [tool contracts](docs/tools.md).
+Each tool call does one thing, in the shapes models are trained on: `read_file({"path":"src/app.ts","offset":120,"limit":80})` returns numbered lines and a footer naming the next offset, `write_file({"path":…,"content":…})` writes one whole file, `edit_file({"path":…,"old_string":…,"new_string":…})` replaces exact text, and `bash({"command":"npm test"})` runs one command. Names other harnesses use, such as `file_path`, are read as the canonical ones. Bash returns its output and a status line such as `[exit 0 · 1.2s]`, and `run_in_background` starts a managed job through `builtin/process`. Results share the configured model-facing `maxOutputBytes` limit; terminal previews separately show at most 2,000 characters and 10 lines. See [tool contracts](docs/tools.md).
 
 ## Shared tool UI and editing
 
 Tool views use one block renderer in chat and the sidebar. `builtin/ask_user` gathers durable structured answers; `builtin/process` runs bounded background jobs across turns. The dashboard Commands section combines foreground Bash and background jobs, with paged output and policy-controlled Stop actions that remain available during a model turn.
 
-`write_file` accepts either its existing `operations` array or a strict multi-file `patch`. Patch preflight stages all files before mutation; later I/O failures report partial completion and stop subsequent changes. Files changed records successful tool writes, including completed rows in an interrupted call. It does not track Git state or shell edits. See [tools](docs/tools.md), [processes](docs/processes.md), and the [verification evidence](docs/evidence/tool-ui-and-builtins.md).
+The opt-in `apply_patch` applies a strict multi-file patch. Patch preflight stages all files before mutation; later I/O failures report partial completion and stop subsequent changes. One shared Files changed panel records successful writes, edits and patches with their line counts and latest diff, including completed files in an interrupted call. It does not track Git state or shell edits. See [tools](docs/tools.md), [processes](docs/processes.md), and the [verification evidence](docs/evidence/tool-ui-and-builtins.md).
 
 Mermaid fences and tool diagram blocks share a lazy renderer in chat and the sidebar, with source/copy controls and readable failure fallback. See [diagrams](docs/diagrams.md) and the [local diagram example](examples/tools/diagram/).
 

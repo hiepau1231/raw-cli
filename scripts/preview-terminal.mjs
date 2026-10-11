@@ -33,10 +33,10 @@ const width = options.width;
 const divider = `${"─".repeat(Math.min(width, 60))}\n`;
 const write = (value) => process.stdout.write(value);
 const sessionId = "11111111-2222-4333-8444-555555555555";
-const call = { ...projectToolCall("read_file", "builtin/read_file", { files: [{ path: "src/example.ts" }] }, true), id: "read-1" };
+const call = { ...projectToolCall("read_file", "builtin/read_file", { path: "src/example.ts" }, true), id: "read-1" };
 const result = { ...projectToolResult("read_file", "builtin/read_file", { isError: false, content: [{
-  type: "json", value: { results: [{ index: 0, status: "ok", path: "src/example.ts", text: "export const answer = 42;\nconsole.log(answer);\n" }] },
-}] }, 38), id: "read-1" };
+  type: "text", text: "   1│export const answer = 42;\n   2│console.log(answer);\n[lines 1–2 of 2; end of file]",
+}], host: { summary: "src/example.ts", status: "ok", path: "src/example.ts", range: { start: 1, end: 2, total: 2 } } }, 38), id: "read-1" };
 const denied = { ...projectToolCall("bash", "builtin/bash", { command: "rm -rf scratch" }, false), id: "bash-2" };
 const stats = { requests: 2, inputTokensKnown: 2400, inputCoverage: 2, outputTokensKnown: 180,
   outputCoverage: 2, cacheReadTokensKnown: 600, cacheReadCoverage: 2, cacheWriteTokensKnown: 0,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -527,13 +527,13 @@ test("9: working-state facts survive later compactions and a restart, even while
   registry.register({ name: "fetch", description: "fetch", inputSchema: { type: "object" },
     handler: async () => ({ isError: false, content: [{ type: "text", text: "head … tail" }], fullOutputPath: saved }) });
   const first = persisted(store, id, root, scripted({ contextWindow: 60000, maxOutputTokens: 1000 }, [
-    calls(["w", "write_file", { operations: [{ path: file, mode: "overwrite", content: "hello" }] }], ["f", "fetch", {}]), stop(`a ${noise(6000)}`),
+    calls(["w", "write_file", { path: file, content: "hello" }], ["f", "fetch", {}]), stop(`a ${noise(6000)}`),
     stop(`b ${noise(6000)}`),
   ]).provider, { registry, interactionAdapter });
   await first.run("write it");
   await first.run("next");
   assert.equal((await first.compact({ keepRecentTurns: 0, keepRecentTokens: 1 })).status, "compacted");
-  assert.match(section(firstText(first.transcript), "Working state"), new RegExp(`${file} \\(write_file overwrite\\)`));
+  assert.match(section(firstText(first.transcript), "Working state"), new RegExp(`${file} \\(write_file create\\)`));
   await first.close();
   // A context so tight that the block is omitted: the facts stay stored.
   const tight = persisted(store, id, root, scripted({ contextWindow: 16000, maxOutputTokens: 1000 }, [stop(`c ${noise(6000)}`), stop(`d ${noise(6000)}`)]).provider,
@@ -547,7 +547,7 @@ test("9: working-state facts survive later compactions and a restart, even while
   const owner = store.claimSession(id);
   const state = store.readAgentState(id, owner);
   store.releaseSession(id, owner);
-  assert.deepEqual(state.ledger?.facts.written, [{ path: file, tool: "write_file overwrite" }]);
+  assert.deepEqual(state.ledger?.facts.written, [{ path: file, tool: "write_file create" }]);
   assert.deepEqual(state.ledger?.facts.outputs, [saved]);
   assert.equal(state.ledger?.compactions, 2);
   // With room again, after the first steps are long gone, the block lists them.
@@ -559,7 +559,7 @@ test("9: working-state facts survive later compactions and a restart, even while
     assert.equal((await roomy.compact({ keepRecentTurns: 0, keepRecentTokens: 1 })).status, "compacted");
     const working = section(firstText(roomy.transcript), "Working state");
     assert.ok(firstText(roomy.transcript).startsWith("[Raw compaction checkpoint #3]"));
-    assert.ok(working.includes(`${file} (write_file overwrite)`) && working.includes(saved) && Buffer.byteLength(working) <= WORKING_STATE_BYTES);
+    assert.ok(working.includes(`${file} (write_file create)`) && working.includes(saved) && Buffer.byteLength(working) <= WORKING_STATE_BYTES);
     assert.doesNotMatch(JSON.stringify(roomy.transcript.slice(1)), new RegExp(file), "the step that wrote the file is gone");
   } finally { await roomy.close(); store.close(); }
 });
@@ -726,18 +726,29 @@ test("R5: a reasoning retry armed by a compaction survives the runtime being rec
   } finally { await second.close(); store.close(); await fixture.close(); }
 });
 
-test("R6: working state lists only completed writes, from operations and patches", () => {
-  const call = (id: string, args: Record<string, unknown>): ModelMessage => ({ role: "assistant", text: "", toolCalls: [{ id, name: "write_file", arguments: args }] });
-  const result = (id: string, rows: unknown[], isError: boolean): ModelMessage => ({ role: "tool", callId: id, name: "write_file",
-    result: { isError, content: [{ type: "json", value: { results: rows } }] } });
+test("R6: working state lists only completed writes, from the editing tools' host data", () => {
+  const call = (id: string, name: string, args: Record<string, unknown>): ModelMessage => ({ role: "assistant", text: "", toolCalls: [{ id, name, arguments: args }] });
+  const result = (id: string, name: string, isError: boolean, host?: Record<string, unknown>): ModelMessage => ({ role: "tool", callId: id, name,
+    result: { isError, content: [{ type: "text", text: "done" }], ...(host ? { host } : {}) } });
   const facts = collectFacts([
-    call("w1", { operations: [{ path: "ok.txt", mode: "replace" }, { path: "denied.txt", mode: "replace" }] }),
-    result("w1", [{ index: 0, path: "ok.txt", mode: "replace", status: "ok" }, { index: 1, path: "denied.txt", mode: "replace", status: "error", error: "denied" }], true),
-    call("w2", { patch: "*** Begin Patch" }),
-    result("w2", [{ index: 0, path: "old.ts", destination: "new.ts", mode: "patch", status: "ok" },
-      { index: 1, path: "skipped.ts", mode: "patch", status: "skipped" }], true),
-  ]);
-  assert.deepEqual(facts.written, [{ path: "ok.txt", tool: "write_file replace" }, { path: "new.ts", tool: "write_file patch" }]);
+    call("w1", "write_file", { path: "ok.txt", content: "x" }),
+    result("w1", "write_file", false, { files: [{ path: "ok.txt", action: "create", added: 1, removed: 0 }] }),
+    call("e1", "edit_file", { path: "denied.txt", old_string: "a", new_string: "b" }),
+    result("e1", "edit_file", true),
+    call("e2", "edit_file", { path: "src/a.ts", old_string: "a", new_string: "b" }),
+    result("e2", "edit_file", false, { files: [{ path: "src/a.ts", action: "edit", added: 1, removed: 1 }] }),
+    // A patch that failed part way lists only the files it completed.
+    call("p1", "apply_patch", { patch: "*** Begin Patch" }),
+    result("p1", "apply_patch", true, { files: [{ path: "old.ts", destination: "new.ts", action: "rename", added: 1, removed: 1 }] }),
+    // A local tool behind the same model-facing name is not a file-editing tool.
+    call("l1", "local_write", { path: "local.txt" }),
+    result("l1", "local_write", false, { files: [{ path: "local.txt", action: "create", added: 1, removed: 0 }] }),
+    call("r1", "read_file", { file_path: "alias.ts" }),
+    result("r1", "read_file", false, { path: "alias.ts", range: { start: 1, end: 1, total: 1 } }),
+  ], undefined, (name) => name === "local_write" ? "local/write_file" : `builtin/${name}`);
+  assert.deepEqual(facts.written, [{ path: "ok.txt", tool: "write_file create" }, { path: "src/a.ts", tool: "edit_file edit" },
+    { path: "new.ts", tool: "apply_patch rename" }]);
+  assert.deepEqual(facts.read, ["alias.ts"]);
 });
 
 test("R6b: the last bash command and its saved output come from the normalized call and host data", () => {
@@ -782,16 +793,21 @@ test("R8: a summary retry never doubles past the room the new context has", asyn
 test("R9: writes in a last step whose result is cut stay in the working state after later compactions", async () => {
   const { root, store, id } = sessionStore();
   const registry = createTestToolRegistry();
-  const files = Array.from({ length: 16 }, (_, index) => `written-${index}-${noise(24)}.txt`);
+  for (const tool of await loadBundledTools(["apply_patch"])) registry.register(tool);
+  const files = Array.from({ length: 16 }, (_, index) => `written-${index}-${noise(200)}.txt`);
+  const patch = `*** Begin Patch\n${files.map((path) => `*** Add File: ${path}\n+x\n`).join("")}*** End Patch`;
   const { provider } = scripted({}, [stop(`ok ${noise(3000)}`),
-    calls(["write-1", "write_file", { operations: files.map((path) => ({ path, mode: "overwrite", content: "x" })) }]), calls(["unused", "write_file", {}]),
+    calls(["write-1", "apply_patch", { patch }]), calls(["unused", "apply_patch", {}]),
     stop(`b ${noise(3000)}`)]);
-  const agent = persisted(store, id, root, provider, { registry, maxSteps: 2 });
+  // Patches refuse symlinked paths, and the macOS temp directory is reached through one.
+  const agent = persisted(store, id, realpathSync(root), provider, { registry, maxSteps: 2 });
   try {
     await agent.run(distinct("older"));
     assert.equal((await agent.run(distinct("request"))).status, "max_steps");
     assert.equal((await agent.compact({ keepRecentTurns: 0, keepRecentTokens: 1 })).status, "compacted");
-    const tail = JSON.stringify(agent.transcript.at(-1));
+    // The model-facing text is cut; host data (never sent to providers) still lists every completed file.
+    const last = agent.transcript.at(-1)!;
+    const tail = JSON.stringify(last.role === "tool" ? last.result.content : last);
     assert.ok(tail.includes("bytes omitted") && !tail.includes(files[8]!), "the write result is cut in the tail");
     await agent.run(distinct("next"));
     assert.equal((await agent.compact({ keepRecentTurns: 0, keepRecentTokens: 1 })).status, "compacted");

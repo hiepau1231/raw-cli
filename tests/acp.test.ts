@@ -422,7 +422,7 @@ test("T-07d: independent session cwd/results and cross-peer ownership hold durin
       observed.push(JSON.stringify(last.result));
       return { text: "done", toolCalls: [], finishReason: "stop" };
     }
-    return { text: "", toolCalls: [{ id: "read", name: "read_file", arguments: { files: [{ path: "sentinel.txt" }] } }], finishReason: "tool_calls" };
+    return { text: "", toolCalls: [{ id: "read", name: "read_file", arguments: { path: "sentinel.txt" } }], finishReason: "tool_calls" };
   } }) });
   const server = makeServer();
   const peer = client({ name: "one-peer" });
@@ -450,7 +450,7 @@ test("T-07d: cancel services pending permission while prompt is blocked and prev
   let requests = 0;
   const server = createAcpServer({ runtime, mcpServers: {}, providerFactory: () => ({ modelConfig: runtime.modelConfig!, generate: async () => {
     requests++;
-    return { text: "", toolCalls: [{ id: "write", name: "write_file", arguments: { operations: [{ mode: "overwrite", path: "created.txt", content: "should-not-exist" }] } }], finishReason: "tool_calls" };
+    return { text: "", toolCalls: [{ id: "write", name: "write_file", arguments: { path: "created.txt", content: "should-not-exist" } }], finishReason: "tool_calls" };
   } }) });
   let entered!: () => void;
   const ready = new Promise<void>((resolve) => { entered = resolve; });

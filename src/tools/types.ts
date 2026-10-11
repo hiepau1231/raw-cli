@@ -61,6 +61,9 @@ export interface HostData {
   fullOutputCapped?: boolean;
   /** A process output page's position; its bytes are the result's channel blocks. */
   page?: { cursor: number; next: number; total: number; earliestCursor: number; droppedBytes: number; truncated: boolean };
+  /** read_file: the file and the window shown (`total` lines in the file). */
+  path?: string;
+  range?: { start: number; end: number; total: number };
   files?: HostFileChange[];
   diff?: string;
   diffOmitted?: boolean;

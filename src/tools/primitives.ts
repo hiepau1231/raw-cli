@@ -1,16 +1,14 @@
 import { constants as fsConstants } from "node:fs";
 import { parseFilePatch, applyFilePatch } from "./file-patch.js";
-import { MAX_DIFF_SOURCE_BYTES, publishWriteChanges } from "./write-changes.js";
+import { changeHostData, displayPath, MAX_DIFF_SOURCE_BYTES, publishWriteChanges, type CompletedWriteChange } from "./write-changes.js";
 import type { CommandActivity } from "../processes/presentation.js";
 import type { ProcessContext } from "../processes/contract.js";
 import type { InteractionContext } from "../interactions/contract.js";
 import type { VariableContext } from "../vars/contract.js";
-import { open, mkdir, writeFile, readFile, appendFile, stat } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { open, mkdir, writeFile, readFile, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { runBash } from "./process.js";
-import { elideMiddle, errorResult, indexedResult, indexedResultFits, utf8Prefix, type IndexedResult } from "./results.js";
-import { savedLabel, spillText } from "./spill.js";
+import { errorResult, utf8Prefix } from "./results.js";
 import type { ToolResult } from "./types.js";
 import type { PanelContext } from "../panels/contract.js";
 import type { ToolContentPanel } from "./types.js";
@@ -58,176 +56,111 @@ export interface ToolContext {
   onPanelUpdates?: (updates: ToolContentPanel[]) => void;
 }
 
-export interface ReadFileSpec {
-  path: string;
-  start_line?: number;
-  end_line?: number;
-  max_lines?: number;
-  max_bytes?: number;
-}
+export interface ReadFileArgs { path: string; offset?: number; limit?: number }
+export const READ_DEFAULT_LIMIT = 2000;
+/** Room kept beside the lines for the range footer. */
+const READ_FOOTER_RESERVE = 200;
 
-function selectedHash(bytes: Buffer): string { return createHash("sha256").update(bytes).digest("hex"); }
+const errorCode = (error: unknown, fallback: string) => {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return typeof code === "string" && /^[A-Za-z0-9_]+$/.test(code) ? code : fallback;
+};
 
-export async function readFileTool(args: { files: ReadFileSpec[] }, context: ToolContext): Promise<ToolResult> {
-  const rows: IndexedResult[] = args.files.map((file, index) => ({ index, path: file.path, status: "budget_exhausted" }));
-  if (!indexedResultFits(rows, context.maxOutputBytes)) return errorResult("output_budget_too_small", "read batch status exceeds output budget");
-  const reserve = (index: number): IndexedResult => ({ index, path: args.files[index]!.path, status: "error", error: "x".repeat(160) });
-  if (!indexedResultFits(rows.map((row, index) => index ? reserve(index) : row), context.maxOutputBytes)) {
-    return errorResult("output_budget_too_small", "read batch outcomes exceed output budget");
+/**
+ * One file window with a line-number gutter (docs/tool-ux-design.md §4.2), then a range footer such as
+ * `[lines 120–199 of 431; next: offset 200]`. Lines stop at the output budget; a first line longer than it is cut.
+ */
+export async function readFileTool(args: ReadFileArgs, context: ToolContext): Promise<ToolResult> {
+  const path = resolve(context.cwd, args.path);
+  const shown = displayPath(path, context.cwd);
+  const offset = args.offset ?? 1;
+  const last = args.limit === undefined ? offset + READ_DEFAULT_LIMIT - 1 : offset + args.limit - 1;
+  const budget = context.maxOutputBytes - READ_FOOTER_RESERVE;
+  if (budget < 32) return errorResult("output_budget_too_small", "read_file needs room for at least one line and its footer");
+  const failed = (code: string, message: string): ToolResult => ({ ...errorResult(code, message), host: { summary: shown, status: "error", path: shown } });
+  let handle;
+  try { handle = await open(path, "r"); }
+  catch (error) {
+    const code = errorCode(error, "file_error");
+    return failed(code, code === "ENOENT" ? `${shown} does not exist` : `cannot read ${shown}: ${code}`);
   }
-  const put = (index: number, candidate: IndexedResult): boolean => {
-    const copy = [...rows];
-    copy[index] = candidate;
-    if (!indexedResultFits(copy.map((row, at) => at > index ? reserve(at) : row), context.maxOutputBytes)) return false;
-    rows[index] = candidate;
-    return true;
-  };
-  const itemFits = (file: ReadFileSpec, candidate: IndexedResult): boolean =>
-    file.max_bytes === undefined || Buffer.byteLength(JSON.stringify(candidate), "utf8") <= file.max_bytes;
-  for (const [index, file] of args.files.entries()) {
-    if (context.signal?.aborted) { put(index, { index, path: file.path, status: "skipped", error: "aborted" }); continue; }
-    const path = resolve(context.cwd, file.path);
-    try {
-      const handle = await open(path, "r");
-      try {
-        const stat = await handle.stat();
-        if (!stat.isFile()) { put(index, { index, path: file.path, status: "error", error: "not a regular file" }); continue; }
-        const ranged = file.start_line !== undefined || file.end_line !== undefined || file.max_lines !== undefined;
-        if (!ranged && stat.size <= Math.min(file.max_bytes ?? Infinity, context.maxOutputBytes)) {
-          const buffer = Buffer.alloc(stat.size + 1);
-          const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-          if (bytesRead === stat.size) {
-            const selected = buffer.subarray(0, bytesRead);
-            const count = bytesRead === 0 ? 0 : selected.reduce((sum, byte) => sum + (byte === 10 ? 1 : 0), 0)
-              + (selected[bytesRead - 1] === 10 ? 0 : 1);
-            const candidate: IndexedResult = { index, path: file.path, status: "ok", text: selected.toString("utf8"),
-              start_line: count ? 1 : 0, end_line: count, eof: true, sha256: selectedHash(selected) };
-            if (itemFits(file, candidate) && put(index, candidate)) continue;
-          }
-        }
-        const start = file.start_line ?? 1;
-        const requestedEnd = file.end_line ?? (file.max_lines !== undefined ? start + file.max_lines - 1 : Infinity);
-        const itemByteLimit = Math.min(file.max_bytes ?? Infinity, context.maxOutputBytes);
-        const accepted: Buffer[] = [];
-        let acceptedBytes = 0;
-        let deferred: Buffer[] = [];
-        let deferredBytes = 0;
-        let actualEnd = start - 1;
-        let currentLine = 1;
-        let position = 0;
-        let pending: Buffer[] = [];
-        let pendingBytes = 0;
-        let stopped = false;
-        let budgetStop = false;
-        let reachedEof = false;
-        const acceptLine = (line: number): boolean => {
-          const raw = Buffer.concat(pending, pendingBytes);
-          pending = [];
-          pendingBytes = 0;
-          const nextBytes = Buffer.concat([...accepted, ...deferred, raw], acceptedBytes + deferredBytes + raw.length);
-          const complete = line >= requestedEnd || position === stat.size;
-          const candidate: IndexedResult = { index, path: file.path, status: complete ? "ok" : "partial", text: nextBytes.toString("utf8"),
-            start_line: start, end_line: line, eof: position === stat.size,
-            ...(!complete ? { next_line: line + 1 } : {}), sha256: selectedHash(nextBytes) };
-          if (nextBytes.length > itemByteLimit) {
-            budgetStop = true;
-            stopped = true;
-            return false;
-          }
-          const fits = itemFits(file, candidate) && indexedResultFits(rows.map((row, at) =>
-            at === index ? candidate : at > index ? reserve(at) : row), context.maxOutputBytes);
-          if (fits) {
-            accepted.push(...deferred, raw);
-            acceptedBytes += deferredBytes + raw.length;
-            deferred = [];
-            deferredBytes = 0;
-            actualEnd = line;
-          } else if (complete) {
-            budgetStop = true;
-            stopped = true;
-            return false;
-          } else {
-            deferred.push(raw);
-            deferredBytes += raw.length;
-          }
-          return true;
-        };
-        const stream = handle.createReadStream({ autoClose: false, highWaterMark: 64 * 1024 });
-        scan: for await (const rawChunk of stream) {
-          const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-          let cursor = 0;
-          while (cursor < chunk.length) {
-            const newline = chunk.indexOf(10, cursor);
-            const end = newline < 0 ? chunk.length : newline + 1;
-            const segment = chunk.subarray(cursor, end);
-            position += segment.length;
-            if (currentLine >= start) {
-              pending.push(segment);
-              pendingBytes += segment.length;
-              if (acceptedBytes + deferredBytes + pendingBytes > itemByteLimit || acceptedBytes + deferredBytes + pendingBytes > context.maxOutputBytes) {
-                budgetStop = true;
-                stopped = true;
-                break scan;
-              }
-            }
-            cursor = end;
-            if (newline < 0) continue;
-            if (currentLine >= start && !acceptLine(currentLine)) break scan;
-            if (currentLine >= requestedEnd) {
-              reachedEof = position === stat.size;
-              stopped = true;
-              break scan;
-            }
-            currentLine++;
-          }
-        }
-        if (!stopped) {
-          if (pendingBytes > 0 && currentLine >= start) acceptLine(currentLine);
-          reachedEof = !budgetStop;
-        }
-        const selected = Buffer.concat(accepted, acceptedBytes);
-        const candidate: IndexedResult = budgetStop || deferredBytes
-          ? { index, path: file.path, status: acceptedBytes ? "partial" : "line_too_large", text: selected.toString("utf8"),
-            start_line: start, end_line: actualEnd, eof: false, next_line: actualEnd + 1,
-            ...(acceptedBytes ? { sha256: selectedHash(selected) } : {}) }
-          : { index, path: file.path, status: "ok", text: selected.toString("utf8"), start_line: start,
-            end_line: actualEnd, eof: reachedEof, sha256: selectedHash(selected) };
-        if (!itemFits(file, candidate) && candidate.status === "ok") {
-          put(index, { index, path: file.path, status: "budget_exhausted" });
-        } else {
-          put(index, candidate);
-        }
-      } finally { await handle.close(); }
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      put(index, { index, path: file.path, status: "error", error: typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "file_error" });
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) return failed("not_a_file", `${shown} is not a regular file`);
+    const probe = Buffer.alloc(Math.min(info.size, 8192));
+    await handle.read(probe, 0, probe.length, 0);
+    if (probe.includes(0)) {
+      return { isError: false, content: [{ type: "text", text: `[binary file: ${info.size} bytes; not shown]` }], host: { summary: shown, status: "ok", path: shown } };
     }
-  }
-  return indexedResult(rows, context.maxOutputBytes, rows.some((row) => !["ok", "partial"].includes(row.status)));
+    // A file cannot have more lines than bytes plus one, so a to-the-end limit does not widen the gutter.
+    const width = Math.max(4, String(Math.min(last, offset + info.size)).length);
+    const lines: string[] = [];
+    let used = 0;
+    let total = 0;
+    let stopped = false;
+    let cut: { line: number; bytes: number } | undefined;
+    let pending: Buffer[] = [];
+    let kept = 0;
+    let lineBytes = 0;
+    // A line longer than the budget cannot fit, so only the prefix a cut line can show is buffered.
+    const keep = budget + 4;
+    const take = (line: number, raw: Buffer, bytes: number) => {
+      if (stopped || line < offset || line > last) return;
+      const text = raw.toString("utf8").replace(/\r$/, "");
+      const rendered = `${String(line).padStart(width)}│${text}\n`;
+      const size = Buffer.byteLength(rendered);
+      if (used + size <= budget) { lines.push(rendered); used += size; return; }
+      stopped = true;
+      if (lines.length) return;
+      // A first line longer than the budget is shown cut, so the call still makes progress.
+      const marker = " …[line cut]\n";
+      const prefix = utf8Prefix(rendered, budget - Buffer.byteLength(marker)).text;
+      lines.push(prefix + marker);
+      cut = { line, bytes };
+    };
+    for await (const rawChunk of handle.createReadStream({ autoClose: false, highWaterMark: 64 * 1024 })) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      let cursor = 0;
+      while (cursor < chunk.length) {
+        const newline = chunk.indexOf(10, cursor);
+        const end = newline < 0 ? chunk.length : newline + 1;
+        const line = total + 1;
+        if (line >= offset && line <= last && !stopped) {
+          const part = chunk.subarray(cursor, newline < 0 ? end : newline);
+          lineBytes += part.length;
+          if (kept < keep) { pending.push(part.subarray(0, keep - kept)); kept += Math.min(part.length, keep - kept); }
+        }
+        cursor = end;
+        if (newline < 0) continue;
+        total++;
+        take(line, Buffer.concat(pending), lineBytes);
+        pending = []; kept = 0; lineBytes = 0;
+      }
+    }
+    if (pending.length || (info.size && probe.length && !(await lastByteIsNewline(handle, info.size)))) {
+      total++;
+      take(total, Buffer.concat(pending), lineBytes);
+    }
+    const end = offset + lines.length - 1;
+    const footer = total === 0 ? "[empty file]"
+      : offset > total ? `[offset ${offset} is past the end: ${shown} has ${total} lines]`
+        : cut ? `[line ${cut.line} of ${total} cut at the output budget (${cut.bytes} bytes); next: offset ${cut.line + 1}]`
+          : end >= total ? `[lines ${offset}–${end} of ${total}; end of file]`
+            : `[lines ${offset}–${end} of ${total}; next: offset ${end + 1}]`;
+    return { isError: false, content: [{ type: "text", text: lines.join("") + footer }],
+      host: { summary: shown, status: "ok", path: shown, ...(total && offset <= total ? { range: { start: offset, end, total } } : {}) } };
+  } catch (error) {
+    return failed(errorCode(error, "file_error"), `cannot read ${shown}: ${errorCode(error, "file_error")}`);
+  } finally { await handle.close(); }
 }
 
-export type WriteOperation =
-  | { path: string; mode: "overwrite"; content: string }
-  | { path: string; mode: "append"; content: string }
-  | { path: string; mode: "replace_text"; old_text: string; new_text: string }
-  | { path: string; mode: "replace_lines"; start_line: number; end_line: number; content: string; expected_sha256: string };
-
-function selectedLineSpan(bytes: Buffer, startLine: number, endLine: number): { start: number; end: number } | undefined {
-  let start = 0;
-  let line = 1;
-  let selectedStart = 0;
-  while (start < bytes.length) {
-    const newline = bytes.indexOf(10, start);
-    const end = newline < 0 ? bytes.length : newline + 1;
-    if (line === startLine) selectedStart = start;
-    if (line === endLine) return { start: selectedStart, end };
-    start = end;
-    line++;
-  }
-  return undefined;
+async function lastByteIsNewline(handle: Awaited<ReturnType<typeof open>>, size: number): Promise<boolean> {
+  const byte = Buffer.alloc(1);
+  await handle.read(byte, 0, 1, size - 1);
+  return byte[0] === 10;
 }
 
-async function writeSnapshot(path: string): Promise<{ bytes?: Buffer; missing: boolean }> {
+async function writeSnapshot(path: string): Promise<{ bytes?: Buffer; missing: boolean; partial?: boolean }> {
   let file;
   try {
     if (!(await stat(path)).isFile()) return { missing: false };
@@ -242,74 +175,168 @@ async function writeSnapshot(path: string): Promise<{ bytes?: Buffer; missing: b
       if (!bytesRead) break;
       filled += bytesRead;
     }
-    return { bytes: bytes.subarray(0, filled), missing: false };
+    return { bytes: bytes.subarray(0, filled), missing: false, partial: filled < info.size };
   } catch (error) { return { missing: (error as NodeJS.ErrnoException).code === "ENOENT" }; }
   finally { await file?.close().catch(() => {}); }
 }
 
-export async function writeFileTool(args: { operations: WriteOperation[]; patch?: never } | { patch: string; operations?: never }, context: ToolContext): Promise<ToolResult> {
-  if (typeof args.patch === "string") {
-    try {
-      return await applyFilePatch(parseFilePatch(args.patch, context.cwd), { maxOutputBytes: context.maxOutputBytes,
-        ...(context.signal ? { signal: context.signal } : {}), onCompleted: change => publishWriteChanges(context, [change]) });
-    } catch (error) { return errorResult("invalid_patch", error instanceof Error ? error.message : "invalid patch"); }
+const changeResult = (text: string, shown: string, changes: readonly CompletedWriteChange[], cwd: string, withDiff: boolean): ToolResult =>
+  ({ isError: false, content: [{ type: "text", text }], host: { summary: shown, status: "ok", ...changeHostData(changes, cwd, withDiff) } });
+
+/** Creates or overwrites one file, creating parent directories (docs/tool-ux-design.md §4.2). */
+export async function writeFileTool(args: { path: string; content: string }, context: ToolContext): Promise<ToolResult> {
+  const path = resolve(context.cwd, args.path);
+  const shown = displayPath(path, context.cwd);
+  try {
+    const before = await writeSnapshot(path);
+    await mkdir(dirname(path), { recursive: true });
+    const after = Buffer.from(args.content, "utf8");
+    await writeFile(path, after);
+    const change: CompletedWriteChange = { path, kind: before.missing ? "added" : "modified", overwritten: !before.missing,
+      ...(before.bytes ? { before: before.bytes } : !before.missing ? { beforeUnavailable: true } : {}),
+      ...(before.partial ? { beforePartial: true } : {}), after };
+    await publishWriteChanges(context, [change]);
+    return changeResult(`Wrote ${after.length.toLocaleString("en-US")} bytes to ${shown} (${before.missing ? "created" : "overwritten"})`,
+      shown, [change], context.cwd, false);
+  } catch (error) {
+    const code = errorCode(error, "write_error");
+    return { ...errorResult(code, `cannot write ${shown}: ${code}`), host: { summary: shown, status: "error" } };
   }
-  const rows: IndexedResult[] = args.operations.map((op, index) => ({ index, path: op.path, mode: op.mode, status: "error", error: "x".repeat(120) }));
-  if (!indexedResultFits(rows, context.maxOutputBytes)) {
-    return errorResult("output_budget_too_small", "write batch outcomes exceed output budget");
+}
+
+export interface EditFileArgs { path: string; old_string: string; new_string: string; replace_all?: boolean }
+
+/** Start offsets of the non-overlapping occurrences of `needle`. */
+function occurrences(source: Buffer, needle: Buffer): number[] {
+  const found: number[] = [];
+  for (let at = source.indexOf(needle); at >= 0; at = source.indexOf(needle, at + needle.length)) found.push(at);
+  return found;
+}
+
+/** Start offsets of every occurrence of `needle`, overlapping ones included. */
+function matchStarts(source: Buffer, needle: Buffer): number[] {
+  const found: number[] = [];
+  for (let at = source.indexOf(needle); at >= 0; at = source.indexOf(needle, at + 1)) found.push(at);
+  return found;
+}
+
+/** The first lines where an ambiguous old_string starts, so the model can add context that tells them apart. */
+function matchLines(source: Buffer, starts: readonly number[]): string {
+  const shown: string[] = [];
+  let line = 1;
+  let from = 0;
+  let previous = 0;
+  for (const at of starts) {
+    for (let newline = source.indexOf(10, from); newline >= 0 && newline < at; newline = source.indexOf(10, newline + 1)) line++;
+    from = at;
+    if (line === previous) continue;
+    previous = line;
+    const begin = at === 0 ? 0 : source.lastIndexOf(10, at - 1) + 1;
+    const end = source.indexOf(10, at);
+    const text = source.subarray(begin, end < 0 ? source.length : end).toString("utf8").replace(/\r$/, "");
+    shown.push(`${line}│${[...text].slice(0, 200).join("")}`);
+    if (shown.length === 3) break;
   }
-  for (const [index, op] of args.operations.entries()) {
-    if (context.signal?.aborted) {
-      rows[index] = { index, path: op.path, mode: op.mode, status: "skipped", error: "aborted" };
-      continue;
-    }
-    const path = resolve(context.cwd, op.path);
-    try {
-      const before = context.panels ? await writeSnapshot(path) : { missing: false };
-      let bytesWritten = 0;
-      if (op.mode === "overwrite" || op.mode === "append") {
-        await mkdir(dirname(path), { recursive: true });
-        if (op.mode === "overwrite") await writeFile(path, op.content, "utf8");
-        else await appendFile(path, op.content, "utf8");
-        bytesWritten = Buffer.byteLength(op.content);
-      } else if (op.mode === "replace_text") {
-        const source = await readFile(path);
-        const oldBytes = Buffer.from(op.old_text, "utf8");
-        const first = source.indexOf(oldBytes);
-        if (first < 0) throw new Error("text_not_found");
-        if (source.indexOf(oldBytes, first + 1) >= 0) throw new Error("text_not_unique");
-        const replacement = Buffer.from(op.new_text, "utf8");
-        await writeFile(path, Buffer.concat([source.subarray(0, first), replacement, source.subarray(first + oldBytes.length)]));
-        bytesWritten = replacement.length;
-      } else {
-        const source = await readFile(path);
-        const span = selectedLineSpan(source, op.start_line, op.end_line);
-        if (!span) throw new Error("line_out_of_range");
-        const { start, end } = span;
-        if (selectedHash(source.subarray(start, end)) !== op.expected_sha256) throw new Error("guard_mismatch");
-        let replacement = Buffer.from(op.content, "utf8");
-        if (start === 0 && source.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))
-          && !replacement.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) {
-          replacement = Buffer.concat([source.subarray(0, 3), replacement]);
-        }
-        if (op.content.length && end < source.length && replacement[replacement.length - 1] !== 10) {
-          const boundary = source[end - 1] === 10 ? (source[end - 2] === 13 ? Buffer.from("\r\n") : Buffer.from("\n")) : Buffer.from("\n");
-          replacement = Buffer.concat([replacement, boundary]);
-        }
-        await writeFile(path, Buffer.concat([source.subarray(0, start), replacement, source.subarray(end)]));
-        bytesWritten = replacement.length;
-      }
-      rows[index] = { index, path: op.path, mode: op.mode, status: "ok", bytes_written: bytesWritten };
-      const after = context.panels ? await writeSnapshot(path) : { missing: false };
-      await publishWriteChanges(context, [{ path, kind: before.missing ? "added" : "modified",
-        ...(before.bytes ? { before: before.bytes } : !before.missing ? { beforeUnavailable: true } : {}),
-        ...(after.bytes ? { after: after.bytes } : { afterUnavailable: true }) }]);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code ?? (error as Error).message;
-      rows[index] = { index, path: op.path, mode: op.mode, status: "error", error: /^[A-Za-z0-9_]+$/.test(code) ? code : "write_error" };
-    }
+  return `\nMatching lines:\n${shown.join("\n")}`;
+}
+
+/** Replaces bytes, not decoded text, so file bytes that are not valid UTF-8 survive an edit elsewhere in the file. */
+function replaceAt(source: Buffer, at: readonly number[], length: number, replacement: Buffer): Buffer {
+  const parts: Buffer[] = [];
+  let from = 0;
+  for (const start of at) { parts.push(source.subarray(from, start), replacement); from = start + length; }
+  parts.push(source.subarray(from));
+  return Buffer.concat(parts);
+}
+
+function bigrams(text: string): Map<string, number> {
+  const grams = new Map<string, number>();
+  for (let index = 0; index < text.length - 1; index++) { const gram = text.slice(index, index + 2); grams.set(gram, (grams.get(gram) ?? 0) + 1); }
+  return grams;
+}
+
+/** Up to three file lines most like the first line of `needle`, so a failed edit can be retried. */
+function nearestLines(text: string, needle: string): string {
+  const target = needle.split("\n").map((line) => line.trim()).find(Boolean);
+  const lines = text.split("\n");
+  if (!target || target.length < 3 || lines.length > 50_000) return "";
+  const wanted = bigrams(target);
+  const size = target.length - 1;
+  const scored = lines.map((line, index) => {
+    const grams = bigrams(line.trim());
+    let common = 0;
+    for (const [gram, count] of grams) common += Math.min(count, wanted.get(gram) ?? 0);
+    return { index, line, score: (2 * common) / (size + Math.max(0, line.trim().length - 1) || 1) };
+  }).filter((item) => item.score >= 0.5).sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 3)
+    .sort((a, b) => a.index - b.index);
+  return scored.length ? `\nNearest lines:\n${scored.map((item) => `${item.index + 1}│${[...item.line.replace(/\r$/, "")].slice(0, 200).join("")}`).join("\n")}` : "";
+}
+
+/** Replaces one exact occurrence of `old_string`, or all of them with `replace_all` (docs/tool-ux-design.md §4.2). */
+export async function editFileTool(args: EditFileArgs, context: ToolContext): Promise<ToolResult> {
+  const path = resolve(context.cwd, args.path);
+  const shown = displayPath(path, context.cwd);
+  const failed = (code: string, message: string): ToolResult => ({ ...errorResult(code, message), host: { summary: shown, status: "error" } });
+  let source: Buffer;
+  try { source = await readFile(path); }
+  catch (error) {
+    const code = errorCode(error, "file_error");
+    return failed(code, code === "ENOENT" ? `${shown} does not exist; create it with write_file` : `cannot read ${shown}: ${code}`);
   }
-  return indexedResult(rows, context.maxOutputBytes, rows.some((row) => row.status !== "ok"));
+  if (source.subarray(0, 8192).includes(0)) return failed("binary_file", `${shown} is binary; edit_file changes text files`);
+  let oldBytes = Buffer.from(args.old_string, "utf8");
+  let newBytes = Buffer.from(args.new_string, "utf8");
+  let found = occurrences(source, oldBytes);
+  // A file with CRLF endings matches an old_string written with LF; the replacement keeps the file's endings.
+  if (!found.length && args.old_string.includes("\n") && !args.old_string.includes("\r") && source.includes("\r\n")) {
+    const crlf = Buffer.from(args.old_string.replace(/\n/g, "\r\n"), "utf8");
+    const matches = occurrences(source, crlf);
+    if (matches.length) { oldBytes = crlf; newBytes = Buffer.from(args.new_string.replace(/\r?\n/g, "\r\n"), "utf8"); found = matches; }
+  }
+  const count = found.length;
+  if (!count) return failed("edit_not_found", `old_string not found in ${shown}${nearestLines(source.toString("utf8"), args.old_string)}`);
+  // Uniqueness counts every start, overlapping ones too: "aa" in "aaa" is ambiguous. replace_all replaces non-overlapping matches.
+  const starts = matchStarts(source, oldBytes);
+  if (starts.length > 1 && !args.replace_all) {
+    return failed("edit_not_unique", `old_string matches ${starts.length} times in ${shown}; add surrounding lines to make it unique or set replace_all`
+      + matchLines(source, starts));
+  }
+  try {
+    const after = replaceAt(source, found, oldBytes.length, newBytes);
+    await writeFile(path, after);
+    const change: CompletedWriteChange = { path, kind: "modified", before: source, after };
+    await publishWriteChanges(context, [change]);
+    const result = changeResult("", shown, [change], context.cwd, true);
+    const file = result.host!.files![0]!;
+    const counts = file.added === undefined ? "" : ` (+${file.added} −${file.removed} lines)`;
+    return { ...result, content: [{ type: "text", text: `Edited ${shown}: ${count} replacement${count === 1 ? "" : "s"}${counts}` }] };
+  } catch (error) {
+    const code = errorCode(error, "write_error");
+    return failed(code, `cannot write ${shown}: ${code}`);
+  }
+}
+
+const LETTERS: Record<CompletedWriteChange["kind"], string> = { added: "A", modified: "M", deleted: "D", renamed: "R" };
+
+/** The patch dialect of file-patch.ts as its own tool: one line per changed file (docs/tool-ux-design.md §4.2). */
+export async function applyPatchTool(args: { patch: string }, context: ToolContext): Promise<ToolResult> {
+  let parsed;
+  try { parsed = parseFilePatch(args.patch, context.cwd); }
+  catch (error) { return { ...errorResult("invalid_patch", error instanceof Error ? error.message : "invalid patch"), host: { status: "error" } }; }
+  const completed: CompletedWriteChange[] = [];
+  // The engine's indexed rows are only read here, so they get room regardless of the model-facing budget.
+  const applied = await applyFilePatch(parsed, { maxOutputBytes: 1024 * 1024, ...(context.signal ? { signal: context.signal } : {}),
+    onCompleted: async (change) => { completed.push(change); await publishWriteChanges(context, [change]); } });
+  const rows = applied.content[0]?.type === "json" ? (applied.content[0].value as { results?: Array<Record<string, unknown>> }).results : undefined;
+  const host = { summary: `${parsed.changes.length} file${parsed.changes.length === 1 ? "" : "s"}`, status: applied.isError ? "error" as const : "ok" as const,
+    ...changeHostData(completed, context.cwd, true) };
+  if (!rows) return { ...applied, host };
+  const lines = completed.map((change, index) => {
+    const file = host.files![index]!;
+    return `${LETTERS[change.kind]} ${file.path}${file.destination ? ` → ${file.destination}` : ""}${file.added === undefined ? "" : ` (+${file.added} −${file.removed})`}`;
+  });
+  for (const row of rows) if (row.status !== "ok") lines.push(`${row.status === "skipped" ? "skipped" : "failed"} ${String(row.path)}: ${String(row.error ?? row.status)}`);
+  return { isError: applied.isError, ...(applied.code ? { code: applied.code } : {}), content: [{ type: "text", text: lines.join("\n") || "No changes." }], host };
 }
 
 export const BASH_DEFAULT_TIMEOUT_MS = 120000;

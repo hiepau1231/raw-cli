@@ -46,7 +46,7 @@ test("T-08a: one-shot streams once and a real write result reaches follow-up inf
   const root = await mkdtemp(join(tmpdir(), "raw-cli-task-"));
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "edit", type: "function", function: {
-      name: "write_file", arguments: '{"operations":[{"mode":"overwrite","path":"sentinel.txt","content":"real-write"}]}',
+      name: "write_file", arguments: '{"path":"sentinel.txt","content":"real-write"}',
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "Changed sentinel" }, "stop"), openAiDone] },
   ]);
@@ -55,10 +55,11 @@ test("T-08a: one-shot streams once and a real write result reaches follow-up inf
       { cwd: root, env: { ...process.env, OPENAI_API_KEY: "key" } });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stdout, "Changed sentinel\n");
-    assert.match(result.stderr, /raw: write_file \{"operations":\[\{"path":"sentinel.txt","mode":"overwrite","content_bytes":10\}\]\}/);
+    assert.match(result.stderr, /raw: write_file \{"path":"sentinel.txt","content_bytes":10\}/);
     assert.doesNotMatch(result.stderr, /real-write/);
     assert.equal(await readFile(join(root, "sentinel.txt"), "utf8"), "real-write");
     assert.match(JSON.stringify(fixture.requests[1]?.body), /real-write/);
+    assert.match(JSON.stringify(fixture.requests[1]?.body), /Wrote 10 bytes to sentinel\.txt \(created\)/);
   } finally { await fixture.close(); }
 });
 
@@ -111,16 +112,16 @@ test("CLI shows rejected bash arguments and the model receives the one-command s
 test("CLI shows rejected write argument keys without printing the payload", async () => {
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "bad-write", type: "function", function: {
-      name: "write_file", arguments: '{"path":"sentinel.txt","content":"private-payload"}',
+      name: "write_file", arguments: '{"operations":[{"path":"sentinel.txt","content":"private-payload"}]}',
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "done" }, "stop"), openAiDone] },
   ]);
   try {
     const result = await raw(["--config", testConfig("local", "fixture", fixture.url), "inspect"]);
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stderr, /raw: ⚠ write_file \{"argument_keys":\["path","content"\]\}/);
+    assert.match(result.stderr, /raw: ⚠ write_file \{"argument_keys":\["operations"\]\}/);
     assert.doesNotMatch(result.stderr, /private-payload/);
-    assert.match(result.stderr, /unknown write_file property "path"/);
+    assert.match(result.stderr, /write_file writes one whole file: \{"path":"notes\/todo\.md"/);
   } finally { await fixture.close(); }
 });
 
@@ -189,7 +190,7 @@ test("TTY renders thinking in dim color while keeping the answer separate", asyn
 test("T-08a/b: non-TTY tool call executes without an approval flag", async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-auto-tool-"));
   const response = { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "edit", type: "function", function: {
-    name: "write_file", arguments: '{"operations":[{"mode":"overwrite","path":"nope.txt","content":"created"}]}',
+    name: "write_file", arguments: '{"path":"nope.txt","content":"created"}',
   } }] }, "tool_calls"), openAiDone] };
   const fixture = await startMockProvider([response, { frames: [openAiFrame({ content: "completed" }, "stop"), openAiDone] }]);
   try {
@@ -205,7 +206,7 @@ test("T-08a/b: non-TTY tool call executes without an approval flag", async () =>
 test("explicit agent ask fails closed in headless mode even with -y", async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-ask-headless-"));
   const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "write", type: "function",
-    function: { name: "write_file", arguments: '{"operations":[{"mode":"overwrite","path":"blocked.txt","content":"no"}]}' } }] }, "tool_calls"), openAiDone] }]);
+    function: { name: "write_file", arguments: '{"path":"blocked.txt","content":"no"}' } }] }, "tool_calls"), openAiDone] }]);
   try {
     const configPath = testConfig("openai", "fixture", fixture.url);
     const document = JSON.parse(await readFile(configPath, "utf8"));
@@ -251,10 +252,7 @@ test("explicit agent ask prompts once in a TTY and -y does not bypass it", async
   const root = await mkdtemp(join(tmpdir(), "raw-cli-ask-tty-"));
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "write", type: "function",
-      function: { name: "write_file", arguments: JSON.stringify({ operations: [
-        { mode: "overwrite", path: join(root, "allowed.txt"), content: "secret-first-payload" },
-        { mode: "append", path: join(root, "also-allowed.txt"), content: "secret-second-payload" },
-      ] }) } }] }, "tool_calls"), openAiDone] },
+      function: { name: "write_file", arguments: JSON.stringify({ path: join(root, "allowed.txt"), content: "secret-first-payload" }) } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "done" }, "stop"), openAiDone] },
   ]);
   const configPath = testConfig("openai", "fixture", fixture.url);
@@ -266,14 +264,12 @@ test("explicit agent ask prompts once in a TTY and -y does not bypass it", async
     await waitFor(output, "Allow write_file?");
     await assert.rejects(access(join(root, "allowed.txt")));
     assert.match(output(), /allowed\.txt/);
-    assert.match(output(), /also-allowed\.txt/);
-    assert.doesNotMatch(output(), /secret-first-payload|secret-second-payload/);
+    assert.doesNotMatch(output(), /secret-first-payload/);
     child.stdin.write("y\n");
     const code = await new Promise<number | null>((resolve) => child.once("exit", resolve));
     assert.equal(code, 0, output());
     assert.equal(await readFile(join(root, "allowed.txt"), "utf8"), "secret-first-payload");
-    assert.equal(await readFile(join(root, "also-allowed.txt"), "utf8"), "secret-second-payload");
-    assert.doesNotMatch(output(), /secret-first-payload|secret-second-payload/);
+    assert.doesNotMatch(output(), /secret-first-payload/);
     assert.equal((output().match(/Allow write_file\?/g) ?? []).length, 1);
   } finally { child.kill("SIGTERM"); await fixture.close(); }
 });
@@ -282,7 +278,7 @@ test("T-08 review: piped REPL executes a tool without approval", async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-repl-auto-tool-"));
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "write", type: "function", function: {
-      name: "write_file", arguments: '{"operations":[{"mode":"overwrite","path":"written.txt","content":"created"}]}',
+      name: "write_file", arguments: '{"path":"written.txt","content":"created"}',
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "completed" }, "stop"), openAiDone] },
   ]);
@@ -345,7 +341,7 @@ test("T-08b: real PTY executes a write without a permission prompt", async () =>
   const root = await mkdtemp(join(tmpdir(), "raw-cli-pty-auto-"));
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "write", type: "function", function: {
-      name: "write_file", arguments: JSON.stringify({ operations: [{ mode: "overwrite", path: join(root, "marker"), content: "ok" }] }),
+      name: "write_file", arguments: JSON.stringify({ path: join(root, "marker"), content: "ok" }),
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "handled" }, "stop"), openAiDone] },
   ]);
@@ -363,7 +359,7 @@ test("T-08 review: queued REPL command follows an automatic tool call", async ()
   const root = await mkdtemp(join(tmpdir(), "raw-pty-queued-tool-"));
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "write", type: "function", function: {
-      name: "write_file", arguments: JSON.stringify({ operations: [{ mode: "overwrite", path: join(root, "marker"), content: "written" }] }),
+      name: "write_file", arguments: JSON.stringify({ path: join(root, "marker"), content: "written" }),
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "write handled" }, "stop"), openAiDone] },
   ]);
@@ -476,7 +472,7 @@ test("T-08a: agent selection and -- task delimiter reach the chosen model", asyn
 test("T-08a: max steps, provider error and invalid arguments use distinct exit codes", async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-exit-"));
   const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "edit", type: "function", function: {
-    name: "write_file", arguments: '{"operations":[{"mode":"overwrite","path":"never.txt","content":"no"}]}',
+    name: "write_file", arguments: '{"path":"never.txt","content":"no"}',
   } }] }, "tool_calls"), openAiDone] }]);
   try {
     const max = await raw(["--config", testConfig("openai", "fixture", fixture.url),

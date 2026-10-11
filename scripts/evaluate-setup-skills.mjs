@@ -113,7 +113,7 @@ function prepareCase(root, runtimePackage, skillsRoot) {
     local: { provider: "lab", method: "openai-chat-completions", model_id: "fixture", base_url: "http://127.0.0.1:1/v1" },
     untouched: { provider: "unused", method: "openai-chat-completions", model_id: "unused", base_url: "http://127.0.0.1:1/v1", api_key: sentinel },
   }, agents: {
-    raw: { model: "local", tools: { use: ["builtin/read_file", "builtin/write_file", "builtin/bash", "builtin/list_skills", "builtin/load_skill"] }, skills: { use: ids.map(id => `agent/${id}`) } },
+    raw: { model: "local", tools: { use: ["builtin/read_file", "builtin/write_file", "builtin/edit_file", "builtin/bash", "builtin/list_skills", "builtin/load_skill"] }, skills: { use: ids.map(id => `agent/${id}`) } },
     untouched: { model: "untouched", tools: { use: [] }, system_prompt: "Preserve this agent." },
   }, sessions: { retention_days: 9 } };
   writeJson(configPath, config); writeJson(join(cwd, "app-config.json"), { retries: 1, theme: "dark" });
@@ -161,11 +161,11 @@ async function artifactsFor(spec, fixture) {
         check("created skill linked body", !loaded.isError && loaded.content[0]?.text === skill?.markdown);
       } else if (spec.id === "tool-create") {
         const first = join(cwd, "host-preflight.txt");
-        const bad = await tools.registry.dispatch("append_notes", { operations: [{ path: first, text: "valid\n" }, { path: "other", text: "invalid" }] }, context);
-        check("whole-batch preflight", bad.isError && !existsSync(first));
-        const good = await tools.registry.dispatch("append_notes", { operations: [{ path: first, text: "verified\n" }] }, context);
+        const bad = await tools.registry.dispatch("append_notes", { path: first, text: "invalid" }, context);
+        check("semantic preflight", bad.isError && !existsSync(first));
+        const good = await tools.registry.dispatch("append_notes", { path: first, text: "verified\n" }, context);
         check("working registered tool", !good.isError && existsSync(first) && readFileSync(first, "utf8") === "verified\n");
-        check("written JSON count", good.content.some(c => c.type === "json" && c.value?.written === 1));
+        check("appended byte count", good.content.some(c => c.type === "text" && c.text.startsWith("Appended 9 bytes")));
       } else {
         const selected = tools.mcp.exposed.find(t => t.originalName === "echo_text");
         const result = selected && await tools.registry.dispatch(selected.alias, { text: "hello" }, context);

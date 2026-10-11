@@ -34,7 +34,7 @@ The unreleased schema is breaking. It has no old flat-agent parser or migration 
   "agents": {
     "deepseek": {
       "model": "flash",
-      "tools": {"use": ["builtin/read_file", "builtin/write_file", "builtin/bash"]},
+      "tools": {"use": ["builtin/read_file", "builtin/write_file", "builtin/edit_file", "builtin/bash"]},
       "max_steps": 25,
       "max_output_bytes": 65536,
       "request_timeout_ms": 600000,

@@ -76,6 +76,10 @@ test("CLI/browser starter factory has the seven skills and initialization never 
     const initialized = await initializeConfig(options);
     assert.deepEqual(initialized.data, createStarterConfig());
     assert.equal(((initialized.data!.agents as Record<string, { skills: { use: string[] } }>).raw!.skills.use).length, 7);
+    // The starter edits with edit_file; apply_patch is opt-in (docs/tool-ux-design.md §4.2).
+    const tools = (initialized.data!.agents as Record<string, { tools: { use: string[] } }>).raw!.tools.use;
+    assert.ok(tools.includes("builtin/edit_file"));
+    assert.ok(!tools.includes("builtin/apply_patch"));
     await assert.rejects(initializeConfig(options), /already exists/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

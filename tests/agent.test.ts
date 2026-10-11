@@ -20,8 +20,8 @@ const options = (cwd: string, provider: ProviderAdapter, maxSteps = 25) => ({
 test("real SDK fixture executes write/read/bash and carries exact history into the next user turn", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "raw-agent-"));
   const first = [openAiFrame({ tool_calls: [
-    { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: '{"operations":[{"mode":"overwrite","path":"item","content":"hello"}]}' } },
-    { index: 1, id: "read", type: "function", function: { name: "read_file", arguments: '{"files":[{"path":"item"}]}' } },
+    { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: '{"path":"item","content":"hello"}' } },
+    { index: 1, id: "read", type: "function", function: { name: "read_file", arguments: '{"path":"item"}' } },
     { index: 2, id: "shell", type: "function", function: { name: "bash", arguments: '{"command":"printf x >> count; cat item"}' } },
   ] }, "tool_calls"), openAiDone];
   const fixture = await startMockProvider([{ frames: first }, { frames: [openAiFrame({ content: "done" }, "stop"), openAiDone] }, { frames: [openAiFrame({ content: "again" }, "stop"), openAiDone] }]);
@@ -41,7 +41,8 @@ test("real SDK fixture executes write/read/bash and carries exact history into t
     assert.match(replay, /"tool_call_id":"write"/);
     assert.match(replay, /"tool_call_id":"read"/);
     assert.match(replay, /"tool_call_id":"shell"/);
-    assert.match(replay, /hello/);
+    assert.match(replay, /Wrote 5 bytes to item \(created\)/);
+    assert.match(replay, /1│hello/);
     const second = await agent.run("continue");
     assert.equal(second.text, "again");
     assert.equal(await readFile(join(cwd, "count"), "utf8"), "x");
@@ -55,7 +56,7 @@ test("step budget never dispatches a tool whose result cannot be consumed", asyn
   const cwd = await mkdtemp(join(tmpdir(), "raw-steps-"));
   const marker = join(cwd, "sentinel");
   let calls = 0;
-  const provider = fake(async () => { calls++; return { text: "", toolCalls: [{ id: `c${calls}`, name: "write_file", arguments: { operations: [{ mode: "overwrite", path: marker, content: "bad" }] } }], finishReason: "tool_calls" }; });
+  const provider = fake(async () => { calls++; return { text: "", toolCalls: [{ id: `c${calls}`, name: "write_file", arguments: { path: marker, content: "bad" } }], finishReason: "tool_calls" }; });
   const one = createAgent(options(cwd, provider, 1));
   const result = await one.run("task");
   assert.equal(result.status, "max_steps");
@@ -84,7 +85,7 @@ test("step budget never dispatches a tool whose result cannot be consumed", asyn
     boundaryRequests++;
     return boundaryRequests < 25
       ? { text: "", toolCalls: [{ id: `prior${boundaryRequests}`, name: "count", arguments: {} }], finishReason: "tool_calls" }
-      : { text: "", toolCalls: [{ id: "last", name: "write_file", arguments: { operations: [{ mode: "overwrite", path: marker, content: "bad" }] } }], finishReason: "tool_calls" };
+      : { text: "", toolCalls: [{ id: "last", name: "write_file", arguments: { path: marker, content: "bad" } }], finishReason: "tool_calls" };
   }), 25), registry });
   const last = await boundary.run("never write on final step");
   assert.equal(last.status, "max_steps");

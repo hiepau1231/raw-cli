@@ -8,6 +8,7 @@ import { packageRoot } from "../../package-root.js";
 import type { ToolContext } from "../primitives.js";
 import type { ToolRegistration } from "../registry.js";
 import { HOST_CONTENT_BYTES } from "../results.js";
+import { FILE_EDITING_TOOLS, FILES_CHANGED_OWNER } from "../write-changes.js";
 import type { ToolManifest, ToolPlugin } from "./contract.js";
 import type { SelectedSkill } from "../../skills/contract.js";
 import { selectedToolSnapshot } from "./snapshot.js";
@@ -15,7 +16,7 @@ import type { PackageAsset } from "../../packages/resolve-agent.js";
 
 // Built-ins returning host-owned content (selected skills, configured vars) whole rather than within max_output_bytes.
 const hostContentTools = new Set(["builtin/list_skills", "builtin/load_skill", "builtin/list_vars", "builtin/read_var"]);
-const bundledNames = new Set(["read_file", "write_file", "bash", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]);
+const bundledNames = new Set(["read_file", "write_file", "edit_file", "apply_patch", "bash", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]);
 
 export interface LoadToolPluginsOptions {
   selectedIds: readonly string[];
@@ -149,6 +150,8 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
       ...(bundled && plainObject(entry.example) ? { example: entry.example } : {}),
       ...(bundled && plainObject(entry.renamedArguments) ? { renamedArguments: entry.renamedArguments as Record<string, string> } : {}),
       ...(bundled && typeof entry.delegate === "function" ? { delegate: entry.delegate as NonNullable<ToolRegistration["delegate"]> } : {}),
+      // The bundled editing tools share one host-owned files-changed panel (docs/tool-ux-design.md §6.3).
+      ...(bundled && FILE_EDITING_TOOLS.has(item.id) ? { panelOwner: FILES_CHANGED_OWNER } : {}),
       ...(!options.packageTools?.[item.id] && hostContentTools.has(item.id) ? { outputLimit: HOST_CONTENT_BYTES } : {}),
       validateArgs(args) {
         let error: unknown;
@@ -165,7 +168,7 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
           ...(context.bashPath ? { bashPath: context.bashPath } : {}),
           ...(context.panels ? { panels: context.panels } : {}), // onPanelUpdates stays host-only
           ...(context.effects ? { effects: context.effects } : {}),
-          ...(item.id === "builtin/write_file" && context.onWriteCompleted ? { onWriteCompleted: context.onWriteCompleted } : {}),
+          ...(bundled && FILE_EDITING_TOOLS.has(item.id) && context.onWriteCompleted ? { onWriteCompleted: context.onWriteCompleted } : {}),
           ...(item.id === "builtin/bash" && context.commandActivity ? { commandActivity: context.commandActivity } : {}),
           ...(context.processes ? { processes: context.processes } : {}),
           ...(context.interactions ? { interactions: context.interactions } : {}),

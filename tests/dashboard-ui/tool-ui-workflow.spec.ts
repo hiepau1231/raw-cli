@@ -42,7 +42,7 @@ test("Ask, Commands, Todo, patches and Mermaid survive reload and retry while St
   await expect(commands.locator("pre")).toContainText("workflow ready");
   await send(page, "patch and diagram");
   await expect(page.getByTestId("assistant-message")).toHaveCount(2);
-  const files = await showSection(page, "builtin/write_file#files_changed");
+  const files = await showSection(page, "host/files_changed#files_changed");
   await expect(files.locator(".panel-files li")).toHaveCount(1);
   await expect(files.locator(".panel-markdown")).toContainText("written exactly once 雪");
   const diagram = await showSection(page, "local/diagram#diagram");
@@ -59,7 +59,7 @@ test("Ask, Commands, Todo, patches and Mermaid survive reload and retry while St
   await expect(page.getByRole("textbox", { name: "Workflow answer", exact: true })).toBeDisabled();
   await showSection(page, "local/diagram#diagram");
   await expect(diagram.locator('svg[role="img"]')).toContainText("Patch");
-  await showSection(page, "builtin/write_file#files_changed");
+  await showSection(page, "host/files_changed#files_changed");
   await expect(files.locator(".panel-files li")).toHaveCount(1);
   await showSection(page, "builtin/todo#todo");
   await expect(todo).toContainText("Finish integrated workflow");

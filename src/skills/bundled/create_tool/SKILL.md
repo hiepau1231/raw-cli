@@ -28,7 +28,7 @@ Define inputs/results/limits/failures in English. Preflight does not make I/O tr
 
 ## Working example
 
-For `local/append_notes`, create `tool.json` in the global `tools/append_notes/` folder:
+Prefer one action per call with a flat schema, and put a complete example call in the description: models repeat a simple call more reliably than they fill a batch array. For `local/append_notes`, create `tool.json` in the global `tools/append_notes/` folder:
 
 <!-- example:manifest -->
 ```json
@@ -37,20 +37,21 @@ For `local/append_notes`, create `tool.json` in the global `tools/append_notes/`
   "id": "append_notes",
   "version": "1.0.0",
   "name": "append_notes",
-  "description": "Append 1-16 newline-terminated notes to paths in session cwd, in order. Validates every row before writing; reports the count. Files may be created.",
+  "description": "Append one newline-terminated note to a file, creating the file and its parent directories if needed. Example: {\"path\":\"notes.txt\",\"text\":\"Ship the docs\\n\"}. Relative paths use the session cwd. The result names the file and the bytes appended. To add notes to several files, make several calls.",
   "input_schema": {
     "type": "object",
-    "properties": { "operations": { "type": "array", "minItems": 1, "maxItems": 16,
-      "items": { "type": "object", "properties": { "path": { "type": "string", "minLength": 1 }, "text": { "type": "string", "minLength": 1 } },
-        "required": ["path", "text"], "additionalProperties": false } } },
-    "required": ["operations"],
+    "properties": {
+      "path": { "type": "string", "minLength": 1, "description": "File path, absolute or relative to the session cwd." },
+      "text": { "type": "string", "minLength": 1, "description": "The note, ending with a newline." }
+    },
+    "required": ["path", "text"],
     "additionalProperties": false
   },
   "entry": "./index.mjs"
 }
 ```
 
-Create its `index.mjs`. The semantic validator rejects an invalid later row before any earlier write. The handler checks abort between writes and returns a count:
+Create its `index.mjs`. The semantic validator rejects a note without a final newline before anything is written, and its error shows a valid call. The handler checks abort before writing and returns one text line:
 
 <!-- example:handler -->
 ```js
@@ -58,25 +59,18 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 export function validateArgs(args) {
-  if (!Array.isArray(args.operations) || args.operations.length < 1 || args.operations.length > 16)
-    return "operations must contain 1-16 rows";
-  for (const [index, row] of args.operations.entries()) {
-    if (!row || typeof row.path !== "string" || !row.path.trim()
-      || typeof row.text !== "string" || !row.text.endsWith("\n"))
-      return `operations[${index}] needs a path and newline-terminated text`;
-  }
+  if (typeof args.path !== "string" || !args.path.trim()) return "path must be a nonempty string";
+  if (typeof args.text !== "string" || !args.text.endsWith("\n"))
+    return 'text must end with a newline, for example {"path":"notes.txt","text":"Ship the docs\\n"}';
   return undefined;
 }
 
 export async function handler(args, context) {
   if (context.signal?.aborted) return { isError: true, code: "aborted", content: [{ type: "text", text: "aborted" }] };
-  for (const row of args.operations) {
-    if (context.signal?.aborted) return { isError: true, code: "aborted", content: [{ type: "text", text: "aborted after a partial batch" }] };
-    const path = resolve(context.cwd, row.path);
-    await mkdir(dirname(path), { recursive: true });
-    await appendFile(path, row.text, "utf8");
-  }
-  return { isError: false, content: [{ type: "json", value: { written: args.operations.length } }] };
+  const path = resolve(context.cwd, args.path);
+  await mkdir(dirname(path), { recursive: true });
+  await appendFile(path, args.text, "utf8");
+  return { isError: false, content: [{ type: "text", text: `Appended ${Buffer.byteLength(args.text)} bytes to ${args.path}` }] };
 }
 ```
 
@@ -91,10 +85,10 @@ Use `agent/append_notes` for a config-adjacent folder.
 
 ## Implement and verify
 
-1. Inspect the target agent's selected names and policy. Create the manifest and handler in the chosen root. Validate the complete batch before side effects; handle aborts and genuine runtime failures without claiming rollback.
+1. Inspect the target agent's selected names and policy. Create the manifest and handler in the chosen root. Validate the whole input before side effects; handle aborts and genuine runtime failures without claiming rollback.
 2. Back up existing config, add the exact selection, and keep config mode 0600. Run `raw config list` or `raw --config PATH config list` for static config validation; this alone does not import or execute the plugin.
 3. With the installed library, use `loadConfig({configPath,requireModel:false})`, then `createRuntimeTools({runtime,cwd})`. Dispatch the model-visible name through `tools.registry.dispatch(name,args,{cwd,maxOutputBytes:8192})`; close `tools.mcp` in `finally`. This verifies registration/schema/preflight without inference.
-4. For this example, first send a valid first row and a second row without a newline; confirm failure and no first file. Then send `{"operations":[{"path":"notes.txt","text":"first\n"}]}` and verify file contents and JSON `written:1`. Repeat to check append behavior, reject unknown properties, and test abort/partial failure when relevant. Host output caps still apply.
+4. For this example, first send a note without a final newline; confirm the validation error and that no file was created. Then send `{"path":"notes.txt","text":"first\n"}` and verify the file contents and the result `Appended 6 bytes to notes.txt`. Repeat to check append behavior, reject unknown properties, and test abort when relevant. Host output caps still apply.
 5. Add `tools.rules` only for requested policy. Match the canonical ID, e.g. `{"match":"local/append_notes","effect":"ask"}`. Last matching rule wins; unmatched calls run, and `-y` does not bypass explicit ask. Only ask accepts a `when` predicate on a schema-bound string path. Verify a requested rule with harmless inputs.
 
 Check failed loads for ID/entry/exports/schema/containment. Report partial runtime effects. Selected source/schema edits rotate generated cache keys on resume; unselected edits do not. Report paths/registration/checks.

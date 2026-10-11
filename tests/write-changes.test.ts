@@ -11,23 +11,73 @@ import type { PanelDocument, PanelContext, FileEntry } from "../src/panels/contr
 
 const entries = (doc: PanelDocument) => (doc.blocks.find(b => b.kind === "files") as {entries: FileEntry[]}).entries;
 
-test("successful writes accumulate normalized paths, preserve added status and omit failed operations", async () => {
+test("successful writes accumulate normalized paths, preserve added status, count lines and omit failed writes", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "raw-changes-"));
   let document: PanelDocument | undefined;
   const panels: PanelContext = { protocol: 2, get: () => document ? { revision: 1, document } : undefined,
     update: async (_id, update) => { assert.equal(update.op, "replace"); if (update.op === "replace") document = update.document; return { revision: 1 }; } };
   try {
     await mkdir(join(cwd, "directory"));
-    const result = await writeFileTool({ operations: [{ path: "a", mode: "overwrite", content: "one\n" },
-      { path: "directory", mode: "overwrite", content: "fails" }, { path: "b", mode: "append", content: "two" }] }, { cwd, panels, maxOutputBytes: 4096 });
-    assert.equal(result.isError, true);
+    assert.equal((await writeFileTool({ path: "a", content: "one\n" }, { cwd, panels, maxOutputBytes: 4096 })).isError, false);
+    assert.equal((await writeFileTool({ path: "directory", content: "fails" }, { cwd, panels, maxOutputBytes: 4096 })).isError, true);
+    await writeFileTool({ path: "b", content: "two" }, { cwd, panels, maxOutputBytes: 4096 });
     assert.deepEqual(entries(document!).map(e => e.path), [join(cwd, "a"), join(cwd, "b")]);
-    await writeFileTool({ operations: [{ path: "./a", mode: "overwrite", content: "updated\n" }] }, { cwd, panels, maxOutputBytes: 4096 });
+    await writeFileTool({ path: "./a", content: "updated\nmore\n" }, { cwd, panels, maxOutputBytes: 4096 });
     assert.equal(entries(document!).length, 2);
-    assert.equal(entries(document!).find(e => e.path === join(cwd, "a"))?.status, "added");
-    assert.match(JSON.stringify(document), /updated/);
+    const a = entries(document!).find(e => e.path === join(cwd, "a"));
+    assert.equal(a?.status, "added");
+    // Counts accumulate over the session: +1 from the create, then +2 −1 from the overwrite; the diff is the latest one.
+    assert.deepEqual([a?.added, a?.removed], [3, 1]);
+    assert.match(a!.diff!, /-one\n\+updated\n\+more/);
     validateDocument(document);
   } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("entry counts come from the whole change while the stored entry diff stays bounded", () => {
+  const before = Array.from({ length: 3000 }, (_, i) => `row ${i}`);
+  const after = before.map((row, i) => i % 3 === 0 ? `${row} edited` : row);
+  const doc = buildWriteChanges(undefined, [{ path: "/p/big.txt", kind: "modified", before: Buffer.from(before.join("\n")), after: Buffer.from(after.join("\n")) }]);
+  const [entry] = entries(doc);
+  assert.deepEqual([entry?.added, entry?.removed], [1000, 1000]);
+  assert.ok(Buffer.byteLength(entry!.diff!) <= 8 * 1024 + 32);
+  assert.match(entry!.diff!, /\[diff truncated\]$/);
+  // Counts do not stop at the preview's source limit and see changes that display sanitizing would hide.
+  const huge = "row\n".repeat(2_300_000);
+  const large = buildWriteChanges(undefined, [{ path: "/p/huge.txt", kind: "modified", before: Buffer.from(huge + "old\n"), after: Buffer.from(huge + "new\n") }]);
+  assert.deepEqual([entries(large)[0]?.added, entries(large)[0]?.removed], [1, 1]);
+  const control = buildWriteChanges(undefined, [{ path: "/p/ctl", kind: "modified", before: Buffer.from("a\u000b\n"), after: Buffer.from("a\u000c\n") }]);
+  assert.deepEqual([entries(control)[0]?.added, entries(control)[0]?.removed], [1, 1]);
+  const partial = buildWriteChanges(undefined, [{ path: "/p/partial", kind: "modified", before: Buffer.from("a\n"), beforePartial: true, after: Buffer.from("b\n") }]);
+  assert.equal(entries(partial)[0]?.added, undefined, "a partial snapshot has no counts");
+  // Known, then unknown, then known again: the session total stays unknown instead of skipping a write.
+  let mixed = buildWriteChanges(undefined, [{ path: "/p/m", kind: "added", after: Buffer.from("a\n") }]);
+  assert.equal(entries(mixed)[0]?.added, 1);
+  mixed = buildWriteChanges(mixed, [{ path: "/p/m", kind: "modified", before: Buffer.from("a\n"), beforePartial: true, after: Buffer.from("b\n") }]);
+  mixed = buildWriteChanges(structuredClone(mixed), [{ path: "/p/m", kind: "modified", before: Buffer.from("b\n"), after: Buffer.from("z\n") }]);
+  assert.deepEqual([entries(mixed)[0]?.added, entries(mixed)[0]?.removed], [undefined, undefined]);
+  validateDocument(mixed);
+  const binary = buildWriteChanges(doc, [{ path: "/p/bin", kind: "added", after: Buffer.from([0, 1, 2]) }]);
+  const bin = entries(binary).find(e => e.path === "/p/bin");
+  assert.equal(bin?.added, undefined, "binary content has no line counts");
+  assert.equal(bin?.diff, undefined);
+  validateDocument(binary);
+});
+
+test("an old tool-owned Files changed panel is stale on resume next to the one shared host panel", async () => {
+  const { knownPanelDeclarations, isStalePanel } = await import("../src/panels/declarations.js");
+  const { buildPanelStack } = await import("../src/panels/stack.js");
+  const runtime = { toolIds: ["builtin/write_file", "builtin/edit_file", "builtin/apply_patch"], configPath: join(tmpdir(), "none.json"),
+    globalConfigRoot: tmpdir(), packageTools: {}, availableMcpServers: {}, packageMcpIdentities: {} };
+  const known = await knownPanelDeclarations(runtime as never);
+  assert.deepEqual(known.declared.map(item => `${item.owner}#${item.declaration.id}`), ["host/files_changed#files_changed"]);
+  const document = buildWriteChanges(undefined, [{ path: "/p/a", kind: "added", after: Buffer.from("a\n") }]);
+  const old = { panelId: "builtin/write_file#files_changed", owner: "builtin/write_file", revision: 3, createdAt: 1, updatedAt: 1, closed: false,
+    declaration: known.declared[0]!.declaration, document };
+  assert.equal(isStalePanel(old.panelId, known), true);
+  assert.equal(isStalePanel("host/files_changed#files_changed", known), false);
+  const stack = buildPanelStack(known, [old]);
+  assert.deepEqual(stack.map(item => [item.panel, item.stale, item.document === null]),
+    [["host/files_changed#files_changed", false, true], ["builtin/write_file#files_changed", true, false]], "the old data stays visible, marked stale");
 });
 
 test("Files changed is bounded after reload and rename records both paths", () => {
@@ -45,14 +95,14 @@ test("Files changed is bounded after reload and rename records both paths", () =
 test("panel failure does not report completed filesystem writes as failed", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "raw-changes-"));
   try {
-    const result = await writeFileTool({ operations: [{ path: "a", mode: "overwrite", content: "done" }] }, { cwd, maxOutputBytes: 4096,
+    const result = await writeFileTool({ path: "a", content: "done" }, { cwd, maxOutputBytes: 4096,
       panels: { protocol: 2, get: () => undefined, update: async () => { throw new Error("panel limit"); } } });
     assert.equal(result.isError, false);
     assert.equal(await readFile(join(cwd, "a"), "utf8"), "done");
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 
-test("a cancelled real write call persists only completed writes and survives session reload", async () => {
+test("a cancelled turn keeps a completed write, skips the next call and survives session reload", async () => {
   const { createAgent } = await import("../src/agent.js");
   const { openSessionStore } = await import("../src/sessions/store.js");
   const { ToolRegistry } = await import("../src/tools/registry.js");
@@ -64,16 +114,16 @@ test("a cancelled real write call persists only completed writes and survives se
   for (const tool of await loadBundledTools(["write_file"])) registry.register(tool);
   const agent = createAgent({ cwd, registry, autoApprove: true, maxOutputBytes: 8192, maxSteps: 2, persistence: { store, sessionId, surface: "cli" },
     provider: { modelConfig: { agentName: "test", provider: "ollama", method: "openai-chat-completions", model: "fixture" },
-      generate: async () => ({ text: "", finishReason: "tool_calls", toolCalls: [{ id: "write-abort", name: "write_file", arguments: {
-        operations: [{ path: "completed", mode: "overwrite", content: "yes" }, { path: "skipped", mode: "overwrite", content: "no" }],
-      } }] }) } });
+      generate: async () => ({ text: "", finishReason: "tool_calls", toolCalls: [
+        { id: "write-completed", name: "write_file", arguments: { path: "completed", content: "yes" } },
+        { id: "write-skipped", name: "write_file", arguments: { path: "skipped", content: "no" } }] }) } });
   try {
-    const result = await agent.run("write", event => { if (event.type === "panel_update" && event.live && event.owner === "builtin/write_file") agent.abort(); });
+    const result = await agent.run("write", event => { if (event.type === "panel_update" && event.live && event.owner === "host/files_changed") agent.abort(); });
     assert.equal(result.status, "cancelled");
     assert.equal(await readFile(join(cwd, "completed"), "utf8"), "yes");
     await assert.rejects(readFile(join(cwd, "skipped")), { code: "ENOENT" });
     const saved = store.listSessionPanels(sessionId);
-    assert.equal(saved.length, 1);
+    assert.deepEqual(saved.map(panel => panel.panelId), ["host/files_changed#files_changed"]);
     assert.deepEqual(entries(saved[0]!.document).map(e => e.path), [join(cwd, "completed")]);
     const { PanelHost } = await import("../src/panels/host.js");
     const restored = new PanelHost({ initial: saved });
@@ -90,7 +140,7 @@ test("write-only existing files still overwrite successfully and unavailable sna
   try {
     await writeFile(path, "old");
     await chmod(path, 0o200);
-    const result = await writeFileTool({ operations: [{ path, mode: "overwrite", content: "new" }] }, { cwd, maxOutputBytes: 4096,
+    const result = await writeFileTool({ path, content: "new" }, { cwd, maxOutputBytes: 4096,
       panels: { protocol: 2, get: () => undefined, update: async (_id, update) => { if (update.op === "replace") document = update.document; return { revision: 1 }; } } });
     assert.equal(result.isError, false);
     assert.equal(entries(document!)[0]?.status, "modified");
@@ -142,9 +192,9 @@ test("an overwrite deep inside a large file shows that change in Recent diff", a
     update: async (_id, update) => { if (update.op === "replace") document = update.document; return { revision: 1 }; } };
   try {
     const rows = Array.from({ length: 4000 }, (_, i) => `row ${i + 1}`);
-    await writeFileTool({ operations: [{ path: "big.txt", mode: "overwrite", content: rows.join("\n") }] }, { cwd, panels, maxOutputBytes: 4096 });
+    await writeFileTool({ path: "big.txt", content: rows.join("\n") }, { cwd, panels, maxOutputBytes: 4096 });
     rows[3499] = "edited row 3500";
-    await writeFileTool({ operations: [{ path: "big.txt", mode: "overwrite", content: rows.join("\n") }] }, { cwd, panels, maxOutputBytes: 4096 });
+    await writeFileTool({ path: "big.txt", content: rows.join("\n") }, { cwd, panels, maxOutputBytes: 4096 });
     assert.match(diffText(document!), /    @@ -3497,7 \+3497,7 @@[\s\S]*    -row 3500\n    \+edited row 3500/);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });

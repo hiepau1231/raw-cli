@@ -143,3 +143,15 @@ export function unifiedDiff(before: string, after: string, budgetBytes: number, 
   if (hunk && !truncated) render(hunk.slice(0, hunk.length - Math.max(0, trailing - CONTEXT_LINES)));
   return { text: out.join("\n"), truncated };
 }
+
+/** Complete `+added −removed` line counts of a change, independent of any display budget. */
+export function lineCounts(before: string, after: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  operations(lines(before), lines(after), (op) => {
+    if (op.kind === "+") added++;
+    else if (op.kind === "-") removed++;
+    return true;
+  });
+  return { added, removed };
+}

@@ -125,7 +125,7 @@ export function savedLabel(path: string | undefined, capped = false): string | u
 /** The model-facing note that a result was shortened and where the complete copy is. */
 export function truncationNotice(keptBytes: number, totalBytes: number, path: string | undefined, capped = false): string {
   const where = path
-    ? ` Full output saved to ${path}${capped ? ` (first ${SPILL_MAX_BYTES} bytes)` : ""}; read it with read_file (start_line/max_lines) or search it with grep if you need the omitted part.`
+    ? ` Full output saved to ${path}${capped ? ` (first ${SPILL_MAX_BYTES} bytes)` : ""}; read it with read_file (offset/limit) or search it with grep if you need the omitted part.`
     : "";
   return `[Output truncated: showing ${keptBytes} of ${totalBytes} bytes.${where}]`;
 }

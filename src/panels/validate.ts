@@ -259,13 +259,16 @@ function block(value: unknown, path: Path): PanelBlock {
       for (const [index, raw] of array(item.entries, [...path, "entries"], PANEL_LIMITS.items).entries()) {
         const at = [...path, "entries", index];
         const entry = object(raw, at);
-        keys(entry, ["path", "status", "line", "label"], at);
+        keys(entry, ["path", "status", "line", "label", "added", "removed", "diff"], at);
         const filePath = text(entry.path, [...at, "path"], 500, 1);
         if (seen.has(filePath)) invalid([...at, "path"], "duplicate path");
         seen.add(filePath);
         if (entry.status !== undefined) oneOf(entry.status, ["added", "modified", "deleted", "referenced"], [...at, "status"]);
         if (entry.line !== undefined) count(entry.line, [...at, "line"], 1);
         if (entry.label !== undefined) text(entry.label, [...at, "label"], 200);
+        if (entry.added !== undefined) count(entry.added, [...at, "added"], 0);
+        if (entry.removed !== undefined) count(entry.removed, [...at, "removed"], 0);
+        if (entry.diff !== undefined) text(entry.diff, [...at, "diff"], PANEL_LIMITS.documentBytes);
       }
       break;
     }

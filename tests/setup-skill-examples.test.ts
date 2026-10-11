@@ -145,7 +145,7 @@ test("configure_raw canonical candidate validation accepts sessions and rejects 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("create_tool example validates a later batch row before side effects", async () => {
+test("create_tool example validates one flat call before side effects and rejects a batch", async () => {
   const root = mkdtempSync(join(tmpdir(), "raw-tool-example-"));
   const xdg = join(root, "xdg");
   const plugin = join(xdg, "raw", "tools", "append_notes");
@@ -160,21 +160,20 @@ test("create_tool example validates a later batch row before side effects", asyn
   const tools = await createRuntimeTools({ runtime, cwd: root });
   try {
     const context = { cwd: root, maxOutputBytes: 8192, autoApprove: true };
-    const invalid = await tools.registry.dispatch("append_notes", { operations: [
-      { path: "notes.txt", text: "valid\n" }, { path: "other.txt", text: "missing newline" },
-    ] }, context);
+    const text = (result: { content: Array<{ type: string; text?: string }> }) => result.content.map(block => block.text ?? "").join("");
+    const invalid = await tools.registry.dispatch("append_notes", { path: "notes.txt", text: "missing newline" }, context);
     assert.equal(invalid.isError, true);
+    assert.match(text(invalid), /\{"path":"notes\.txt","text":"Ship the docs\\n"\}/);
     assert.equal(existsSync(join(root, "notes.txt")), false);
-    const valid = await tools.registry.dispatch("append_notes", { operations: [
-      { path: "notes.txt", text: "valid\n" },
-    ] }, context);
+    const valid = await tools.registry.dispatch("append_notes", { path: "notes.txt", text: "valid\n" }, context);
     assert.equal(valid.isError, false);
+    assert.equal(text(valid), "Appended 6 bytes to notes.txt");
     assert.equal(readFileSync(join(root, "notes.txt"), "utf8"), "valid\n");
-    const again = await tools.registry.dispatch("append_notes", { operations: [{ path: "notes.txt", text: "next\n" }] }, context);
+    const again = await tools.registry.dispatch("append_notes", { path: "notes.txt", text: "next\n" }, context);
     assert.equal(again.isError, false);
     assert.equal(readFileSync(join(root, "notes.txt"), "utf8"), "valid\nnext\n");
-    const unknown = await tools.registry.dispatch("append_notes", { operations: [{ path: "notes.txt", text: "bad\n", extra: true }] }, context);
-    assert.equal(unknown.isError, true);
+    const batch = await tools.registry.dispatch("append_notes", { operations: [{ path: "notes.txt", text: "bad\n" }] }, context);
+    assert.equal(batch.isError, true);
     assert.equal(readFileSync(join(root, "notes.txt"), "utf8"), "valid\nnext\n");
   } finally { await tools.mcp.close(); }
 });

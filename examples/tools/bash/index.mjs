@@ -1,5 +1,5 @@
 // src/tools/bundled/bash/index.ts
-import { isAbsolute, relative as relative2, resolve as resolve3 } from "path";
+import { isAbsolute as isAbsolute2, relative as relative3, resolve as resolve3 } from "path";
 
 // src/tools/primitives.ts
 import { constants as fsConstants } from "fs";
@@ -148,6 +148,9 @@ var PATCH_BYTES = 1024 * 1024;
 var SOURCE_BYTES = 16 * 1024 * 1024;
 var STAGED_BYTES = 64 * 1024 * 1024;
 
+// src/tools/write-changes.ts
+import { isAbsolute, relative as relative2 } from "path";
+
 // src/panels/contract.ts
 var PANEL_LIMITS = {
   panelsPerTool: 4,
@@ -168,11 +171,12 @@ var PANEL_LIMITS = {
 };
 
 // src/tools/write-changes.ts
+var HOST_DIFF_BYTES = 64 * 1024;
+var ENTRY_DIFF_BYTES = 8 * 1024;
 var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
 
 // src/tools/primitives.ts
-import { open as open2, mkdir as mkdir2, writeFile, readFile, appendFile, stat } from "fs/promises";
-import { createHash as createHash2 } from "crypto";
+import { open as open2, mkdir as mkdir2, writeFile, readFile, stat } from "fs/promises";
 import { dirname as dirname2, resolve as resolve2 } from "path";
 
 // src/tools/process.ts
@@ -523,7 +527,7 @@ async function handler(args, context) {
 function delegate(args, context) {
   if (args.run_in_background !== true) return void 0;
   const command = String(args.command);
-  const workdir = typeof args.workdir === "string" ? relative2(context.cwd, resolve3(context.cwd, args.workdir)) : "";
+  const workdir = typeof args.workdir === "string" ? relative3(context.cwd, resolve3(context.cwd, args.workdir)) : "";
   const summary = command.split("\n", 1)[0].slice(0, 200);
   const clamped = typeof args.timeout === "number" && args.timeout > BASH_MAX_TIMEOUT_MS;
   return {
@@ -531,7 +535,7 @@ function delegate(args, context) {
     arguments: {
       action: "start",
       command,
-      ...workdir && !isAbsolute(workdir) ? { cwd: workdir } : {},
+      ...workdir && !isAbsolute2(workdir) ? { cwd: workdir } : {},
       ...typeof args.description === "string" && args.description ? { label: args.description } : {},
       ...args.env_refs ? { env_refs: args.env_refs } : {},
       ...typeof args.timeout === "number" ? { timeout: Math.min(args.timeout, BASH_MAX_TIMEOUT_MS) } : {}

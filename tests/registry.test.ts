@@ -13,37 +13,43 @@ test("packaged bundled plugins preserve exact definitions and semantic batch pre
   const registry = new ToolRegistry();
   for (const plugin of plugins) registry.register(plugin);
   assert.deepEqual(registry.definitions(), createTestToolRegistry([], true).definitions());
-  // Intentional revision: bash takes one command in the trained shape (docs/tool-ux-design.md §4.2).
+  // Intentional revision: bash, read_file and write_file take one action in the trained shape (docs/tool-ux-design.md §4.2).
   assert.equal(createHash("sha256").update(JSON.stringify(registry.definitions())).digest("hex"),
-    "4242f7d65cc3f7e03418c394baf4cffeb4c8d53288bbcb1bae50558d8f1a0284");
+    "2c47b24c8f3062bf78a633e86bfb067178f78b5cabdb58c04f70a2fe873ab8bd");
 
   const cwd = await mkdtemp(join(tmpdir(), "raw-bundled-"));
   const marker = join(cwd, "side-effect");
   let approvals = 0;
   const ctx = { cwd, maxOutputBytes: 8192, autoApprove: false, approve: async () => { approvals++; return true; } };
-  const invalidWrite = await registry.dispatch("write_file", { operations: [
-    { path: marker, mode: "overwrite", content: "must not write" },
-    { path: marker, mode: "replace_lines", start_line: 2, end_line: 1, content: "bad", expected_sha256: "0".repeat(64) },
-  ] }, ctx);
+  for (const plugin of await loadBundledTools(["edit_file", "apply_patch"])) registry.register(plugin);
+  const oldWrite = await registry.dispatch("write_file", { operations: [{ path: marker, mode: "overwrite", content: "must not write" }] }, ctx);
+  assert.equal(oldWrite.code, "invalid_arguments");
+  assert.match(JSON.stringify(oldWrite), /write_file writes one whole file: .*use edit_file to change part of a file/);
+  const invalidWrite = await registry.dispatch("write_file", { path: marker, content: 1 }, ctx);
   assert.equal(invalidWrite.code, "invalid_arguments");
-  assert.match(JSON.stringify(invalidWrite), /operations\[1\].*invalid line range/);
+  assert.match(JSON.stringify(invalidWrite), /content must be a string/);
   const invalidBash = await registry.dispatch("bash", { command: `touch '${marker}'`, timeout: 0 }, ctx);
   assert.equal(invalidBash.code, "invalid_arguments");
   const batchBash = await registry.dispatch("bash", { commands: [{ command: `touch '${marker}'` }] }, ctx);
   assert.equal(batchBash.code, "invalid_arguments");
-  const invalidRead = await registry.dispatch("read_file", { files: [
-    { path: marker }, { path: marker, start_line: 3, end_line: 2 },
-  ] }, ctx);
+  const oldRead = await registry.dispatch("read_file", { files: [{ path: marker }] }, ctx);
+  assert.equal(oldRead.code, "invalid_arguments");
+  assert.match(JSON.stringify(oldRead), /read_file reads one file: .*call read_file once per file/);
+  const invalidRead = await registry.dispatch("read_file", { path: marker, offset: 0 }, ctx);
   assert.equal(invalidRead.code, "invalid_arguments");
+  const invalidEdit = await registry.dispatch("edit_file", { path: marker, old_string: "", new_string: "x" }, ctx);
+  assert.equal(invalidEdit.code, "invalid_arguments");
+  const invalidPatch = await registry.dispatch("apply_patch", { patch: `*** Begin Patch\n*** Add File: ${marker}\n*** End` }, ctx);
+  assert.equal(invalidPatch.code, "invalid_arguments");
   assert.equal(approvals, 0);
   await assert.rejects(access(marker));
 
-  const write = await registry.dispatch("write_file", { operations: [{ path: marker, mode: "overwrite", content: "ok" }] }, { ...ctx, autoApprove: true });
+  const write = await registry.dispatch("write_file", { path: marker, content: "ok" }, { ...ctx, autoApprove: true });
   assert.equal(write.isError, false);
   assert.equal(await readFile(marker, "utf8"), "ok");
-  const read = await registry.dispatch("read_file", { files: [{ path: marker }] }, { ...ctx, autoApprove: true });
+  const read = await registry.dispatch("read_file", { path: marker }, { ...ctx, autoApprove: true });
   assert.equal(read.isError, false);
-  assert.match(JSON.stringify(read), /ok/);
+  assert.match(JSON.stringify(read), /│ok/);
   assert.equal((await registry.dispatch("view_image", { path: marker }, { ...ctx, autoApprove: true })).isError, true);
   const imageArgs = await registry.dispatch("view_image", { path: 3 }, { ...ctx, autoApprove: true });
   assert.equal(imageArgs.code, "invalid_arguments");
@@ -58,12 +64,14 @@ test("registry has only three built-ins and rejects invalid/hidden calls before 
   let approvals = 0;
   const ctx = { cwd, maxOutputBytes: 8192, autoApprove: false, approve: async () => { approvals++; return true; } };
   for (const [name, args] of [
-    ["write_file", { operations: [{ path: marker, mode: "overwrite", content: "bad", extra: 1 }] }],
-    ["write_file", { operations: [{ path: marker, mode: "overwrite", content: 1 }] }],
+    ["write_file", { operations: [{ path: marker, mode: "overwrite", content: "bad" }] }],
+    ["write_file", { path: marker, content: 1 }],
     ["bash", { command: "true", timeout: 0 }],
     ["bash", { command: "" }],
     ["read_file", { "": 0, files: [{ path: marker }] }],
+    ["read_file", { "": 0, path: 3 }],
     ["write_file", { "": 0, operations: [{ path: marker, mode: "overwrite", content: "bad" }] }],
+    ["write_file", { "": 0, path: marker }],
     ["bash", { "": 0, commands: [{ command: "true" }] }],
     ["bash", { "": 0, command: 3 }],
     ["missing", {}],
@@ -74,10 +82,10 @@ test("registry has only three built-ins and rejects invalid/hidden calls before 
   assert.equal(batchCommand.code, "invalid_arguments");
   assert.match(JSON.stringify(batchCommand), /bash takes one command: \{\\"command\\":\\"npm test\\"\}; call bash once per command/);
   assert.equal(approvals, 0);
-  assert.equal((await registry.dispatch("write_file", { operations: [{ mode: "overwrite", path: marker, content: "bad" }] }, { ...ctx, whitelist: [] })).code, "tool_not_exposed");
+  assert.equal((await registry.dispatch("write_file", { path: marker, content: "bad" }, { ...ctx, whitelist: [] })).code, "tool_not_exposed");
   assert.equal(approvals, 0);
-  assert.equal((await registry.dispatch("write_file", { operations: [{ mode: "overwrite", path: marker, content: "bad" }] }, { ...ctx, approve: async () => false })).code, "approval_denied");
-  assert.equal((await registry.dispatch("write_file", { operations: [{ mode: "overwrite", path: marker, content: "bad" }] }, { cwd, maxOutputBytes: 8192, autoApprove: false })).code, "approval_required");
+  assert.equal((await registry.dispatch("write_file", { path: marker, content: "bad" }, { ...ctx, approve: async () => false })).code, "approval_denied");
+  assert.equal((await registry.dispatch("write_file", { path: marker, content: "bad" }, { cwd, maxOutputBytes: 8192, autoApprove: false })).code, "approval_required");
   await assert.rejects(access(marker));
   assert.throws(() => registry.register({ name: "bash", description: "duplicate", inputSchema: { type: "object", properties: {}, additionalProperties: false }, handler: async () => ({ isError: false, content: [] }) }));
   const prototypeArgs = JSON.parse('{"command":"true","__proto__":1}') as unknown;
@@ -101,7 +109,7 @@ test("abort settles an unresolved approval and late approval cannot execute", as
   const abort = new AbortController();
   let allow!: (value: boolean) => void;
   const pending = new Promise<boolean>((resolve) => { allow = resolve; });
-  const run = createTestToolRegistry().dispatch("write_file", { operations: [{ path: marker, mode: "overwrite", content: "bad" }] }, {
+  const run = createTestToolRegistry().dispatch("write_file", { path: marker, content: "bad" }, {
     cwd, maxOutputBytes: 8192, autoApprove: false, signal: abort.signal, approve: () => pending,
   });
   abort.abort();

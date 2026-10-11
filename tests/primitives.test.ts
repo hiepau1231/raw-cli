@@ -8,39 +8,37 @@ import { createTestToolRegistry } from "./fixtures/registry.js";
 
 const context = (cwd: string, maxOutputBytes = 8192) => ({ cwd, maxOutputBytes, autoApprove: true });
 
+const text = (result: { content: Array<{ type: string; text?: string }> }) => result.content.map((block) => block.type === "text" ? block.text : "").join("");
+
 test("files resolve per session, create parents, accept empty content and surface errors", async () => {
   const [a, b] = await Promise.all([mkdtemp(join(tmpdir(), "raw-a-")), mkdtemp(join(tmpdir(), "raw-b-"))]);
   const registry = createTestToolRegistry();
   await Promise.all([
-    registry.dispatch("write_file", { operations: [{ mode: "overwrite", path: "nested/item", content: "alpha" }] }, context(a)),
-    registry.dispatch("write_file", { operations: [{ mode: "overwrite", path: "nested/item", content: "beta" }] }, context(b)),
+    registry.dispatch("write_file", { path: "nested/item", content: "alpha" }, context(a)),
+    registry.dispatch("write_file", { path: "nested/item", content: "beta" }, context(b)),
   ]);
   assert.equal(await readFile(join(a, "nested/item"), "utf8"), "alpha");
   assert.equal(await readFile(join(b, "nested/item"), "utf8"), "beta");
-  const empty = await registry.dispatch("write_file", { operations: [{ mode: "overwrite", path: join(a, "empty"), content: "" }] }, context(b));
+  const empty = await registry.dispatch("write_file", { path: join(a, "empty"), content: "" }, context(b));
   assert.equal(empty.isError, false);
   assert.equal(await readFile(join(a, "empty"), "utf8"), "");
-  const read = await registry.dispatch("read_file", { files: [{ path: "nested/item" }] }, context(b));
-  assert.equal(read.content[0]?.type, "json");
-  assert.equal(read.content[0]?.type === "json"
-    ? (read.content[0].value as { results: Array<{ text: string }> }).results[0]?.text : "", "beta");
-  assert.equal((await registry.dispatch("read_file", { files: [{ path: "missing" }] }, context(a))).isError, true);
-  assert.equal((await registry.dispatch("read_file", { files: [{ path: a }] }, context(a))).isError, true);
-  await writeFile(join(a, "utf8"), "😀😀");
-  const bounded = await registry.dispatch("read_file", { files: [{ path: "utf8", max_bytes: 4 }] }, context(a));
-  assert.equal(bounded.content[0]?.type === "json"
-    ? (bounded.content[0].value as { results: Array<{ status: string }> }).results[0]?.status : "", "line_too_large");
-  await writeFile(join(a, "replacement"), "�x");
-  const replacement = await registry.dispatch("read_file", { files: [{ path: "replacement" }] }, context(a));
-  assert.equal(replacement.content[0]?.type === "json"
-    ? (replacement.content[0].value as { results: Array<{ text: string }> }).results[0]?.text : "", "�x");
+  const read = await registry.dispatch("read_file", { path: "nested/item" }, context(b));
+  assert.equal(read.content[0]?.type, "text");
+  assert.equal(text(read), "   1│beta\n[lines 1–1 of 1; end of file]");
+  assert.equal((await registry.dispatch("read_file", { path: "missing" }, context(a))).isError, true);
+  assert.equal((await registry.dispatch("read_file", { path: a }, context(a))).isError, true);
+  await writeFile(join(a, "utf8"), "😀".repeat(20));
+  // A line longer than the output budget is cut on a character boundary and names the next offset.
+  const bounded = await registry.dispatch("read_file", { path: "utf8" }, context(a, 240));
+  assert.match(text(bounded), /^   1│(😀)+ …\[line cut\]\n\[line 1 of 1 cut at the output budget \(80 bytes\); next: offset 2\]$/);
+  assert.ok(!text(bounded).includes("\uFFFD"));
+  await writeFile(join(a, "replacement"), "\uFFFDx");
+  const replacement = await registry.dispatch("read_file", { path: "replacement" }, context(a));
+  assert.equal(text(replacement).split("\n")[0], "   1│\uFFFDx");
   await writeFile(join(a, "bom"), "\uFEFFabc");
-  const bom = await registry.dispatch("read_file", { files: [{ path: "bom" }] }, context(a));
-  assert.equal(bom.content[0]?.type === "json"
-    ? (bom.content[0].value as { results: Array<{ text: string }> }).results[0]?.text : "", "\uFEFFabc");
+  const bom = await registry.dispatch("read_file", { path: "bom" }, context(a));
+  assert.equal(text(bom).split("\n")[0], "   1│\uFEFFabc");
 });
-
-const text = (result: { content: Array<{ type: string; text?: string }> }) => result.content.map((block) => block.type === "text" ? block.text : "").join("");
 
 test("bash preserves output channels, exit status and bounded UTF-8 while draining large pipes", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "raw-bash-"));

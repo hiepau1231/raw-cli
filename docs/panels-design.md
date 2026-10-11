@@ -315,10 +315,11 @@ For artifacts and files touched.
 
 ```jsonc
 { "id": "touched", "kind": "files",
-  "entries": [ { "path": "src/api.ts", "status": "modified", "line": 42, "label": "handler" } ] }
+  "entries": [ { "path": "src/api.ts", "status": "modified", "line": 42, "label": "handler",
+                 "added": 3, "removed": 1, "diff": "@@ -40,3 +40,5 @@\n…" } ] }
 ```
 
-- **Fields.** `status` is `added` | `modified` | `deleted` | `referenced`. At most 200 entries.
+- **Fields.** `status` is `added` | `modified` | `deleted` | `referenced`. Optional `added` and `removed` are line counts (integers ≥ 0); optional `diff` is a unified diff of the entry's latest change, bounded by the document limit. At most 200 entries.
 - **Dashboard.** A list of shortened paths with a status letter (A, M, D, R). Clicking an entry inserts `@path` (§6).
 
 Diffs are shown as a `markdown` block with a fenced `diff` code block. There is no separate diff widget in `raw.panel/2`.
@@ -389,7 +390,9 @@ A `_raw/tool/call` response may include `{type:"panel", …}` items in `content`
 
 ### 8.5 Host-originated updates
 
-Only the owning tool writes a panel. The host itself changes only lifecycle flags (`stale`, §12). The model has no direct panel tool. It changes panels only by calling the owning tool.
+Only the owning tool writes a panel. The host itself changes only lifecycle flags (`stale`, §12).
+
+The one exception is a **shared host owner** for bundled tools. The bundled editing tools (`builtin/write_file`, `builtin/edit_file`, `builtin/apply_patch`) all write the single panel `host/files_changed#files_changed`: the loader registers them with the panel owner `host/files_changed`, so whichever of them runs updates the same document. No other tool can claim a host owner; a local or package copy of an editing tool keeps its own canonical identity and panels. The panel is stale only when none of the sharing tools is selected. The model has no direct panel tool. It changes panels only by calling the owning tool.
 
 ## 9. Update operations and revisions
 
@@ -887,10 +890,10 @@ The form supports stable field IDs, text, single select and multi select. Host a
 
 Each Form control owns its draft, pending submission and acknowledgement for one request ID. Advancing a sidebar to another question remounts those controls; a late acknowledgement or error from the earlier request cannot change the new question. A durable pending sidebar request supplies its render document independently of ordinary panel state, including when another host published it. This projection does not commit provisional panel data.
 
-### Files changed (write_file)
+### Files changed (shared by the editing tools)
 
-`builtin/write_file#files_changed` is a sidebar view of successful tool writes in this session. It is not Git status and does not observe Bash or external edits. Operations and patch mode publish only completed changes, including successes before a later failure or cancellation. Publication failure must never change a successful filesystem result to a failed write.
+`host/files_changed#files_changed` is a sidebar view of successful writes, edits and patches by the bundled editing tools in this session (§8.5). It is not Git status and does not observe Bash or external edits. Sessions recorded with the earlier `builtin/write_file#files_changed` panel keep it as stale history; it is not migrated. Each tool publishes only completed changes, including successes before a later failure or cancellation. Publication failure must never change a successful filesystem result to a failed write.
 
-Paths are absolute lexical normalizations against session cwd, deduplicated across committed calls. Rewriting a file added during this retained session history keeps its added status; a subsequent delete is deleted. Rename entries name both old and new paths. The latest 200 paths are retained; the omitted counter counts evicted history entries (a previously evicted path seen again may count again), not unseen workspace files. The panel persists with tool results and survives reload, including completed writes in cancelled batches. Bounded recent before/after diff previews identify truncation explicitly; they are not full-file snapshots or a revert facility.
+Paths are absolute lexical normalizations against session cwd, deduplicated across committed calls. Rewriting a file added during this retained session history keeps its added status; a subsequent delete is deleted. Rename entries name both old and new paths. The latest 200 paths are retained; the omitted counter counts evicted history entries (a previously evicted path seen again may count again), not unseen workspace files. The panel persists with tool results and survives reload, including completed files of a cancelled patch. Each entry carries `added` and `removed` line counts accumulated over the session's writes to that path, and the diff of its latest change (at most 8 KiB); counts come from the complete content, not the bounded preview, and are omitted for binary content or when a side could not be read in full; once one write to a path has unknown counts, that path keeps no total. Bounded recent before/after diff previews identify truncation explicitly; they are not full-file snapshots or a revert facility.
 
-Diff observation for ordinary operations is best-effort: inspect only regular files with nonblocking reads, retain up to 8 MiB of each side (a larger file is reported by size only), and display unified hunks of the changed regions with three lines of context, at most 6 KiB per write; binary content is reported by size. Unreadable snapshots say “diff unavailable”; they do not prevent writing write-only files. Paths unsupported by the Files block (more than 500 characters or control characters) count as omitted rather than being shortened into a different path. Recent previews are retained within a 12 KiB Markdown budget; older file entries may also be evicted to fit the overall 64 KiB document limit.
+Diff observation for `write_file` and `edit_file` is best-effort: inspect only regular files with nonblocking reads, retain up to 8 MiB of each side (a larger file is reported by size only), and display unified hunks of the changed regions with three lines of context, at most 6 KiB per write; binary content is reported by size. Unreadable snapshots say “diff unavailable”; they do not prevent writing write-only files. Paths unsupported by the Files block (more than 500 characters or control characters) count as omitted rather than being shortened into a different path. Recent previews are retained within a 12 KiB Markdown budget. To fit the overall 64 KiB document limit, older entries lose their diff first; only then are the oldest entries evicted.

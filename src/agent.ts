@@ -1,4 +1,5 @@
 import type { ProcessSupervisor } from "./processes/supervisor.js";
+import { FILES_CHANGED_OWNER } from "./tools/write-changes.js";
 import { InteractionError, type InteractionContext, type InteractionAdapter } from "./interactions/contract.js";
 import { InteractionService } from "./interactions/service.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./llm/prompt.js";
@@ -1207,8 +1208,8 @@ export class AgentSession {
       let result = dispatchedResult;
       let panelWrites: PanelWrites | undefined;
       let panelRecords: VisibleRecord[] = [];
-      const preserveCompletedWrites = this.toolIdentity(call.name) === "builtin/write_file" && completedWriteCalls.has(call.id)
-        && this.options.registry.panelDeclarations(call.name)?.declarations.every(panel => panel.id === "files_changed");
+      const preserveCompletedWrites = completedWriteCalls.has(call.id)
+        && this.options.registry.panelDeclarations(call.name)?.owner === FILES_CHANGED_OWNER;
       if (panelCall && controller.signal.aborted && !preserveCompletedWrites) panelCall.rollback();
       else if (panelCall) {
         // Ends the handler's panel window, applies result-block updates and prepares the atomic commit (panels-design §8.0, §10).
@@ -1453,7 +1454,7 @@ export class AgentSession {
               ...(this.options.whitelist !== undefined ? { whitelist: this.options.whitelist } : {}),
               signal: controller.signal,
               toolCallId: call.id,
-              ...(this.toolIdentity(call.name) === "builtin/write_file" ? { onWriteCompleted: () => { completedWriteCalls.add(call.id); } } : {}),
+              ...(this.options.registry.panelDeclarations(call.name)?.owner === FILES_CHANGED_OWNER ? { onWriteCompleted: () => { completedWriteCalls.add(call.id); } } : {}),
               ...(this.options.processes ? { processes: this.options.processes.forSession(this.persistence?.sessionId ?? this.processSessionId), commandActivity: this.options.processes.commands.forSession(this.persistence?.sessionId ?? this.processSessionId) } : {}),
               interactions: this.interactionContext(call.id, panelInfo?.owner ?? call.name, panelCall, controller.signal),
               onHandlerSettled: () => this.settleHandler(call.id, panelCall),

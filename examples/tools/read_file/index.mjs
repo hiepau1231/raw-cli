@@ -24,21 +24,28 @@ var SPILL_PATH_RESERVE = tmpdir().length + 96;
 // src/tools/results.ts
 var DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 var HOST_CONTENT_BYTES = 1024 * 1024;
+function utf8Prefix(value, limit) {
+  let text = "";
+  let bytes = 0;
+  for (const scalar of value) {
+    const size = Buffer.byteLength(scalar);
+    if (bytes + size > limit) return { text, bytes, truncated: true };
+    text += scalar;
+    bytes += size;
+  }
+  return { text, bytes, truncated: false };
+}
 function errorResult(code, message) {
   return { isError: true, code, content: [{ type: "text", text: message }] };
-}
-function indexedResultFits(results, maxOutputBytes) {
-  return Buffer.byteLength(JSON.stringify({ results }), "utf8") <= maxOutputBytes;
-}
-function indexedResult(results, maxOutputBytes, isError) {
-  if (!indexedResultFits(results, maxOutputBytes)) return errorResult("output_budget_too_small", "batch status exceeds output budget");
-  return { isError, content: [{ type: "json", value: { results } }] };
 }
 
 // src/tools/file-patch.ts
 var PATCH_BYTES = 1024 * 1024;
 var SOURCE_BYTES = 16 * 1024 * 1024;
 var STAGED_BYTES = 64 * 1024 * 1024;
+
+// src/tools/write-changes.ts
+import { isAbsolute, relative as relative2 } from "path";
 
 // src/panels/contract.ts
 var PANEL_LIMITS = {
@@ -60,11 +67,16 @@ var PANEL_LIMITS = {
 };
 
 // src/tools/write-changes.ts
+var HOST_DIFF_BYTES = 64 * 1024;
+var ENTRY_DIFF_BYTES = 8 * 1024;
 var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
+function displayPath(path, cwd) {
+  const inside = relative2(cwd, path);
+  return inside && !inside.startsWith("..") && !isAbsolute(inside) ? inside : path;
+}
 
 // src/tools/primitives.ts
-import { open as open2, mkdir as mkdir2, writeFile, readFile, appendFile, stat } from "fs/promises";
-import { createHash as createHash2 } from "crypto";
+import { open as open2, mkdir as mkdir2, writeFile, readFile, stat } from "fs/promises";
 import { dirname as dirname2, resolve as resolve2 } from "path";
 
 // src/tools/process.ts
@@ -72,201 +84,157 @@ import { spawn } from "child_process";
 import { StringDecoder } from "string_decoder";
 
 // src/tools/primitives.ts
-function selectedHash(bytes) {
-  return createHash2("sha256").update(bytes).digest("hex");
-}
+var READ_DEFAULT_LIMIT = 2e3;
+var READ_FOOTER_RESERVE = 200;
+var errorCode = (error, fallback) => {
+  const code = error?.code;
+  return typeof code === "string" && /^[A-Za-z0-9_]+$/.test(code) ? code : fallback;
+};
 async function readFileTool(args, context) {
-  const rows = args.files.map((file, index) => ({ index, path: file.path, status: "budget_exhausted" }));
-  if (!indexedResultFits(rows, context.maxOutputBytes)) return errorResult("output_budget_too_small", "read batch status exceeds output budget");
-  const reserve = (index) => ({ index, path: args.files[index].path, status: "error", error: "x".repeat(160) });
-  if (!indexedResultFits(rows.map((row, index) => index ? reserve(index) : row), context.maxOutputBytes)) {
-    return errorResult("output_budget_too_small", "read batch outcomes exceed output budget");
+  const path = resolve2(context.cwd, args.path);
+  const shown = displayPath(path, context.cwd);
+  const offset = args.offset ?? 1;
+  const last = args.limit === void 0 ? offset + READ_DEFAULT_LIMIT - 1 : offset + args.limit - 1;
+  const budget = context.maxOutputBytes - READ_FOOTER_RESERVE;
+  if (budget < 32) return errorResult("output_budget_too_small", "read_file needs room for at least one line and its footer");
+  const failed = (code, message) => ({ ...errorResult(code, message), host: { summary: shown, status: "error", path: shown } });
+  let handle;
+  try {
+    handle = await open2(path, "r");
+  } catch (error) {
+    const code = errorCode(error, "file_error");
+    return failed(code, code === "ENOENT" ? `${shown} does not exist` : `cannot read ${shown}: ${code}`);
   }
-  const put = (index, candidate) => {
-    const copy = [...rows];
-    copy[index] = candidate;
-    if (!indexedResultFits(copy.map((row, at) => at > index ? reserve(at) : row), context.maxOutputBytes)) return false;
-    rows[index] = candidate;
-    return true;
-  };
-  const itemFits = (file, candidate) => file.max_bytes === void 0 || Buffer.byteLength(JSON.stringify(candidate), "utf8") <= file.max_bytes;
-  for (const [index, file] of args.files.entries()) {
-    if (context.signal?.aborted) {
-      put(index, { index, path: file.path, status: "skipped", error: "aborted" });
-      continue;
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) return failed("not_a_file", `${shown} is not a regular file`);
+    const probe = Buffer.alloc(Math.min(info.size, 8192));
+    await handle.read(probe, 0, probe.length, 0);
+    if (probe.includes(0)) {
+      return { isError: false, content: [{ type: "text", text: `[binary file: ${info.size} bytes; not shown]` }], host: { summary: shown, status: "ok", path: shown } };
     }
-    const path = resolve2(context.cwd, file.path);
-    try {
-      const handle = await open2(path, "r");
-      try {
-        const stat2 = await handle.stat();
-        if (!stat2.isFile()) {
-          put(index, { index, path: file.path, status: "error", error: "not a regular file" });
-          continue;
-        }
-        const ranged = file.start_line !== void 0 || file.end_line !== void 0 || file.max_lines !== void 0;
-        if (!ranged && stat2.size <= Math.min(file.max_bytes ?? Infinity, context.maxOutputBytes)) {
-          const buffer = Buffer.alloc(stat2.size + 1);
-          const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-          if (bytesRead === stat2.size) {
-            const selected2 = buffer.subarray(0, bytesRead);
-            const count = bytesRead === 0 ? 0 : selected2.reduce((sum, byte) => sum + (byte === 10 ? 1 : 0), 0) + (selected2[bytesRead - 1] === 10 ? 0 : 1);
-            const candidate2 = {
-              index,
-              path: file.path,
-              status: "ok",
-              text: selected2.toString("utf8"),
-              start_line: count ? 1 : 0,
-              end_line: count,
-              eof: true,
-              sha256: selectedHash(selected2)
-            };
-            if (itemFits(file, candidate2) && put(index, candidate2)) continue;
-          }
-        }
-        const start = file.start_line ?? 1;
-        const requestedEnd = file.end_line ?? (file.max_lines !== void 0 ? start + file.max_lines - 1 : Infinity);
-        const itemByteLimit = Math.min(file.max_bytes ?? Infinity, context.maxOutputBytes);
-        const accepted = [];
-        let acceptedBytes = 0;
-        let deferred = [];
-        let deferredBytes = 0;
-        let actualEnd = start - 1;
-        let currentLine = 1;
-        let position = 0;
-        let pending = [];
-        let pendingBytes = 0;
-        let stopped = false;
-        let budgetStop = false;
-        let reachedEof = false;
-        const acceptLine = (line) => {
-          const raw = Buffer.concat(pending, pendingBytes);
-          pending = [];
-          pendingBytes = 0;
-          const nextBytes = Buffer.concat([...accepted, ...deferred, raw], acceptedBytes + deferredBytes + raw.length);
-          const complete = line >= requestedEnd || position === stat2.size;
-          const candidate2 = {
-            index,
-            path: file.path,
-            status: complete ? "ok" : "partial",
-            text: nextBytes.toString("utf8"),
-            start_line: start,
-            end_line: line,
-            eof: position === stat2.size,
-            ...!complete ? { next_line: line + 1 } : {},
-            sha256: selectedHash(nextBytes)
-          };
-          if (nextBytes.length > itemByteLimit) {
-            budgetStop = true;
-            stopped = true;
-            return false;
-          }
-          const fits = itemFits(file, candidate2) && indexedResultFits(rows.map((row, at) => at === index ? candidate2 : at > index ? reserve(at) : row), context.maxOutputBytes);
-          if (fits) {
-            accepted.push(...deferred, raw);
-            acceptedBytes += deferredBytes + raw.length;
-            deferred = [];
-            deferredBytes = 0;
-            actualEnd = line;
-          } else if (complete) {
-            budgetStop = true;
-            stopped = true;
-            return false;
-          } else {
-            deferred.push(raw);
-            deferredBytes += raw.length;
-          }
-          return true;
-        };
-        const stream = handle.createReadStream({ autoClose: false, highWaterMark: 64 * 1024 });
-        scan: for await (const rawChunk of stream) {
-          const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-          let cursor = 0;
-          while (cursor < chunk.length) {
-            const newline = chunk.indexOf(10, cursor);
-            const end = newline < 0 ? chunk.length : newline + 1;
-            const segment = chunk.subarray(cursor, end);
-            position += segment.length;
-            if (currentLine >= start) {
-              pending.push(segment);
-              pendingBytes += segment.length;
-              if (acceptedBytes + deferredBytes + pendingBytes > itemByteLimit || acceptedBytes + deferredBytes + pendingBytes > context.maxOutputBytes) {
-                budgetStop = true;
-                stopped = true;
-                break scan;
-              }
-            }
-            cursor = end;
-            if (newline < 0) continue;
-            if (currentLine >= start && !acceptLine(currentLine)) break scan;
-            if (currentLine >= requestedEnd) {
-              reachedEof = position === stat2.size;
-              stopped = true;
-              break scan;
-            }
-            currentLine++;
-          }
-        }
-        if (!stopped) {
-          if (pendingBytes > 0 && currentLine >= start) acceptLine(currentLine);
-          reachedEof = !budgetStop;
-        }
-        const selected = Buffer.concat(accepted, acceptedBytes);
-        const candidate = budgetStop || deferredBytes ? {
-          index,
-          path: file.path,
-          status: acceptedBytes ? "partial" : "line_too_large",
-          text: selected.toString("utf8"),
-          start_line: start,
-          end_line: actualEnd,
-          eof: false,
-          next_line: actualEnd + 1,
-          ...acceptedBytes ? { sha256: selectedHash(selected) } : {}
-        } : {
-          index,
-          path: file.path,
-          status: "ok",
-          text: selected.toString("utf8"),
-          start_line: start,
-          end_line: actualEnd,
-          eof: reachedEof,
-          sha256: selectedHash(selected)
-        };
-        if (!itemFits(file, candidate) && candidate.status === "ok") {
-          put(index, { index, path: file.path, status: "budget_exhausted" });
-        } else {
-          put(index, candidate);
-        }
-      } finally {
-        await handle.close();
+    const width = Math.max(4, String(Math.min(last, offset + info.size)).length);
+    const lines = [];
+    let used = 0;
+    let total = 0;
+    let stopped = false;
+    let cut;
+    let pending = [];
+    let kept = 0;
+    let lineBytes = 0;
+    const keep = budget + 4;
+    const take = (line, raw, bytes) => {
+      if (stopped || line < offset || line > last) return;
+      const text = raw.toString("utf8").replace(/\r$/, "");
+      const rendered = `${String(line).padStart(width)}\u2502${text}
+`;
+      const size = Buffer.byteLength(rendered);
+      if (used + size <= budget) {
+        lines.push(rendered);
+        used += size;
+        return;
       }
-    } catch (error) {
-      const code = error.code;
-      put(index, { index, path: file.path, status: "error", error: typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "file_error" });
+      stopped = true;
+      if (lines.length) return;
+      const marker = " \u2026[line cut]\n";
+      const prefix = utf8Prefix(rendered, budget - Buffer.byteLength(marker)).text;
+      lines.push(prefix + marker);
+      cut = { line, bytes };
+    };
+    for await (const rawChunk of handle.createReadStream({ autoClose: false, highWaterMark: 64 * 1024 })) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      let cursor = 0;
+      while (cursor < chunk.length) {
+        const newline = chunk.indexOf(10, cursor);
+        const end2 = newline < 0 ? chunk.length : newline + 1;
+        const line = total + 1;
+        if (line >= offset && line <= last && !stopped) {
+          const part = chunk.subarray(cursor, newline < 0 ? end2 : newline);
+          lineBytes += part.length;
+          if (kept < keep) {
+            pending.push(part.subarray(0, keep - kept));
+            kept += Math.min(part.length, keep - kept);
+          }
+        }
+        cursor = end2;
+        if (newline < 0) continue;
+        total++;
+        take(line, Buffer.concat(pending), lineBytes);
+        pending = [];
+        kept = 0;
+        lineBytes = 0;
+      }
     }
+    if (pending.length || info.size && probe.length && !await lastByteIsNewline(handle, info.size)) {
+      total++;
+      take(total, Buffer.concat(pending), lineBytes);
+    }
+    const end = offset + lines.length - 1;
+    const footer = total === 0 ? "[empty file]" : offset > total ? `[offset ${offset} is past the end: ${shown} has ${total} lines]` : cut ? `[line ${cut.line} of ${total} cut at the output budget (${cut.bytes} bytes); next: offset ${cut.line + 1}]` : end >= total ? `[lines ${offset}\u2013${end} of ${total}; end of file]` : `[lines ${offset}\u2013${end} of ${total}; next: offset ${end + 1}]`;
+    return {
+      isError: false,
+      content: [{ type: "text", text: lines.join("") + footer }],
+      host: { summary: shown, status: "ok", path: shown, ...total && offset <= total ? { range: { start: offset, end, total } } : {} }
+    };
+  } catch (error) {
+    return failed(errorCode(error, "file_error"), `cannot read ${shown}: ${errorCode(error, "file_error")}`);
+  } finally {
+    await handle.close();
   }
-  return indexedResult(rows, context.maxOutputBytes, rows.some((row) => !["ok", "partial"].includes(row.status)));
+}
+async function lastByteIsNewline(handle, size) {
+  const byte = Buffer.alloc(1);
+  await handle.read(byte, 0, 1, size - 1);
+  return byte[0] === 10;
 }
 
+// src/tools/normalize.ts
+function renameArgument(args, notes, from, to, convert = (value) => value) {
+  if (!Object.hasOwn(args, from) || args[to] !== void 0) return;
+  args[to] = convert(args[from]);
+  delete args[from];
+  notes.push(`read ${from} as ${to}`);
+}
+var integerArgument = (value) => typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
+var PATH_ALIASES = ["file_path", "filePath", "absolute_path"];
+
 // src/tools/bundled/read_file/index.ts
+var example = { path: "src/app.ts", offset: 120, limit: 80 };
+var renamedArguments = { files: "path" };
+var TO_END = 2147483647;
+var BATCH = 'read_file reads one file: {"path":"src/app.ts","offset":120,"limit":80}; call read_file once per file';
+function normalizeArguments(input) {
+  if (Object.hasOwn(input, "files")) return { args: input, rejected: BATCH };
+  const args = { ...input };
+  const notes = [];
+  for (const alias of PATH_ALIASES) renameArgument(args, notes, alias, "path");
+  for (const key of ["offset", "limit", "start_line", "end_line", "max_lines", "lines"]) if (Object.hasOwn(args, key)) args[key] = integerArgument(args[key]);
+  if (Array.isArray(args.view_range) && args.offset === void 0 && args.limit === void 0) {
+    const [first, last] = args.view_range.map(integerArgument);
+    if (typeof first === "number") {
+      args.offset = first;
+      if (typeof last === "number") args.limit = last === -1 ? TO_END : last - first + 1;
+      delete args.view_range;
+      notes.push("read view_range as offset and limit");
+    }
+  }
+  renameArgument(args, notes, "start_line", "offset");
+  if (typeof args.end_line === "number" && args.limit === void 0) {
+    args.limit = args.end_line === -1 ? TO_END : args.end_line - (typeof args.offset === "number" ? args.offset : 1) + 1;
+    delete args.end_line;
+    notes.push("read end_line as limit");
+  }
+  renameArgument(args, notes, "max_lines", "limit");
+  renameArgument(args, notes, "lines", "limit");
+  return { args, notes };
+}
 function validateArgs(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "arguments must be an object";
   const args = value;
-  const unexpected = Object.keys(args).find((key) => key !== "files");
-  if (unexpected !== void 0) return `unknown read_file property ${JSON.stringify(unexpected)}; use {"files":[{"path":"..."}]}`;
-  if (!Array.isArray(args.files) || args.files.length < 1 || args.files.length > 16) return "files must contain 1 to 16 entries";
-  for (const [index, raw] of args.files.entries()) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return `files[${index}] must be an object`;
-    const file = raw;
-    if (Object.keys(file).some((key) => !["path", "start_line", "end_line", "max_lines", "max_bytes"].includes(key))) return `files[${index}] has an unknown property`;
-    if (typeof file.path !== "string" || !file.path) return `files[${index}].path must be a nonempty string`;
-    for (const key of ["start_line", "end_line", "max_lines", "max_bytes"]) {
-      if (file[key] !== void 0 && (!Number.isSafeInteger(file[key]) || file[key] < 1 || file[key] > 2147483647)) {
-        return `files[${index}].${key} must be a positive integer`;
-      }
-    }
-    if (file.end_line !== void 0 && file.max_lines !== void 0) return `files[${index}] cannot combine end_line and max_lines`;
-    if (file.end_line !== void 0 && file.end_line < (file.start_line ?? 1)) return `files[${index}].end_line precedes start_line`;
+  if (Object.hasOwn(args, "files")) return BATCH;
+  if (typeof args.path !== "string" || !args.path) return "path must be a nonempty string";
+  for (const key of ["offset", "limit"]) {
+    if (args[key] !== void 0 && (!Number.isSafeInteger(args[key]) || args[key] < 1 || args[key] > 2147483647)) return `${key} must be a positive integer`;
   }
   return void 0;
 }
@@ -274,6 +242,9 @@ async function handler(args, context) {
   return readFileTool(args, context);
 }
 export {
+  example,
   handler,
+  normalizeArguments,
+  renamedArguments,
   validateArgs
 };

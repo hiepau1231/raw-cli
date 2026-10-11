@@ -83,7 +83,7 @@ The following fragment belongs inside `agents.helper`. Append missing IDs to exi
 <!-- example:registration -->
 ```json
 {
-  "tools": { "use": ["builtin/read_file", "builtin/write_file", "builtin/bash", "builtin/list_skills", "builtin/load_skill"] },
+  "tools": { "use": ["builtin/read_file", "builtin/write_file", "builtin/edit_file", "builtin/bash", "builtin/list_skills", "builtin/load_skill"] },
   "skills": { "use": ["agent/release-notes"] }
 }
 ```

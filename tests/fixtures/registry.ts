@@ -3,29 +3,29 @@ import readManifest from "../../src/tools/bundled/read_file/tool.json" with { ty
 import writeManifest from "../../src/tools/bundled/write_file/tool.json" with { type: "json" };
 import bashManifest from "../../src/tools/bundled/bash/tool.json" with { type: "json" };
 import imageManifest from "../../src/tools/bundled/view_image/tool.json" with { type: "json" };
-import { handler as read, validateArgs as validateRead } from "../../src/tools/bundled/read_file/index.js";
-import { handler as write, validateArgs as validateWrite, describeEffects as writeEffects } from "../../src/tools/bundled/write_file/index.js";
-import { handler as bash, validateArgs as validateBash, normalizeArguments as normalizeBash, example as bashExample,
-  renamedArguments as bashRenamed } from "../../src/tools/bundled/bash/index.js";
-import { handler as image, validateArgs as validateImage } from "../../src/tools/bundled/view_image/index.js";
+import * as readModule from "../../src/tools/bundled/read_file/index.js";
+import * as writeModule from "../../src/tools/bundled/write_file/index.js";
+import * as imageModule from "../../src/tools/bundled/view_image/index.js";
+import * as bashModule from "../../src/tools/bundled/bash/index.js";
 
 export { ToolRegistry, BUILTIN_TOOL_DEFINITIONS } from "../../src/tools/registry.js";
 
 export function createTestToolRegistry(rules: readonly ToolPolicyRule[] = [], vision = false): ToolRegistry {
   const registry = new ToolRegistry(rules);
-  const entries: Array<[{ name: string; id: string; description: string; input_schema: unknown },
-    ToolRegistration["handler"], NonNullable<ToolRegistration["validateArgs"]>]> =
-    [[readManifest, read, validateRead], [writeManifest, write, validateWrite],
-      [bashManifest, bash, validateBash]];
-  if (vision) entries.push([imageManifest, image, validateImage]);
-  for (const [manifest, handler, validateArgs] of entries) registry.register({
+  const entries: Array<[{ name: string; id: string; description: string; input_schema: unknown }, Pick<ToolRegistration, "handler" | "validateArgs" | "normalizeArguments">
+    & { example?: Record<string, unknown>; renamedArguments?: Record<string, string> }]> =
+    [[readManifest, readModule], [writeManifest, writeModule], [bashManifest, bashModule]];
+  if (vision) entries.push([imageManifest, imageModule]);
+  // Each bundled tool normalizes the way the production loader forwards it; bash delegation needs the process tool.
+  for (const [manifest, module] of entries) registry.register({
     name: manifest.name, canonicalName: `builtin/${manifest.id}`,
     description: manifest.description, inputSchema: manifest.input_schema as ToolRegistration["inputSchema"],
     ...(manifest.id === "write_file" ? { conditionSources: ["effects"], effectsSchema: writeManifest.effects_schema,
-      describeEffects: writeEffects } : { conditionSources: ["arguments"] }),
-    // Bash normalizes the way the production loader forwards it; background delegation needs the process tool.
-    ...(manifest.id === "bash" ? { normalizeArguments: normalizeBash, example: bashExample, renamedArguments: bashRenamed } : {}),
-    handler, validateArgs,
+      describeEffects: writeModule.describeEffects } : { conditionSources: ["arguments"] }),
+    ...(module.normalizeArguments ? { normalizeArguments: module.normalizeArguments } : {}),
+    ...(module.example ? { example: module.example } : {}),
+    ...(module.renamedArguments ? { renamedArguments: module.renamedArguments } : {}),
+    handler: module.handler, validateArgs: module.validateArgs!,
   });
   return registry;
 }

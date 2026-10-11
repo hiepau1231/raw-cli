@@ -32,28 +32,35 @@ export interface VisibleToolResult {
 
 const PREVIEW_CHARS = 2000;
 const PREVIEW_LINES = 9;
-const builtins = new Set(["builtin/read_file", "builtin/write_file"]);
+
+
+/** The first string among a canonical argument name and the aliases other harnesses send (src/tools/normalize.ts). */
+const pick = (args: Record<string, unknown>, names: readonly string[]) => names.map(name => args[name]).find(value => typeof value === "string") as string | undefined;
+const PATH_NAMES = ["path", "file_path", "filePath", "absolute_path"];
 
 export function projectToolCall(name: string, identity: string | undefined, args: Record<string, unknown>, started: boolean): VisibleToolCall {
+  // File contents never enter the visible record: only paths and sizes. Arguments may still carry aliases, and any other
+  // shape (an old batch, a typo) shows only its keys so a rejected call cannot print its payload.
+  const bytes = (value: string | undefined) => value === undefined ? undefined : Buffer.byteLength(value, "utf8");
+  const path = pick(args, PATH_NAMES);
   if (identity === "builtin/write_file") {
-    if (typeof args.patch === "string") {
+    const content = pick(args, ["content", "file_text", "text", "contents"]);
+    if (content !== undefined) return { name, identity, started, arguments: { path, content_bytes: bytes(content) } };
+  } else if (identity === "builtin/edit_file") {
+    const oldString = pick(args, ["old_string", "old_str", "oldString", "old_text"]);
+    const newString = pick(args, ["new_string", "new_str", "newString", "new_text"]);
+    const all = [args.replace_all, args.replaceAll, args.allow_multiple].find(value => typeof value === "boolean");
+    if (oldString !== undefined || newString !== undefined) return { name, identity, started, arguments: { path,
+      old_string_bytes: bytes(oldString), new_string_bytes: bytes(newString), ...(all !== undefined ? { replace_all: all } : {}) } };
+  } else if (identity === "builtin/apply_patch") {
+    const patch = pick(args, ["patch", "input"]);
+    if (patch !== undefined) {
       let paths: string[] = [];
-      try { paths = parseFilePatch(args.patch, "/").changes.map(change => change.rawDestination ? `${change.rawPath} → ${change.rawDestination}` : change.rawPath); } catch { /* invalid patch still gets a content-free summary */ }
-      return { name, identity, started, arguments: { patch_bytes: Buffer.byteLength(args.patch), patch_paths: paths } };
+      try { paths = parseFilePatch(patch, "/").changes.map(change => change.rawDestination ? `${change.rawPath} → ${change.rawDestination}` : change.rawPath); } catch { /* invalid patch still gets a content-free summary */ }
+      return { name, identity, started, arguments: { patch_bytes: Buffer.byteLength(patch), patch_paths: paths } };
     }
-    if (!Array.isArray(args.operations)) return { name, identity, started, arguments: { argument_keys: Object.keys(args) } };
-    return { name, identity, started, arguments: { operations: args.operations.map((value: unknown) => {
-      const op = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-      return { path: op.path, mode: op.mode,
-        ...(typeof op.content === "string" ? { content_bytes: Buffer.byteLength(op.content, "utf8") } : {}),
-        ...(typeof op.old_text === "string" ? { old_text_bytes: Buffer.byteLength(op.old_text, "utf8") } : {}),
-        ...(typeof op.new_text === "string" ? { new_text_bytes: Buffer.byteLength(op.new_text, "utf8") } : {}),
-        ...(op.start_line !== undefined ? { start_line: op.start_line } : {}),
-        ...(op.end_line !== undefined ? { end_line: op.end_line } : {}),
-      };
-    }) } };
-  }
-  return { name, ...(identity ? { identity } : {}), started, arguments: structuredClone(args) };
+  } else return { name, ...(identity ? { identity } : {}), started, arguments: structuredClone(args) };
+  return { name, identity, started, arguments: { argument_keys: Object.keys(args) } };
 }
 
 function bounded(lines: PreviewSegment[]): PreviewSegment[] {
@@ -95,7 +102,16 @@ function addLines(lines: PreviewSegment[], kind: PreviewSegment["kind"], value: 
 export function projectToolResult(name: string, identity: string | undefined, result: ToolResult, durationMs?: number): VisibleToolResult {
   const rows: VisibleBatchRow[] = [];
   const lines: PreviewSegment[] = [];
+  // A read window stays path-tagged code for highlighting: gutter lines become code, the range footer stays text.
+  const readPath = identity === "builtin/read_file" && !result.isError ? result.host?.path : undefined;
   for (const block of result.content) {
+    if (block.type === "text" && readPath) {
+      for (const line of block.text.replace(/\n+$/, "").split("\n")) {
+        const gutter = /^ *\d+│(.*)$/.exec(line);
+        lines.push(gutter ? { kind: "code", text: gutter[1]!.replace(/\r$/, ""), path: readPath } : { kind: "text", text: line });
+      }
+      continue;
+    }
     if (block.type === "text") {
       addLines(lines, "text", block.channel ? `[${block.channel}]\n${block.text}` : block.text);
       continue;
@@ -104,23 +120,7 @@ export function projectToolResult(name: string, identity: string | undefined, re
       addLines(lines, "image", `[${block.mimeType} image, ${block.byteSize ?? Buffer.from(block.data, "base64").length} bytes]`);
       continue;
     }
-    const value = block.value;
-    const batch = builtins.has(identity ?? "") && value && typeof value === "object" && !Array.isArray(value)
-      && Array.isArray((value as { results?: unknown }).results)
-      ? (value as { results: unknown[] }).results : undefined;
-    if (batch && batch.length <= 16 && batch.every((item) => item && typeof item === "object" && !Array.isArray(item)
-      && Number.isSafeInteger((item as Record<string, unknown>).index) && typeof (item as Record<string, unknown>).status === "string")) {
-      for (const item of batch) {
-        const row = item as Record<string, unknown>;
-        rows.push({ index: row.index as number, status: row.status as string,
-          ...(typeof row.exit_code === "number" ? { exitCode: row.exit_code } : {}),
-          ...(typeof row.path === "string" ? { path: row.path } : {}) });
-        if (identity === "builtin/read_file" && typeof row.path === "string" && typeof row.text === "string") {
-          addLines(lines, "text", `${row.index}:${row.status} ${row.path}`);
-          addLines(lines, "code", row.text, row.path);
-        } else addLines(lines, "json", JSON.stringify(row));
-      }
-    } else addLines(lines, "json", JSON.stringify(value));
+    addLines(lines, "json", JSON.stringify(block.value));
   }
   const exitCode = result.exitCode ?? result.host?.exitCode;
   return { name, ...(identity ? { identity } : {}), failed: result.isError

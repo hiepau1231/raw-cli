@@ -21,20 +21,27 @@ async function raw(args: string[], cwd: string, env: NodeJS.ProcessEnv) {
   return { code, stdout, stderr };
 }
 
-test("read batches retain source paths and code text while every row status survives preview truncation", () => {
-  const results = Array.from({ length: 16 }, (_, index) => ({ index, path: `src/${index}.ts`,
-    status: index === 15 ? "error" : "ok", text: `const value${index} = ${index};\n`.repeat(50),
-    ...(index === 15 ? { error: "last row failed" } : {}) }));
-  const projected = projectToolResult("read_file", "builtin/read_file", {
-    isError: true, content: [{ type: "json", value: { results } }],
-  }, 23);
-  assert.equal(projected.rows.length, 16);
-  assert.equal(projected.rows[15]?.status, "error");
-  assert.ok(projected.segments.some((segment) => segment.kind === "code" && segment.path?.endsWith(".ts")));
-  assert.ok(projected.segments.reduce((count, segment) => count + [...segment.text].length, 0) <= 2000);
-  assert.ok(projected.segments.length <= 9);
-  assert.equal(projected.durationMs, 23);
-  assert.match(renderPlainToolResult(projected), /15:error/);
+test("long read results keep both ends within the preview bounds, failed or not", () => {
+  const body = Array.from({ length: 800 }, (_, index) => `${String(index + 1).padStart(4)}│const value${index} = ${index};`).join("\n");
+  for (const isError of [false, true]) {
+    const projected = projectToolResult("read_file", "builtin/read_file", {
+      isError, content: [{ type: "text", text: `${body}\n[lines 1–800 of 900; next: offset 801]` }],
+      host: { path: "src/a.ts", range: { start: 1, end: 800, total: 900 } },
+    }, 23);
+    assert.equal(projected.failed, isError);
+    assert.deepEqual(projected.rows, []);
+    assert.ok(projected.segments.reduce((count, segment) => count + [...segment.text].length, 0) <= 2000);
+    assert.ok(projected.segments.length <= 9);
+    assert.equal(projected.durationMs, 23);
+    assert.deepEqual(projected.host?.range, { start: 1, end: 800, total: 900 });
+    const plain = renderPlainToolResult(projected);
+    // A successful window is path-tagged code without the gutter; an error result stays plain text.
+    assert.match(plain, isError ? /^   1│const value0 = 0;/ : /^const value0 = 0;/);
+    if (!isError) assert.ok(projected.segments.filter(segment => segment.kind === "code").every(segment => segment.path === "src/a.ts"));
+    assert.equal(projected.segments.at(-1)?.kind, "text");
+    assert.match(plain, /\[lines 1–800 of 900; next: offset 801\]$/);
+    assert.match(plain, /hidden/);
+  }
 });
 
 test("custom and MCP tools that mimic a built-in name remain generic", () => {
@@ -66,12 +73,23 @@ test("display calls retain Bash commands and omit write payload values", () => {
   const command = "printf 'a'.repeat(200)";
   const bash = projectToolCall("bash", "builtin/bash", { command }, false);
   assert.match(JSON.stringify(bash), /printf/);
-  const write = projectToolCall("write_file", "builtin/write_file", { operations: [{ path: "src/a.ts", mode: "overwrite", content: "private-value" }] }, true);
-  assert.match(JSON.stringify(write), /src\/a.ts/);
-  assert.match(JSON.stringify(write), /content_bytes/);
-  assert.doesNotMatch(JSON.stringify(write), /private-value/);
-  const malformed = projectToolCall("write_file", "builtin/write_file", { path: "a", content: "private-value" }, false);
-  assert.deepEqual(malformed.arguments, { argument_keys: ["path", "content"] });
+  const write = projectToolCall("write_file", "builtin/write_file", { path: "src/a.ts", content: "private-value" }, true);
+  assert.deepEqual(write.arguments, { path: "src/a.ts", content_bytes: 13 });
+  const edit = projectToolCall("edit_file", "builtin/edit_file", { path: "src/a.ts", old_string: "private-old", new_string: "private-value", replace_all: true }, true);
+  assert.deepEqual(edit.arguments, { path: "src/a.ts", old_string_bytes: 11, new_string_bytes: 13, replace_all: true });
+  const patch = projectToolCall("apply_patch", "builtin/apply_patch", { patch: "*** Begin Patch\n*** Add File: src/a.ts\n+private-value\n*** End Patch" }, true);
+  assert.deepEqual((patch.arguments as { patch_paths: string[] }).patch_paths, ["src/a.ts"]);
+  assert.doesNotMatch(JSON.stringify(patch), /private-value/);
+  // The display projection sees the model's arguments before normalization: aliases and old shapes still hide payloads.
+  for (const [name, args] of [
+    ["write_file", { file_path: "src/a.ts", file_text: "private-value" }],
+    ["write_file", { operations: [{ path: "src/a.ts", mode: "overwrite", content: "private-value" }] }],
+    ["write_file", { path: "src/a.ts", patch: "*** Begin Patch\n*** Add File: b\n+private-value\n*** End Patch" }],
+    ["edit_file", { path: "src/a.ts", old_str: "private-old", new_str: "private-value" }],
+    ["apply_patch", { input: "*** Begin Patch\n*** Add File: b\n+private-value\n*** End Patch" }],
+  ] as const) {
+    assert.doesNotMatch(JSON.stringify(projectToolCall(name, `builtin/${name}`, args, false)), /private-/, `${name} ${Object.keys(args).join(",")}`);
+  }
 });
 
 test("schema 6 rejects a prior schema without mutation", () => {
@@ -93,7 +111,7 @@ test("CLI read preview survives process restart as path-tagged code without chan
   const env = { ...process.env, XDG_STATE_HOME: join(cwd, "state"), XDG_CONFIG_HOME: join(cwd, "config"), OPENAI_API_KEY: "key" };
   const provider = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "read-one", type: "function", function: {
-      name: "read_file", arguments: JSON.stringify({ files: [{ path: "sample.ts" }] }),
+      name: "read_file", arguments: JSON.stringify({ path: "sample.ts" }),
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "Found it" }, "stop"), openAiDone] },
   ]);

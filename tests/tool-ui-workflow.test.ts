@@ -78,7 +78,7 @@ test("built tools coexist across turns, answer/turn/control retries and SSE reco
 test("a killed built dashboard recovers process/question ownership without reviving waits or replaying a committed patch", async () => {
   const f = await dashboardFixture({ agent: { ...workflowScenario.agent, tools: { ...workflowScenario.agent.tools, rules: [{ match: "builtin/process", effect: "ask", when: { source: "arguments", any: "action", regex: "^stop$" } }] } }, responses: [
     workflowCall("start", "process", { action: "start", command: "sleep 2", timeout_ms: 5000 }),
-    workflowCall("patch", "write_file", { patch: workflowPatch }),
+    workflowCall("patch", "apply_patch", { patch: workflowPatch }),
     { frames: [openAiFrame({ content: "committed" }, "stop"), openAiDone] },
     workflowCall("pending", "ask_user", { questions: [{ id: "q", label: "Crash question", kind: "text" }] }),
   ] });

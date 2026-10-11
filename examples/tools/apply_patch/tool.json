@@ -1,0 +1,72 @@
+{
+  "api_version": 2,
+  "id": "apply_patch",
+  "version": "1.0.0",
+  "name": "apply_patch",
+  "description": "Apply a patch that adds, updates, moves or deletes files. Format: *** Begin Patch, then per file *** Add File: path (lines prefixed with +), *** Update File: path (optional *** Move to: path, then @@ hunks with space, - and + lines and unique exact context), or *** Delete File: path, then *** End Patch. Example: {\"patch\":\"*** Begin Patch\\n*** Update File: src/app.ts\\n@@\\n-const a = 1;\\n+const a = 2;\\n*** End Patch\"}. All files are checked before any change; a failure while writing stops the remaining files and is reported per file. Limits: 1 MiB patch, 64 paths, 16 MiB per file. The result lists one line per changed file with its line counts. Successful changes appear in the Files changed panel.",
+  "entry": "./index.mjs",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "patch": {
+        "type": "string",
+        "minLength": 1,
+        "description": "The patch text, from *** Begin Patch to *** End Patch."
+      }
+    },
+    "required": [
+      "patch"
+    ],
+    "additionalProperties": false
+  },
+  "condition_sources": [
+    "effects"
+  ],
+  "effects_schema": {
+    "type": "object",
+    "properties": {
+      "files": {
+        "type": "array",
+        "maxItems": 128,
+        "items": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "operation": {
+              "type": "string",
+              "enum": [
+                "write",
+                "delete",
+                "rename_source",
+                "rename_destination"
+              ]
+            }
+          },
+          "required": [
+            "path",
+            "operation"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "files"
+    ],
+    "additionalProperties": false
+  },
+  "panels": [
+    {
+      "id": "files_changed",
+      "placement": "sidebar",
+      "title": "Files changed",
+      "icon": "folder-tree",
+      "open": "first_update",
+      "context": "none",
+      "acp_plan": false,
+      "actions": []
+    }
+  ]
+}

@@ -1,6 +1,16 @@
 import { viewImageTool } from "../../image.js";
 import type { ToolContext } from "../../primitives.js";
 import type { ToolResult } from "../../types.js";
+import type { NormalizedArguments } from "../../registry.js";
+import { PATH_ALIASES, renameArgument } from "../../normalize.js";
+
+/** Claude Code sends `file_path`; the other path aliases follow read_file (docs/tool-ux-design.md §4.2). */
+export function normalizeArguments(input: Record<string, unknown>): NormalizedArguments {
+  const args = { ...input };
+  const notes: string[] = [];
+  for (const alias of PATH_ALIASES) renameArgument(args, notes, alias, "path");
+  return { args, notes };
+}
 
 export function validateArgs(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "arguments must be an object";

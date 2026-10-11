@@ -26,7 +26,7 @@ test("shared PTY shows header, tool activity and highlighted streamed code", asy
   writeFileSync(join(cwd, "sample.ts"), "const answer = 42;\n");
   const provider = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "read", type: "function", function: {
-      name: "read_file", arguments: JSON.stringify({ files: [{ path: join(cwd, "sample.ts") }] }),
+      name: "read_file", arguments: JSON.stringify({ path: join(cwd, "sample.ts") }),
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "# Found\n\n```ts\nconst " }), openAiFrame({ content: "answer = 42;\n```" }, "stop"), openAiDone] },
   ]);
@@ -66,7 +66,7 @@ test("compact and verbose flags change successful tool detail on a shared termin
   const root = mkdtempSync(join(tmpdir(), "raw-terminal-density-"));
   writeFileSync(join(root, "snippet.ts"), "const densityProbe = 7;\n");
   const call = { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "read", type: "function", function: {
-    name: "read_file", arguments: JSON.stringify({ files: [{ path: join(root, "snippet.ts") }] }),
+    name: "read_file", arguments: JSON.stringify({ path: join(root, "snippet.ts") }),
   } }] }, "tool_calls"), openAiDone] };
   const answer = { frames: [openAiFrame({ content: "Done" }, "stop"), openAiDone] };
   const provider = await startMockProvider([call, answer, call, answer]);
@@ -89,7 +89,7 @@ test("ASCII icons still distinguish read and success when color is disabled", as
   writeFileSync(join(root, "a.txt"), "hello\n");
   const provider = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "r", type: "function", function: {
-      name: "read_file", arguments: JSON.stringify({ files: [{ path: join(root, "a.txt") }] }),
+      name: "read_file", arguments: JSON.stringify({ path: join(root, "a.txt") }),
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "Done" }, "stop"), openAiDone] },
   ]);

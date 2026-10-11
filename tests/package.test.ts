@@ -35,7 +35,7 @@ test("T-08d: packed consumer executes installed CLI task/MCP/ACP and imports lib
   assert.equal(install.status, 0, install.stderr);
   const bin = join(consumer, "node_modules", ".bin", "raw");
   await access(bin);
-  for (const name of ["read_file", "write_file", "bash", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]) {
+  for (const name of ["read_file", "write_file", "edit_file", "apply_patch", "bash", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]) {
     const example = join(consumer, "node_modules", "@tlelabs", "raw", "examples", "tools", name);
     await access(join(example, "tool.json"));
     await access(join(example, "index.mjs"));
@@ -64,7 +64,7 @@ test("T-08d: packed consumer executes installed CLI task/MCP/ACP and imports lib
     }
   }
   const skillBody = await readFile(join(packagedSkill, "SKILL.md"), "utf8");
-  for (const name of ["read_file", "write_file", "bash", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]) {
+  for (const name of ["read_file", "write_file", "edit_file", "apply_patch", "bash", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]) {
     const folder = join(consumer, "node_modules", "@tlelabs", "raw", "dist", "tools", "builtin", name);
     const manifest = JSON.parse(await readFile(join(folder, "tool.json"), "utf8")) as { id: string; entry: string; input_schema: { type: string } };
     assert.equal(manifest.id, name);
@@ -74,7 +74,8 @@ test("T-08d: packed consumer executes installed CLI task/MCP/ACP and imports lib
   }
   const standalone = await run(process.execPath, ["--input-type=module", "--eval", `
 import { pathToFileURL } from "node:url";
-const module = await import(pathToFileURL(${JSON.stringify(join(consumer, "node_modules", "@tlelabs", "raw", "dist", "tools", "builtin", "write_file", "index.mjs"))}).href);
+const builtin = (name) => pathToFileURL(${JSON.stringify(join(consumer, "node_modules", "@tlelabs", "raw", "dist", "tools", "builtin"))} + "/" + name + "/index.mjs").href;
+const module = await import(builtin("apply_patch"));
 if (typeof module.handler !== "function" || typeof module.validateArgs !== "function") throw new Error("missing plugin exports");
 const { readFile } = await import("node:fs/promises");
 const { resolve } = await import("node:path");
@@ -88,11 +89,11 @@ const result = await module.handler({patch}, {cwd:process.cwd(), maxOutputBytes:
 if (result.isError || await readFile("installed-patch.txt","utf8") !== "installed patch\\n") throw new Error("installed patch execution failed");
 if (!document?.blocks.some(block=>block.kind === "files" && block.entries.some(entry=>entry.path === resolve("installed-patch.txt")))) throw new Error("installed Files changed missing");
 
-const invalid = module.validateArgs({ operations: [
-  { path: "sentinel", mode: "overwrite", content: "x" },
-  { path: "sentinel", mode: "replace_lines", start_line: 2, end_line: 1, content: "x", expected_sha256: "0".repeat(64) },
-] });
-if (!/operations\\[1\\].*invalid line range/.test(invalid)) throw new Error("missing semantic batch validator");
+const write = await import(builtin("write_file"));
+const old = write.validateArgs({ operations: [{ path: "sentinel", mode: "overwrite", content: "x" }] });
+if (!/use edit_file to change part of a file/.test(old)) throw new Error("missing old-shape rejection");
+const edit = await import(builtin("edit_file"));
+if (!/must differ/.test(edit.validateArgs({ path: "sentinel", old_string: "x", new_string: "x" }))) throw new Error("missing edit validator");
 `], consumer, { ...process.env });
   assert.equal(standalone.code, 0, standalone.stderr);
   const installedLoader = await run(process.execPath, ["--input-type=module", "--eval", `
@@ -204,7 +205,7 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
 
   const terminalProvider = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "terminal-read", type: "function", function: {
-      name: "read_file", arguments: '{"files":[{"path":"installed-preview.ts"}]}',
+      name: "read_file", arguments: '{"path":"installed-preview.ts"}',
     } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "# Installed result\n\n```ts\nconst installedPreview = 7;\n```" }, "stop"), openAiDone] },
     { frames: [openAiFrame({ content: "# Pipe result\n\n```ts\nconst piped = true;\n```" }, "stop"), openAiDone] },
@@ -266,10 +267,10 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [
       { index: 0, id: "write", type: "function", function: {
-        name: "write_file", arguments: '{"operations":[{"mode":"overwrite","path":"installed-sentinel.txt","content":"installed-write"}]}',
+        name: "write_file", arguments: '{"path":"installed-sentinel.txt","content":"installed-write"}',
       } },
       { index: 1, id: "read", type: "function", function: {
-        name: "read_file", arguments: '{"files":[{"path":"installed-sentinel.txt"}]}',
+        name: "read_file", arguments: '{"path":"installed-sentinel.txt"}',
       } },
       { index: 2, id: "shell", type: "function", function: {
         name: "bash", arguments: '{"command":"cat installed-sentinel.txt"}',
@@ -301,8 +302,8 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
     const replay = (fixture.requests[1]?.body as { messages: Array<{ role: string; tool_call_id?: string; content?: string }> }).messages
       .filter((message) => message.role === "tool");
     assert.deepEqual(replay.map((message) => message.tool_call_id), ["write", "read", "shell"]);
-    assert.deepEqual(replay.slice(0, 2).map((message) => (JSON.parse(message.content!) as { results: Array<{ status: string }> }).results[0]?.status),
-      ["ok", "ok"]);
+    assert.equal(replay[0]!.content, "Wrote 15 bytes to installed-sentinel.txt (created)");
+    assert.equal(replay[1]!.content, "   1│installed-write\n[lines 1–1 of 1; end of file]");
     assert.match(replay[2]!.content!, /^installed-write\n?\[exit 0 · \d+\.\ds\]$/);
 
     const document = JSON.parse(await readFile(configPath, "utf8"));

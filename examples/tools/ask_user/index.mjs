@@ -278,13 +278,16 @@ function block(value, path) {
       for (const [index, raw] of array(item.entries, [...path, "entries"], PANEL_LIMITS.items).entries()) {
         const at = [...path, "entries", index];
         const entry = object(raw, at);
-        keys(entry, ["path", "status", "line", "label"], at);
+        keys(entry, ["path", "status", "line", "label", "added", "removed", "diff"], at);
         const filePath = text(entry.path, [...at, "path"], 500, 1);
         if (seen.has(filePath)) invalid([...at, "path"], "duplicate path");
         seen.add(filePath);
         if (entry.status !== void 0) oneOf(entry.status, ["added", "modified", "deleted", "referenced"], [...at, "status"]);
         if (entry.line !== void 0) count(entry.line, [...at, "line"], 1);
         if (entry.label !== void 0) text(entry.label, [...at, "label"], 200);
+        if (entry.added !== void 0) count(entry.added, [...at, "added"], 0);
+        if (entry.removed !== void 0) count(entry.removed, [...at, "removed"], 0);
+        if (entry.diff !== void 0) text(entry.diff, [...at, "diff"], PANEL_LIMITS.documentBytes);
       }
       break;
     }

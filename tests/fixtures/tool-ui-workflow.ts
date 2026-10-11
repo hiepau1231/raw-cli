@@ -9,13 +9,13 @@ export const workflowCall = (id: string, name: string, args: unknown) => ({ fram
   { index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } },
 ] }, "tool_calls"), openAiDone] });
 export const workflowScenario = {
-  agent: { request_timeout_ms: 60000, tools: { use: ["builtin/ask_user", "builtin/process", "builtin/write_file", "builtin/todo", "local/diagram"] } },
+  agent: { request_timeout_ms: 60000, tools: { use: ["builtin/ask_user", "builtin/process", "builtin/apply_patch", "builtin/todo", "local/diagram"] } },
   responses: [
     workflowCall("ask", "ask_user", { questions: [{ id: "choice", label: "Workflow answer", kind: "text" }] }),
     workflowCall("todo-before", "todo", { todos: [{ id: "workflow", content: "Finish integrated workflow", status: "in_progress" }] }),
     workflowCall("start", "process", { action: "start", command: "printf 'workflow ready\\n'; sleep 60", label: "Workflow job" }),
     { frames: [openAiFrame({ content: "First turn complete." }, "stop"), openAiDone] },
-    workflowCall("patch", "write_file", { patch: workflowPatch }),
+    workflowCall("patch", "apply_patch", { patch: workflowPatch }),
     workflowCall("diagram", "diagram", { title: "Workflow diagram", source: workflowSource }),
     workflowCall("todo-after", "todo", { mode: "merge", todos: [{ id: "workflow", status: "done" }] }),
     { frames: [openAiFrame({ content: "Patched.\n\n```mermaid\n" + workflowSource + "\n```\n" }, "stop"), openAiDone] },

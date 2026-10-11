@@ -2,7 +2,7 @@
 
 This design makes Raw's built-in tools easy for any model to call. It also makes every tool readable in the CLI and the dashboard, and brings the dashboard side panel up to the standard of common editor UIs.
 
-Status: proposed 2026-10-11. Phases 1 (normalization, host data, value-safe JSON capping) and 2 (single-command `bash` with background delegation, flat `process`) implemented; phases 3–9 not yet. No backward compatibility: the user decided (2026-10-11) that the old argument shapes, rule paths and panel owner are replaced, not kept. Update this file whenever a decision changes. User-facing behavior moves to `tools.md`, `dashboard.md`, `terminal-output.md` and `panels-design.md` as each phase lands.
+Status: proposed 2026-10-11. Phases 1 (normalization, host data, value-safe JSON capping), 2 (single-command `bash` with background delegation, flat `process`) and 3 (single-file `read_file`/`write_file`, `edit_file`, opt-in `apply_patch`, one shared files-changed panel) implemented; phases 4–9 not yet. No backward compatibility: the user decided (2026-10-11) that the old argument shapes, rule paths and panel owner are replaced, not kept. Update this file whenever a decision changes. User-facing behavior moves to `tools.md`, `dashboard.md`, `terminal-output.md` and `panels-design.md` as each phase lands.
 
 ## Contents
 

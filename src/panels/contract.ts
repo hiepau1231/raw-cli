@@ -49,7 +49,9 @@ export interface StepItem { id: string; label: string; status?: PanelItemStatus;
 export interface TableColumn { id: string; label: string; align?: "start" | "end" | "center" }
 export interface TableRow { id: string; status?: PanelItemStatus; cells: Record<string, string>; ref?: PanelRef }
 export interface TimelineEvent { id: string; at: number; level: "info" | "success" | "warning" | "error"; label: string; detail?: string }
-export interface FileEntry { path: string; status?: "added" | "modified" | "deleted" | "referenced"; line?: number; label?: string }
+export interface FileEntry { path: string; status?: "added" | "modified" | "deleted" | "referenced"; line?: number; label?: string;
+  /** Line counts and the latest unified diff of the changes a host recorded for the file (docs/tool-ux-design.md §6.3). */
+  added?: number; removed?: number; diff?: string }
 export interface KeyValueEntry { key: string; value: string; ref?: PanelRef }
 export interface FormOption { id: string; label: string }
 export type FormField = { id: string; label: string; description?: string; required?: boolean } & (

@@ -51,6 +51,8 @@ export interface ToolRegistration extends ToolDefinition {
    * and says so in its result, the way it does when it was loaded without delegation.
    */
   delegate?: (args: Record<string, unknown>, context: { cwd: string }) => ToolDelegation | undefined;
+  /** Bundled editing tools only: the host owner of the panels this tool declares, shared with the others (§6.3). */
+  panelOwner?: string;
   canonicalName?: string;
   handler: (args: Record<string, unknown>, context: ToolContext) => Promise<ToolHandlerResult>;
   validateArgs?: (args: unknown) => string | undefined;
@@ -176,7 +178,7 @@ export class ToolRegistry {
   /** Panel declarations of a registered tool, without importing or invoking anything. */
   panelDeclarations(name: string): { owner: string; declarations: readonly PanelDeclaration[]; implicit: boolean } | undefined {
     const tool = this.tools.get(name);
-    return tool ? { owner: tool.canonicalName ?? tool.name, declarations: tool.panels ?? [], implicit: tool.implicitPanels === true } : undefined;
+    return tool ? { owner: tool.panelOwner ?? tool.canonicalName ?? tool.name, declarations: tool.panels ?? [], implicit: tool.implicitPanels === true } : undefined;
   }
 
   async dispatch(name: string, args: unknown, context: ToolContext): Promise<ToolResult> {

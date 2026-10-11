@@ -39,11 +39,8 @@ test("packed forks and copied agent execute outside the checkout with isolated s
   const repo = process.cwd();
   const root = await mkdtemp(join(tmpdir(), "raw-portable-"));
   const provider = await startMockProvider([
-    call("fork_write", { operations: [
-      { path: "must-not-write.txt", mode: "overwrite", content: "side effect" },
-      { path: "must-not-write.txt", mode: "replace_lines", start_line: 2, end_line: 1,
-        content: "bad", expected_sha256: "0".repeat(64) },
-    ] }, "invalid-write"), done("write rejected"),
+    // The old batch shape is rejected with an example before any side effect.
+    call("fork_write", { operations: [{ path: "must-not-write.txt", mode: "overwrite", content: "side effect" }] }, "invalid-write"), done("write rejected"),
     call("fork_bash", { command: "touch must-not-run.txt", timeout: 0 }, "invalid-bash"), done("bash rejected"),
     call("fork_bash", { command: "printf safe > safe.txt" }, "safe-bash"), done("safe done"),
     call("fork_bash", { command: "rm protected.txt" }, "gated-bash"),
@@ -94,7 +91,7 @@ export async function handler() { return { content: [] }; }`);
     assert.deepEqual((provider.requests[0]?.body as { tools: Array<{ function: { name: string } }> }).tools.map((item) => item.function.name),
       ["fork_write", "fork_bash"]);
     await assert.rejects(access(join(consumer, "must-not-write.txt")));
-    assert.match(JSON.stringify(provider.requests[1]?.body), /invalid line range/);
+    assert.match(JSON.stringify(provider.requests[1]?.body), /write_file writes one whole file: .*use edit_file to change part of a file/);
     assert.equal((await run(bin, [...args, "bad bash"], consumer, env)).code, 0);
     await assert.rejects(access(join(consumer, "must-not-run.txt")));
     assert.match(JSON.stringify(provider.requests[3]?.body), /timeout must be a positive integer/);

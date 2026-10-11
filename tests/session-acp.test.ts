@@ -361,7 +361,7 @@ test("ACP cancel retains the writer claim for the original peer's next prompt", 
     generate: async () => {
       calls++;
       return calls === 1 ? { text: "", toolCalls: [{ id: "write", name: "write_file", arguments: {
-        operations: [{ mode: "overwrite", path: "should-not-exist", content: "x" }] } }], finishReason: "tool_calls" }
+        path: "should-not-exist", content: "x" } }], finishReason: "tool_calls" }
         : { text: "after-cancel", toolCalls: [], finishReason: "stop" };
     } }) });
   const first = makeServer();
