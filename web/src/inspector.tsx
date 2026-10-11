@@ -157,7 +157,7 @@ function Details({
     </div>
   );
 }
-/** The composer's Compact context, offered next to the context use. */
+/** The composer's Compact now, offered next to the context use. */
 export interface CompactAction { run: () => void; disabled: boolean }
 export function Inspector({
   id,
