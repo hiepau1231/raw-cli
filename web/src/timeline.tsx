@@ -581,34 +581,59 @@ export function Timeline({
             item.kind === "user" ? "user-message" : "assistant-message"
           }
         >
-          <div className="message-label">
-            <strong>{item.kind === "user" ? "You" : "Raw"}</strong>
-            <time dateTime={new Date(item.createdAt).toISOString()}>
-              {new Date(item.createdAt).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </time>
-            <CopyButton value={item.text ?? ""} label="Copy message" />
-          </div>
-          {segment?.paged ? (
-            <PagedLive segment={segment} sessionId={state.session.id} />
-          ) : item.kind === "assistant" ? (
-            <Markdown>{item.text ?? ""}</Markdown>
+          {item.kind === "user" ? (
+            <>
+              {/* The user's bubble: attachments above the text, the time and Copy message under it. */}
+              <div className="bubble">
+                {item.attachments?.length ? (
+                  <HistoryAttachments
+                    items={item.attachments}
+                    sessionId={state.session.id}
+                    sequence={item.sequence}
+                  />
+                ) : null}
+                {segment?.paged ? (
+                  <PagedLive segment={segment} sessionId={state.session.id} />
+                ) : (
+                  <div className="user-text">{item.text}</div>
+                )}
+              </div>
+              <div className="message-meta">
+                <time dateTime={new Date(item.createdAt).toISOString()}>
+                  {new Date(item.createdAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </time>
+                <CopyButton value={item.text ?? ""} label="Copy message" />
+              </div>
+            </>
           ) : (
             <>
-              <div className="user-text">{item.text}</div>
-              {item.attachments?.length ? (
-                <HistoryAttachments
-                  items={item.attachments}
-                  sessionId={state.session.id}
-                  sequence={item.sequence}
-                />
-              ) : null}
+              <div className="message-label">
+                <span className="avatar" aria-hidden="true">r</span>
+                <strong>Raw</strong>
+                <time dateTime={new Date(item.createdAt).toISOString()}>
+                  {new Date(item.createdAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </time>
+              </div>
+              {segment?.paged ? (
+                <PagedLive segment={segment} sessionId={state.session.id} />
+              ) : (
+                <Markdown>{item.text ?? ""}</Markdown>
+              )}
             </>
           )}
           {item.status === "interrupted" && (
             <small className="warning">Incomplete response</small>
+          )}
+          {item.kind === "assistant" && (
+            <div className="message-actions">
+              <CopyButton value={item.text ?? ""} label="Copy message" />
+            </div>
           )}
         </article>,
       );

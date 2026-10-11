@@ -54,7 +54,7 @@ export function CodeBlock({
     <div className="code-block">
       <div className="code-label">
         <span>{language}</span>
-        <CopyButton value={code} label="Copy code" />
+        <CopyButton value={code} label="Copy code" text="Copy" className="code-copy" />
       </div>
       <pre tabIndex={0}>
         <code>{highlighted}</code>

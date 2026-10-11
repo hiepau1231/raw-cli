@@ -71,10 +71,13 @@ export function CopyButton({
   value,
   label = "Copy",
   className = "",
+  text,
 }: {
   value: string;
   label?: string;
   className?: string;
+  /** A word beside the icon ("Copy", then "Copied"), shown where the stylesheet shows `.copy-text`. */
+  text?: string;
 }) {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
@@ -104,6 +107,7 @@ export function CopyButton({
         ) : (
           <Copy size={16} aria-hidden="true" />
         )}
+        {text && <span className="copy-text" aria-hidden="true">{copied ? "Copied" : text}</span>}
         <span className="sr-only" role="status">
           {copied ? "Copied" : ""}
         </span>

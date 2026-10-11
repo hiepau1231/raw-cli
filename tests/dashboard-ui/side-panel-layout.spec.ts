@@ -421,3 +421,18 @@ test.describe("Details with reported usage", () => {
     expect(fits.right).toBeLessThan(0);
   });
 });
+
+// The chat's message typography stays in chat messages (docs/chat-design.md §5): a markdown block keeps the panel's type.
+test.describe("markdown block type", () => {
+  test.use({ scenario: stressScenario });
+  test("a markdown block keeps the panel's type", async ({ page, raw }) => {
+    installStressTools(raw);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await seedStress(page, raw);
+    await page.getByRole("tab", { name: /Gadget/ }).click();
+    const block = page.locator(".sp-content .markdown").first();
+    await expect(block.locator("p").first()).toHaveCSS("font-size", "13px");
+    await expect(block.locator(":not(pre) > code").first()).toHaveCSS("font-size", "11.7px");
+    await expect(block.locator(":not(pre) > code").first()).toHaveCSS("border-top-left-radius", "4px");
+  });
+});

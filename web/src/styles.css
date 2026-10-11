@@ -57,6 +57,7 @@
   --seg-ring: inset 0 0 0 1px var(--frame);
   --seg-on: #ffffff;
   --seg-on-shadow: 0 1px 2px rgba(20, 12, 40, 0.1);
+  --bubble: #f1eff6;
 }
 /* Code everywhere uses the bundled monospace, never the browser's default. */
 code,
@@ -64,6 +65,8 @@ kbd,
 pre,
 samp {
   font-family: var(--font-mono);
+  /* Operators such as !== and <= read as typed, never as one glyph. */
+  font-variant-ligatures: none;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -103,6 +106,7 @@ samp {
   --seg-ring: none;
   --seg-on: #2a2338;
   --seg-on-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --bubble: #1e1930;
 }
 
 /* Diagram geometry comes from Mermaid; presentation stays in host CSS under CSP. */
@@ -967,43 +971,180 @@ main > .error-banner {
   padding: 24px 28px 32px;
   min-width: 0;
 }
+/* Messages (docs/chat-design.md §5): the user's bubble on the right, the assistant's prose under its name. */
 .message {
-  margin: 0 0 28px;
+  margin: 0 0 22px;
   font-size: var(--chat-size);
-  line-height: 1.75;
+  line-height: 1.65;
   overflow-wrap: anywhere;
+}
+.message.user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.message.user .bubble {
+  max-width: 78%;
+  min-width: 0;
+  padding: 10px 15px;
+  border-radius: 18px;
+  background: var(--bubble);
+  line-height: 1.55;
+}
+.user-text {
+  white-space: pre-wrap;
+}
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.message.user:hover .message-meta,
+.message.user:focus-within .message-meta {
+  opacity: 1;
+}
+@media (hover: none) {
+  .message-meta {
+    opacity: 1;
+  }
+}
+.message-meta time {
+  margin-right: 2px;
+}
+:is(.message-meta, .message-actions) .icon-button {
+  color: var(--muted);
+}
+:is(.message-meta, .message-actions) .icon-button svg {
+  width: 13px;
+  height: 13px;
 }
 .message-label {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  margin-bottom: 8px;
+  gap: 7px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  line-height: 20px;
   color: var(--muted);
 }
 .message-label strong {
   color: var(--text);
-  font-size: 13px;
+  font-weight: 600;
 }
-.message-label time {
-  font-size: 10px;
+.message-label .avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 800;
 }
-.message-label .icon-button {
-  margin-left: auto;
-  opacity: 0;
+.message-actions {
+  display: flex;
+  margin: 4px 0 0 -8px;
 }
-.message:hover .message-label .icon-button,
-.message:focus-within .message-label .icon-button {
-  opacity: 1;
+/* Prose, tables and code in chat messages; other Markdown (Library, side panel) keeps the shared look below. */
+.message .markdown {
+  line-height: 1.65;
 }
-.user {
-  padding: 16px 18px;
+.message .markdown p {
+  margin: 0 0 10px;
+}
+.message .markdown :is(h1, h2, h3) {
+  margin: 18px 0 6px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.message .markdown > :is(h1, h2, h3):first-child {
+  margin-top: 2px;
+}
+.message .markdown h1 {
+  font-size: 19px;
+}
+.message .markdown h2 {
+  font-size: 17px;
+}
+.message .markdown h3 {
+  font-size: 15px;
+}
+.message .markdown :is(ul, ol) {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+.message .markdown li {
+  margin: 3px 0;
+}
+.message .markdown :not(pre) > code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--panel-hover);
+  font-size: var(--code-size);
+}
+.message .markdown .table-scroll {
+  margin: 2px 0 12px;
   border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--panel);
+  border-radius: 10px;
 }
-.user-text {
-  white-space: pre-wrap;
+.message .markdown table {
+  font-size: 13.5px;
+}
+.message .markdown :is(th, td) {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+}
+.message .markdown th {
+  padding: 6px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.message .markdown td {
+  padding: 7px 10px;
+}
+.message .markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+.message .code-block {
+  margin: 2px 0 12px;
+  border-radius: 10px;
+}
+.message .code-label {
+  padding: 6px 10px 6px 12px;
+  font-size: 11.5px;
+  line-height: 16px;
+}
+.message .code-block pre {
+  padding: 10px 12px;
+  line-height: 1.6;
+}
+/* The code header's Copy shows its word only in chat messages; elsewhere it stays the icon button it was. */
+.copy-text {
+  display: none;
+}
+/* In a message: "Copy" with a small icon, a 32 px target that does not make the header taller. */
+.message .code-copy {
+  gap: 5px;
+  margin: -8px -6px -8px auto;
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.message .code-copy svg {
+  width: 12px;
+  height: 12px;
+}
+.message .code-copy .copy-text {
+  display: inline;
 }
 .chat-intro {
   padding-top: 48px;
@@ -1970,9 +2111,6 @@ code.tool-summary {
   .message {
     font-size: var(--chat-size);
     margin-bottom: 20px;
-  }
-  .user {
-    padding: 12px;
   }
   .composer-area {
     padding: 8px 14px;

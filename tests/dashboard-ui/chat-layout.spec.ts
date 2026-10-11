@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
+import { openPath, seedLibrary } from "./library-seed.js";
 import { REQUEST, chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
 
 // The chat area and the frame around it with real-length data (docs/chat-design.md), at the supported widths, in both
@@ -359,5 +360,122 @@ test.describe("chat header outside HOME", () => {
     const path = page.locator(".chat-main > .page-header .workspace-path");
     await expect(path).toHaveText(realpathSync(raw.root));
     await expect(path).toHaveAttribute("title", realpathSync(raw.root));
+  });
+});
+
+test.describe("messages", () => {
+  test.use({ scenario: chatScenario });
+  const BUBBLE = { dark: "rgb(30, 25, 48)", light: "rgb(241, 239, 246)" } as const;
+  /** The conversation column's content box. */
+  const column = (page: Page) => page.locator(".conversation").evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return { left: box.left + parseFloat(style.paddingLeft), right: box.right - parseFloat(style.paddingRight) };
+  });
+
+  test("a right-aligned user bubble, then the assistant's prose, table and code block", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await seedChat(page, raw);
+    const user = page.getByTestId("user-message").first();
+    const bubble = user.locator(".bubble");
+    const answer = page.getByTestId("assistant-message").first();
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      // No "You" label: the bubble is the user's, flush with the column's right edge.
+      await expect(user.getByText("You", { exact: true })).toHaveCount(0);
+      const col = await column(page);
+      const box = (await bubble.boundingBox())!;
+      near(box.x + box.width, col.right);
+      expect(box.x).toBeGreaterThan(col.left + 40);
+      await expect(bubble).toHaveCSS("border-top-left-radius", "18px");
+      await expect(bubble).toHaveCSS("background-color", BUBBLE[theme]);
+      await expect(bubble).toHaveCSS("font-size", "15px");
+      // The time and Copy message sit under the bubble and appear on hover.
+      const meta = user.locator(".message-meta");
+      await page.mouse.move(0, 0);
+      await expect(meta).toHaveCSS("opacity", "0");
+      await bubble.hover();
+      await expect(meta).toHaveCSS("opacity", "1");
+      await expect(meta.locator("time")).toHaveAttribute("datetime", /T/);
+      await expect(meta.getByRole("button", { name: "Copy message" })).toBeVisible();
+      // The assistant: the r mark, Raw and the time; 15 px prose; a 17 px heading.
+      await expect(answer.locator(".message-label .avatar")).toHaveText("r");
+      await expect(answer.locator(".message-label strong")).toHaveText("Raw");
+      await expect(answer.locator(".markdown p").first()).toHaveCSS("font-size", "15px");
+      await expect(answer.locator(".markdown h2")).toHaveCSS("font-size", "17px");
+      await expect(answer.locator(".markdown h2")).toHaveCSS("font-weight", "650");
+      // The answer opens with its heading 2 px under the name row.
+      await expect(answer.locator(".markdown h2")).toHaveCSS("margin-top", "2px");
+      await expect(answer.locator(":not(pre) > code").first()).toHaveCSS("font-size", "13px");
+      await expect(answer.locator(":not(pre) > code").first()).toHaveCSS("border-top-left-radius", "5px");
+      // The table is one bordered box with rules between rows only.
+      const table = answer.locator(".table-scroll");
+      await expect(table).toHaveCSS("border-top-left-radius", "10px");
+      await expect(table).toHaveCSS("border-top-width", "1px");
+      await expect(answer.locator("th").first()).toHaveCSS("border-left-width", "0px");
+      await expect(answer.locator("th").first()).toHaveCSS("font-size", "12px");
+      await expect(answer.locator("td").first()).toHaveCSS("font-size", "13.5px");
+      await expect(answer.locator("tbody tr").last().locator("td").first()).toHaveCSS("border-bottom-width", "0px");
+      // The code block: a header with the language and Copy, code without ligatures.
+      const code = answer.locator(".code-block");
+      await expect(code).toHaveCSS("border-top-left-radius", "10px");
+      await expect(code.locator(".code-label")).toContainText("js");
+      await expect(code.getByRole("button", { name: "Copy code" })).toContainText("Copy");
+      await expect(code.locator(".code-label")).toHaveCSS("font-size", "11.5px");
+      await expect(code.locator("pre code")).toHaveCSS("font-variant-ligatures", "none");
+      await expect(code.locator("pre code")).toHaveCSS("font-size", "13px");
+      await expect(answer.locator(".message-actions").getByRole("button", { name: "Copy message" })).toBeVisible();
+      await axe(page);
+    }
+  });
+
+  test("at 390 px long text and an unbroken token wrap inside the column", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await seedChat(page, raw);
+    await page.getByRole("textbox", { name: "Message" }).fill(`Kiểm tra giúp tôi đoạn này: ${"a1b2c3d4e5".repeat(30)} rồi báo lại kết quả chi tiết cho từng trang tài liệu`);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByTestId("user-message")).toHaveCount(2);
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      const overflow = await page.locator(".conversation-scroll").evaluate((element) => element.scrollWidth - element.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(0);
+      const col = await column(page);
+      for (const bubble of await page.locator(".message.user .bubble").all()) {
+        const box = (await bubble.boundingBox())!;
+        expect(box.x).toBeGreaterThanOrEqual(col.left - 1);
+        near(box.x + box.width, col.right);
+      }
+      await axe(page);
+    }
+  });
+});
+
+test.describe("markdown outside the chat", () => {
+  // The chat's typography, table box and code header stay in chat messages; other Markdown keeps its look.
+  test("a Library preview keeps its type, table and code block", async ({ page, raw }) => {
+    await seedLibrary(raw);
+    await openPath(page, raw.server.launchUrl, "/library/skills/local%2Fguide");
+    await page.getByRole("tablist", { name: "Component sections" }).getByRole("tab", { name: "Source" }).click();
+    await page.getByRole("radiogroup", { name: "Markdown view" }).getByRole("radio", { name: "Preview" }).click();
+    const preview = page.locator(".markdown-preview");
+    await expect(preview).toBeVisible();
+    await expect(preview.locator("p").first()).toHaveCSS("font-size", "14px");
+    await expect(preview.locator("h2").first()).toHaveCSS("font-size", "17px");
+    await expect(preview.locator("h2").first()).toHaveCSS("font-weight", "700");
+    await expect(preview.locator(".code-block").first()).toHaveCSS("border-top-left-radius", "7px");
+    await expect(preview.locator(".code-label").first()).toHaveCSS("font-size", "10px");
+    // Its Copy stays the 16 px icon button, with no word and no negative margins.
+    const copy = preview.locator(".code-label").first().getByRole("button", { name: "Copy code" });
+    await expect(copy).toHaveText("", { useInnerText: true });
+    await expect(copy).toHaveCSS("margin-top", "0px");
+    await expect(copy.locator("svg")).toHaveCSS("width", "16px");
+    await expect(preview.locator(".table-scroll").first()).toHaveCSS("border-top-width", "0px");
+    await expect(preview.locator("th").first()).toHaveCSS("border-left-width", "1px");
+    await expect(preview.locator("th").first()).toHaveCSS("font-size", "12.6px");
+    // Code everywhere: the code size setting and no ligatures.
+    await expect(preview.locator("pre code").first()).toHaveCSS("font-size", await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--code-size").trim()));
+    await expect(preview.locator("pre code").first()).toHaveCSS("font-variant-ligatures", "none");
   });
 });

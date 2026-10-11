@@ -43,7 +43,14 @@ On a chat the app toolbar is not shown: the chat header is the card's first row 
 
 ## 5. Messages
 
-To be written with the messages phase.
+- **Your messages** are bubbles on the right of the column (`--bubble`: `#1e1930` dark, `#f1eff6` light), 78 % of the column at most, an 18 px radius, 10 px by 15 px padding, line height 1.55. Attachments sit inside the bubble above the text. There is no "You" label: the time and **Copy message** sit under the bubble and appear on hover or keyboard focus (always on touch screens).
+- **The assistant's messages** start with a 20 px "r" mark on the accent tint, **Raw** and the time (12.5 px), then the answer as prose, then **Copy message** under it. "Incomplete response" stays under an interrupted message.
+- **Prose** is the Chat font size (15 px by default) at line height 1.65; paragraphs 10 px apart; headings at weight 650 (19, 17 and 15 px for levels 1 to 3); lists indented 20 px; inline code in the Code font size (13 px by default) on a tint with a 5 px radius.
+- **Tables** are one box with a 1 px border and a 10 px radius that scrolls sideways when it is wide: muted 12 px headers at weight 600, 13.5 px cells, a rule under each row but the last and no inner vertical rules.
+- **Code blocks** have a 10 px radius and a header row with the language (11.5 px, muted) and a **Copy** button (named "Copy code" for assistive technology); the code is in the Code font size at line height 1.6.
+- **Ligatures are off for all code** in the dashboard, so `!==` and `<=` read as typed.
+- **Scope.** This typography, the table box and the code header belong to chat messages. Markdown elsewhere (a Library preview, a side panel markdown block) keeps its look; only the ligature rule is global.
+- **Sizes.** The Chat font size and Code font size settings default to 15 px and 13 px; a size you chose is kept.
 
 ## 6. Work
 
