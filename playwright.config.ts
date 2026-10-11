@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/dashboard-ui",
+  globalSetup: "./tests/dashboard-ui/global-setup.ts",
   fullyParallel: true,
   workers: 3,
   forbidOnly: !!process.env.CI,

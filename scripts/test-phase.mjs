@@ -1,7 +1,6 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { testRun } from "./test-tmp.mjs";
 
 const suites = {
   dashboard: ["dashboard-cli", "dashboard-server", "dashboard-assets", "dashboard-sessions", "dashboard-streams", "dashboard-approval", "dashboard-management", "dashboard-packages", "dashboard-installed", "management-config", "management-components"],
@@ -30,16 +29,12 @@ if (!files || files.some((file) => !existsSync(file))) {
   const build = spawnSync("npm", ["run", "build"], { stdio: "inherit" });
   if (build && build.status !== 0) process.exitCode = build.status ?? 1;
   else {
-    const configHome = mkdtempSync(join(tmpdir(), "raw-test-config-"));
-    const stateHome = mkdtempSync(join(tmpdir(), "raw-test-state-"));
-    const dataHome = mkdtempSync(join(tmpdir(), "raw-test-data-"));
+    const run = testRun();
     const result = spawnSync(process.execPath, ["--import", "tsx", "--test", ...files], {
       stdio: "inherit",
-      env: { ...process.env, XDG_CONFIG_HOME: configHome, XDG_STATE_HOME: stateHome, XDG_DATA_HOME: dataHome },
+      env: { ...process.env, ...run.env },
     });
-    rmSync(configHome, { recursive: true, force: true });
-    rmSync(stateHome, { recursive: true, force: true });
-    rmSync(dataHome, { recursive: true, force: true });
+    run.cleanup();
     process.exitCode = result.status ?? 1;
   }
 }
