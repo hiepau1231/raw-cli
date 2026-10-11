@@ -1,9 +1,11 @@
-import { realpathSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AxeBuilder } from "@axe-core/playwright";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
 import { openPath, seedLibrary } from "./library-seed.js";
+import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
 import { REQUEST, chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
 
 // The chat area and the frame around it with real-length data (docs/chat-design.md), at the supported widths, in both
@@ -449,6 +451,272 @@ test.describe("messages", () => {
       }
       await axe(page);
     }
+  });
+});
+
+test.describe("work", () => {
+  test.use({ scenario: chatScenario });
+  /** The side panel's diff colours, read from a probe inside an `.inspector`. */
+  const panelDiff = (page: Page) => page.evaluate(() => {
+    const host = document.createElement("div");
+    host.className = "inspector";
+    host.innerHTML = `<div class="panel-file-diff"><span class="diff-line diff-add">+a</span><span class="diff-line diff-remove">-r</span></div>`;
+    document.body.append(host);
+    const read = (selector: string) => { const style = getComputedStyle(host.querySelector(selector)!); return [style.backgroundColor, style.color]; };
+    const colours = { add: read(".diff-add"), remove: read(".diff-remove") };
+    host.remove();
+    return colours;
+  });
+  const lineOf = async (row: Locator) => {
+    const line = (await row.locator(".tool-line").boundingBox())!;
+    const glyph = (await row.locator(".tool-glyph").boundingBox())!;
+    return { line, glyph };
+  };
+
+  test("a collapsed summary line with chips and pills, then rows and cards", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await seedChat(page, raw);
+    const group = page.locator(".work-group").first();
+    const toggle = group.locator(".work-toggle");
+    // Done and failed, yet collapsed: the header carries those states.
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(group.locator(".work-content")).toBeHidden();
+    await expect(group.locator(".work-time")).toHaveText(/^Worked \d+\.\ds$/);
+    await expect(group.locator(".work-count")).toHaveText("· 4 tools");
+    await expect(group.locator(".work-head .sp-chip")).toHaveText(["1 failed"]);
+    await expect(group.locator(".work-pill")).toHaveText(["Todo 1/3", "+4 −1"]);
+    await expect(group.locator(".work-head")).toHaveCSS("font-size", "13px");
+    expect((await group.locator(".work-head").boundingBox())!.height).toBeLessThanOrEqual(32);
+    // Receipts are pills now, never rows of their own inside a group.
+    await expect(group.locator(".panel-receipt")).toHaveCount(0);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const rows = group.locator(".tool-row");
+    await expect(rows).toHaveCount(4);
+    await expect(group.locator(".reasoning")).toHaveCount(1);
+    await expect(group.locator(".reasoning-toggle i")).toHaveCSS("font-style", "italic");
+    await expect(group.locator(".reasoning-toggle i")).toHaveCSS("text-overflow", "ellipsis");
+    const todo = rows.filter({ has: page.locator(".tool-title", { hasText: /^Todo$/ }) });
+    const check = rows.filter({ has: page.locator(".tool-summary", { hasText: "$ node scripts/check-links.mjs --all --verbose" }) });
+    const edit = rows.filter({ has: page.locator(".tool-summary", { hasText: /^scripts\/check-links\.mjs$/ }) });
+    const lint = rows.filter({ has: page.locator(".tool-summary", { hasText: "$ npm run lint" }) });
+    await expect(todo.locator(".receipt-pill")).toHaveText("1 of 3 done");
+    await expect(edit.locator(".tool-diffstat")).toHaveText("+4 −1");
+    // OK rows: no visible chip, the state as accessible text; the failed row: its chip, open, red border.
+    for (const ok of [todo, check, edit]) {
+      await expect(ok).toHaveAttribute("data-status", "ok");
+      await expect(ok.locator(".tool-status")).toHaveCount(0);
+      await expect(ok.locator(".tool-toggle")).toHaveAccessibleName(/^OK\b/);
+      await expect(ok.locator(".tool-toggle")).toHaveAttribute("aria-expanded", "false");
+    }
+    await expect(lint.locator(".tool-status")).toHaveText("Exit 1");
+    await expect(lint.locator(".tool-toggle")).toHaveAttribute("aria-expanded", "true");
+    const card = lint.locator(".tool-card");
+    await expect(card).toHaveClass(/failed/);
+    await expect(card.locator(".term-line[data-channel=stderr]")).toHaveText(["scripts/check-links.mjs:3:5  error  Missing semicolon"]);
+    await expect(card).not.toContainText("[stderr]");
+    await expect(card).not.toContainText("[exit");
+    await expect(card.locator(".tool-foot-meta")).toHaveText(/^stderr · exit 1 · \d+\.\d s$/);
+    await expect(card.getByRole("button", { name: "Copy output" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Arguments" })).toHaveAttribute("aria-expanded", "false");
+    await edit.locator(".tool-toggle").click();
+    await expect(edit.locator(".diff-view .diff-add")).toHaveCount(4);
+    await expect(edit.locator(".tool-foot-meta")).toHaveText("scripts/check-links.mjs");
+    await expect(edit.getByRole("button", { name: "Copy diff" })).toBeVisible();
+    // One file: the footer names it and the diff's file headers are hidden.
+    await expect(edit.locator(".diff-file")).toHaveCount(2);
+    for (const header of await edit.locator(".diff-file").all()) await expect(header).toBeHidden();
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      // Rows are one line with the glyph on it.
+      for (const row of await rows.all()) {
+        const { line, glyph } = await lineOf(row);
+        expect(line.height).toBeLessThanOrEqual(34);
+        expect(glyph.y).toBeGreaterThanOrEqual(line.y);
+        expect(glyph.y + glyph.height).toBeLessThanOrEqual(line.y + line.height);
+      }
+      await expect(lint.locator(".tool-line")).toHaveCSS("border-top-left-radius", "8px");
+      await expect(card).toHaveCSS("border-top-left-radius", "10px");
+      await expect(card).toHaveCSS("border-top-color", await tokenColour(page, "--danger-border"));
+      await expect(card.locator(".term-line[data-channel=stderr]")).toHaveCSS("color", await tokenColour(page, "--error"));
+      await expect(card.locator(".tool-terminal")).toHaveCSS("font-size", "12px");
+      const colours = await panelDiff(page);
+      await expect(edit.locator(".diff-add").first()).toHaveCSS("background-color", colours.add[0]!);
+      await expect(edit.locator(".diff-add").first()).toHaveCSS("color", colours.add[1]!);
+      await expect(edit.locator(".diff-remove").first()).toHaveCSS("background-color", colours.remove[0]!);
+      await axe(page);
+    }
+    // Each header pill opens its panel in the side panel.
+    await page.getByRole("button", { name: "Side panel", exact: true }).click();
+    await expect(page.locator(".inspector")).toHaveCount(0);
+    await group.locator(".work-pill", { hasText: "Todo 1/3" }).click();
+    await expect(page.getByRole("tab", { name: /^Todo/ })).toHaveAttribute("aria-selected", "true");
+    await group.locator(".work-pill", { hasText: "+4 −1" }).click();
+    await expect(page.getByRole("tab", { name: /^Files changed/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("at 390 px the header and rows stay single lines inside the column", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await seedChat(page, raw);
+    const group = page.locator(".work-group").first();
+    await group.locator(".work-toggle").click();
+    const conversation = (await page.locator(".conversation").boundingBox())!;
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      expect((await group.locator(".work-head").boundingBox())!.height).toBeLessThanOrEqual(32);
+      for (const row of await group.locator(".tool-row").all()) {
+        const { line, glyph } = await lineOf(row);
+        expect(line.height).toBeLessThanOrEqual(34);
+        expect(glyph.y + glyph.height).toBeLessThanOrEqual(line.y + line.height);
+        expect(line.x + line.width).toBeLessThanOrEqual(conversation.x + conversation.width + 0.5);
+      }
+      const overflow = await page.locator(".conversation-scroll").evaluate((element) => element.scrollWidth - element.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(0);
+      await axe(page);
+    }
+  });
+
+  test("two groups that edit files show their own totals, and a pending approval is a chip", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await seedChat(page, raw, "approval");
+    const second = page.locator(".work-group").nth(1);
+    await expect(second.locator(".work-head .sp-chip")).toHaveText(["Needs approval"]);
+    await expect(second.locator(".work-time")).toHaveText("Working");
+    await expect(second.locator(".work-spinner")).toBeVisible();
+    await expect(second.locator(".tool-row")).toHaveAttribute("data-status", "approval");
+    await page.getByRole("button", { name: "Allow once", exact: true }).click();
+    await expect(second.locator(".work-time")).toHaveText(/^Worked /);
+    await expect(second.locator(".work-pill")).toHaveText(["+3 −0"]);
+    await expect(page.locator(".work-group").first().locator(".work-pill")).toHaveText(["Todo 1/3", "+4 −1"]);
+  });
+});
+
+test.describe("work states", () => {
+  // A reasoning-only reply, then one turn with a command that times out, a denied write and a tool whose second
+  // panel update is rejected.
+  test.use({ scenario: {
+    agent: { tools: { use: ["builtin/bash", "builtin/write_file", "local/report", "local/probe"], rules: [
+      { match: "builtin/bash", effect: "allow" }, { match: "builtin/write_file", effect: "deny" }, { match: "local/report", effect: "allow" },
+      { match: "local/probe", effect: "allow" }] } },
+    responses: [
+      { frames: [openAiFrame({ reasoning: "Chỉ cần chào lại người dùng." }), openAiFrame({ content: "Xin chào" }, "stop"), openAiDone] },
+      { frames: [openAiFrame({ tool_calls: [
+        { index: 0, id: "slow", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "sleep 30", timeout: 2500, description: "Chờ dịch vụ khởi động" }) } },
+        { index: 1, id: "deny", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "notes.md", content: "x" }) } },
+        { index: 2, id: "rep", type: "function", function: { name: "report", arguments: "{}" } },
+        { index: 3, id: "probe", type: "function", function: { name: "probe", arguments: "{}" } },
+      ] }, "tool_calls"), openAiDone] },
+      { frames: [openAiFrame({ content: "Xong" }, "stop"), openAiDone] },
+    ],
+  } });
+
+  test("reasoning only, running, timed out, denied, a rejected update and tool details", async ({ page, raw }) => {
+    // The longest title and summary a panel document may have.
+    const TITLE = "Báo cáo kiểm tra liên kết của toàn bộ tài liệu hướng dẫn và trang tham chiếu API";
+    const SUMMARY = "Đã ghi kết quả của 44 liên kết trong 12 trang, trong đó 3 liên kết hỏng vì trang đích đã đổi tên hoặc bị xoá khỏi trang";
+    expect([...TITLE].length).toBeLessThanOrEqual(80);
+    expect([...SUMMARY].length).toBeLessThanOrEqual(120);
+    const probe = join(raw.env.XDG_CONFIG_HOME!, "raw", "tools", "probe");
+    mkdirSync(probe, { recursive: true });
+    writeFileSync(join(probe, "tool.json"), JSON.stringify({ api_version: 2, id: "probe", version: "1.0.0", name: "probe", description: "Probe",
+      display: { title: "Probe", kind: "execute", result: "terminal" },
+      input_schema: { type: "object", properties: {}, additionalProperties: false }, entry: "./index.mjs" }));
+    writeFileSync(join(probe, "index.mjs"), `export async function handler() {
+      return { content: [{ type: "text", text: "probe line" }, { type: "json", value: { record: 7 } }] };
+    }`);
+    const folder = join(raw.env.XDG_CONFIG_HOME!, "raw", "tools", "report");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "tool.json"), JSON.stringify({ api_version: 2, id: "report", version: "1.0.0", name: "report", description: "Report",
+      input_schema: { type: "object", properties: {}, additionalProperties: false }, entry: "./index.mjs",
+      panels: [{ id: "report", title: "Report", placement: "sidebar" }] }));
+    writeFileSync(join(folder, "index.mjs"), `export async function handler() {
+      return { content: [{ type: "text", text: "Published" },
+        { type: "panel", panel: "report", op: "replace", document: { title: "${TITLE}", summary: "${SUMMARY}", blocks: [{ id: "b", kind: "markdown", text: "Đã ghi" }] } },
+        { type: "panel", panel: "ghost", op: "replace", document: { blocks: [] } }] };
+    }`);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(raw.server.launchUrl);
+    await page.getByRole("button", { name: "New chat", exact: true }).first().click();
+    const box = page.getByRole("textbox", { name: "Message" });
+    const send = async (text: string) => { await box.fill(text); await page.getByRole("button", { name: "Send", exact: true }).click(); };
+    await send("Chào");
+    await expect(page.getByTestId("assistant-message")).toContainText("Xin chào");
+    const first = page.locator(".work-group").first();
+    await expect(first.locator(".work-count")).toHaveText("· Reasoning");
+    await expect(first.locator(".work-head .sp-chip")).toHaveCount(0);
+    await expect(first.locator(".work-pill")).toHaveCount(0);
+    await first.locator(".work-toggle").click();
+    await expect(first.locator(".tool-row")).toHaveCount(0);
+    const reasoning = first.locator(".reasoning-toggle");
+    await expect(reasoning).toHaveAttribute("aria-expanded", "false");
+    await reasoning.click();
+    await expect(first.locator(".reasoning .markdown")).toHaveText("Chỉ cần chào lại người dùng.");
+
+    await send("Chạy thử");
+    const second = page.locator(".work-group").nth(1);
+    // While the command runs: Working with a spinner, no time, the row's spinner and no chip.
+    await expect(second.locator(".work-time")).toHaveText("Working");
+    await expect(second.locator(".work-spinner")).toBeVisible();
+    await expect(second.locator(".work-toggle")).toHaveAttribute("aria-expanded", "false");
+    await second.locator(".work-toggle").click();
+    const slow = second.locator(".tool-row").filter({ hasText: "Chờ dịch vụ khởi động" });
+    await expect(slow).toHaveAttribute("data-status", "running");
+    await expect(slow.locator(".tool-status")).toHaveCount(0);
+    await slow.locator(".tool-toggle").click();
+    await expect(slow.locator(".tool-card")).toContainText("Live output is in Commands");
+    await expect(page.getByTestId("assistant-message").nth(1)).toContainText("Xong", { timeout: 30000 });
+    await expect(second.locator(".work-time")).toHaveText(/^Worked /);
+    await expect(second.locator(".work-spinner")).toHaveCount(0);
+    await expect(second.locator(".work-head .sp-chip")).toHaveText(["2 failed"]);
+    await expect(slow).toHaveAttribute("data-status", "timeout");
+    await expect(slow.locator(".tool-status")).toHaveText("Timed out");
+    await expect(slow.locator(".tool-glyph")).toHaveAttribute("data-glyph", "clock");
+    const denied = second.locator(".tool-row").filter({ hasText: "notes.md" });
+    await expect(denied.locator(".tool-status")).toHaveText("Denied");
+    await expect(denied.locator(".tool-glyph")).toHaveAttribute("data-glyph", "ban");
+    await expect(denied.locator(".tool-toggle")).toHaveAttribute("aria-expanded", "true");
+    // The report's panels: its pill, and the rejected update as an error pill.
+    await expect(second.locator(".work-pill")).toHaveText([TITLE, "ghost"]);
+    await expect(second.locator(".work-pill.tone-error")).toHaveText("ghost");
+    const report = second.locator(".tool-row").filter({ has: page.locator(".tool-title", { hasText: /^report$/i }) });
+    await expect(report.locator(".receipt-pill")).toHaveText([SUMMARY, "Update rejected"]);
+    await expect(page.locator(".panel-receipt")).toHaveCount(0);
+    // A terminal result with structured content keeps its JSON tree under the output, and every body has a footer Copy.
+    const probed = second.locator(".tool-row").filter({ has: page.locator(".tool-title", { hasText: /^Probe$/ }) });
+    await probed.locator(".tool-toggle").click();
+    await expect(probed.locator(".tool-terminal")).toHaveText("probe line\n");
+    await expect(probed.getByRole("list", { name: "JSON result" })).toContainText("record");
+    await expect(probed.getByRole("button", { name: "Copy output" })).toBeVisible();
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      await axe(page);
+    }
+    // At 390 px long panel titles and summaries end in an ellipsis inside the column.
+    await page.setViewportSize({ width: 390, height: 844 });
+    const conversation = (await page.locator(".conversation").boundingBox())!;
+    for (const pill of await page.locator(".work-pill, .receipt-pill").all()) {
+      const box = (await pill.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(conversation.x + conversation.width + 0.5);
+    }
+    await expect(second.locator(".work-pill").first()).toHaveAccessibleName(TITLE);
+    expect((await second.locator(".work-head").boundingBox())!.height).toBeLessThanOrEqual(32);
+    for (const row of await second.locator(".tool-line").all()) expect((await row.boundingBox())!.height).toBeLessThanOrEqual(34);
+    expect(await page.locator(".conversation-scroll").evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // Tool details: every group and row starts open.
+    await page.evaluate(() => {
+      const key = "raw.dashboard.preferences.v1";
+      localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key) ?? "{}"), version: 1, toolDetails: true }));
+    });
+    await page.reload();
+    for (const group of await page.locator(".work-group").all())
+      await expect(group.locator(".work-toggle")).toHaveAttribute("aria-expanded", "true");
+    for (const row of await page.locator(".tool-row").all())
+      await expect(row.locator(".tool-toggle")).toHaveAttribute("aria-expanded", "true");
   });
 });
 

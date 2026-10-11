@@ -1367,110 +1367,407 @@ summary {
 summary::-webkit-details-marker {
   display: none;
 }
+/* Work groups (docs/chat-design.md §6): a summary line, then rows on a left rule; opened rows show a card. */
 .work-group {
-  margin: 6px 0 24px;
+  margin: 0 0 22px;
+  font-size: 13px;
 }
-.work-group > summary {
+.work-head,
+.tool-line {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text);
+  min-width: 0;
 }
-.work-group[open] > summary .chevron {
+.work-head {
+  gap: 8px;
+  color: var(--muted);
+}
+.work-toggle,
+.tool-toggle,
+.reasoning-toggle {
+  flex: 0 1 auto;
+  justify-content: flex-start;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  line-height: inherit;
+}
+.work-toggle:hover:not(:disabled),
+.tool-toggle:hover:not(:disabled),
+.reasoning-toggle:hover:not(:disabled) {
+  background: transparent;
+}
+/* The whole line toggles; the pills on it sit above the toggle's hit area. */
+.work-toggle::after,
+.tool-toggle::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+}
+.work-toggle:focus-visible,
+.tool-toggle:focus-visible {
+  outline: 0;
+}
+.work-toggle:focus-visible::after,
+.tool-toggle:focus-visible::after {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+/* The toggles are the 32 px targets every dashboard button has; the line is their height. */
+.work-toggle,
+.tool-toggle {
+  align-self: stretch;
+  min-height: 32px;
+}
+.work-toggle {
+  gap: 8px;
+}
+.work-toggle .chevron,
+.tool-chevron {
+  flex: none;
+  transition: transform 0.15s ease;
+}
+.work-toggle[aria-expanded="true"] .chevron,
+.tool-toggle[aria-expanded="true"] ~ .tool-chevron {
   transform: rotate(90deg);
 }
-.work-content {
-  padding: 12px 0 0 12px;
-  margin-left: 7px;
-  border-left: 1px solid var(--border);
-}
-.reasoning {
-  font-size: 14px;
-  color: var(--muted);
-  margin: 0 0 16px;
-}
-.reasoning .markdown {
-  font-size: 14px;
-}
-.tool-card {
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  margin: 8px 0;
-  overflow: hidden;
-  background: var(--panel);
-}
-.tool-card > summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  font-size: 13px;
-  min-height: 34px;
-  cursor: pointer;
-}
-.tool-icon {
-  display: inline-flex;
-  color: var(--muted);
+.work-time {
   flex: none;
-}
-.tool-card > summary .tool-title {
-  font-weight: 600;
+  color: var(--text);
+  font-weight: 550;
   white-space: nowrap;
 }
-.tool-summary {
-  color: var(--muted);
+.work-count {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.work-head .sp-chip {
+  flex: none;
+}
+.tool-spacer {
   flex: 1;
   min-width: 0;
+}
+.work-pill,
+.receipt-pill {
+  position: relative;
+  z-index: 1;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 18em;
+  gap: 5px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.work-pill:hover:not(:disabled),
+.receipt-pill:hover:not(:disabled) {
+  background: var(--panel-hover);
+}
+.work-pill svg,
+.receipt-pill svg {
+  flex: none;
+  color: var(--muted);
+}
+/* A long panel title or summary ends in an ellipsis; the accessible name keeps all of it. */
+.pill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-pill.tone-error,
+.receipt-pill.tone-error {
+  border-color: var(--danger-border);
+  color: var(--error);
+}
+.work-pill .add,
+.tool-diffstat .add {
+  color: var(--success);
+}
+.work-pill .remove,
+.tool-diffstat .remove {
+  color: var(--error);
+}
+.work-spinner {
+  flex: none;
+  color: var(--accent-text);
+  animation: panel-spin 1.2s linear infinite;
+}
+.work-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0 6px;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
+}
+.work-content[hidden] {
+  display: none;
+}
+.reasoning {
+  color: var(--muted);
+}
+.reasoning-toggle {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+}
+.reasoning-toggle > svg {
+  flex: none;
+}
+.reasoning-toggle i {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reasoning-body {
+  padding: 0 8px 4px 31px;
+  font-size: 13px;
+  font-style: italic;
+}
+.tool-line {
+  gap: 9px;
+  padding: 0 8px;
+  border-radius: 8px;
+}
+.tool-line:hover {
+  background: var(--panel-hover);
+}
+.tool-toggle {
+  gap: 9px;
+}
+.tool-glyph {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+.tool-glyph.tone-ok {
+  color: var(--success);
+}
+.tool-glyph.tone-error {
+  color: var(--error);
+}
+.tool-glyph.tone-warning {
+  color: var(--warning);
+}
+.tool-glyph[data-glyph="spinner"] {
+  color: var(--accent-text);
+}
+.tool-glyph[data-glyph="spinner"] svg {
+  animation: panel-spin 1.2s linear infinite;
+}
+.tool-title {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.tool-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
   font-size: 12px;
 }
 code.tool-summary {
   font-family: var(--font-mono);
+  font-variant-ligatures: none;
 }
-.tool-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 7px;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: nowrap;
-  color: var(--muted);
-}
-.tool-status.tone-ok {
-  color: var(--success);
-}
-.tool-status.tone-error {
-  color: var(--error);
-}
-.tool-status.tone-warning {
-  color: var(--warning);
-}
-.tool-duration {
-  font-size: 11px;
-  color: var(--muted);
+.tool-diffstat {
+  flex: none;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.tool-content {
-  padding: 0 12px 12px;
+.tool-status {
+  flex: none;
 }
-.tool-content > .tool-notes {
-  margin: 6px 0;
+.tool-duration {
+  flex: none;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.tool-arguments > summary,
+.tool-chevron {
+  color: var(--muted);
+}
+.tool-card {
+  margin: 4px 0 6px 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--sp-card);
+}
+.tool-card.failed {
+  border-color: var(--danger-border);
+}
+.tool-card[hidden] {
+  display: none;
+}
+.tool-terminal {
+  margin: 0;
+  max-height: calc(16 * 1.6em + 16px);
+  padding: 8px 10px;
+  overflow: auto;
+  background: var(--code);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-ligatures: none;
+  line-height: 1.6;
+  white-space: pre;
+}
+.tool-terminal.full {
+  border-top: 1px solid var(--border);
+}
+.term-line {
+  display: block;
+}
+.term-line[data-channel="stderr"] {
+  color: var(--error);
+}
+.term-line.notice {
+  color: var(--muted);
+}
+.tool-card > .code-block.diff-view {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--code);
+}
+.tool-card > .code-block.diff-view pre {
+  padding: 4px 0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.tool-card .diff-line {
+  padding: 0 10px;
+}
+.tool-card.single-file .diff-file {
+  display: none;
+}
+.tool-card .diff-hunk {
+  padding-top: 4px;
+}
+.tool-card > .tool-text,
+.tool-card > .tool-markdown,
+.tool-card > .json-tree,
+.tool-card > .code-block {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.tool-card > * + .tool-text,
+.tool-card > * + .tool-markdown,
+.tool-card > * + .json-tree,
+.tool-card > * + .code-block {
+  border-top: 1px solid var(--border);
+}
+.tool-waiting,
+.tool-card-note {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tool-card-note.error-text {
+  color: var(--error);
+}
+.tool-link {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: inherit;
+  text-decoration: underline;
+}
+.tool-link:hover:not(:disabled) {
+  background: transparent;
+}
+.tool-arguments {
+  border-top: 1px solid var(--border);
+}
+.tool-arguments .code-block {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.tool-arguments > .muted {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.tool-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--border);
+}
+.tool-card > .tool-card-foot:first-child {
+  border-top: 0;
+}
+.tool-foot-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+.tool-card-foot .foot-button {
+  flex: none;
+  gap: 5px;
+  min-width: 0;
+  min-height: 26px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.tool-card-foot .foot-button:hover:not(:disabled) {
+  background: var(--panel-hover);
+}
+.tool-card-foot .foot-button svg {
+  width: 12px;
+  height: 12px;
+}
+.tool-card-foot .copy-text {
+  display: inline;
+}
+.tool-card > .approval {
+  margin: 0;
+  border-width: 1px 0 0;
+  border-radius: 0;
+}
 .json-tree summary {
   cursor: pointer;
-}
-.tool-arguments > summary {
-  font-size: 12px;
-  color: var(--muted);
-  padding: 4px 0;
 }
 .terminal-frame {
   --terminal-bg: #0d0b12;
@@ -2135,18 +2432,11 @@ code.tool-summary {
   .tool-summary {
     display: none;
   }
-  .tool-card > summary {
-    flex-wrap: wrap;
-  }
-  .tool-status {
-    margin-left: auto;
-  }
-  .tool-content {
-    padding-left: 8px;
-    padding-right: 8px;
-  }
   .work-content {
     padding-left: 8px;
+  }
+  .tool-card {
+    margin-left: 0;
   }
   .code-block pre {
     padding: 10px;
@@ -3774,7 +4064,8 @@ code.tool-summary {
 }
 /* The side panel's tokens; an inline tool view in the chat uses the same chips and cards. */
 .inspector,
-.inline-tool-view {
+.inline-tool-view,
+.work-group {
   --sp-card: var(--canvas);
   --sp-tint-accent: var(--accent-soft);
   --sp-tint-success: color-mix(in srgb, var(--success) 14%, transparent);
@@ -3793,7 +4084,8 @@ code.tool-summary {
   --sp-warning-text: var(--warning);
   --sp-success-text: var(--success);
 }
-:root[data-theme="dark"] .inline-tool-view {
+:root[data-theme="dark"] .inline-tool-view,
+:root[data-theme="dark"] .work-group {
   --sp-card: #141020;
   --sp-tint-success: #10261c;
   --sp-tint-warning: #2a2110;
@@ -3805,15 +4097,18 @@ code.tool-summary {
   border-color: #4c3a86;
   box-shadow: inset 0 0 0 1px #2b2147;
 }
-:root[data-theme="dark"] .panel-file-diff .diff-add {
+:root[data-theme="dark"] .panel-file-diff .diff-add,
+:root[data-theme="dark"] .tool-card .diff-add {
   background: #0f2a1d;
   color: #bff0d6;
 }
-:root[data-theme="dark"] .panel-file-diff .diff-remove {
+:root[data-theme="dark"] .panel-file-diff .diff-remove,
+:root[data-theme="dark"] .tool-card .diff-remove {
   background: #2f1019;
   color: #ffc9d3;
 }
-.panel-file-diff .diff-hunk {
+.panel-file-diff .diff-hunk,
+.tool-card .diff-hunk {
   color: var(--accent-text);
 }
 .inspector > .section-heading {
@@ -4165,14 +4460,6 @@ button.sp-card:hover:not(:disabled) {
 .panel-chevron {
   flex: none;
   transition: transform 0.15s;
-}
-.panel-progress-line {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 2px;
-  background: var(--accent);
-  pointer-events: none;
 }
 .panel-block h4 {
   margin: var(--space-2) 0 var(--space-1);
@@ -4938,38 +5225,43 @@ ol.panel-timeline {
 .panel-table .panel-table-glyph {
   width: 30px;
 }
+/* A receipt without a call in a work group (a user action): a pill row of its own (docs/chat-design.md §6). */
 .panel-receipt {
-  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  margin: 6px 0;
-  padding: 6px 10px 8px;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 26px;
+  margin: 0 0 22px;
+  padding: 2px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
+  border-radius: 999px;
+  background: transparent;
   color: var(--text);
-  font: inherit;
   font-size: 12px;
   text-align: left;
-  cursor: pointer;
-  overflow: hidden;
 }
-.panel-receipt:hover {
+.panel-receipt:hover:not(:disabled) {
   background: var(--panel-hover);
+}
+.panel-receipt > svg {
+  flex: none;
+  color: var(--muted);
 }
 .panel-receipt-title {
   flex: none;
-  font-weight: 600;
+  font-weight: 550;
 }
 .panel-receipt-summary {
-  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
+}
+.panel-receipt.rejected {
+  border-color: var(--danger-border);
 }
 .panel-receipt.rejected .panel-receipt-summary {
   color: var(--error);

@@ -161,10 +161,13 @@ test.describe("todo panel", () => {
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
     // A hidden tab never opens the side panel by itself.
     await expect(page.locator(".inspector")).toHaveCount(0);
-    await page.getByText("Work", { exact: true }).click();
-    const receipt = page.locator(".panel-receipt");
+    // The todo's receipt is a pill on its row and on the group's summary line, never a row of its own.
+    await page.locator(".work-toggle").click();
+    await expect(page.locator(".panel-receipt")).toHaveCount(0);
+    const receipt = page.locator(".tool-row .receipt-pill");
     await expect(receipt).toHaveCount(1);
-    await expect(receipt).toContainText("Ship");
+    await expect(receipt).toHaveText(/^\d+ of \d+ done$/);
+    await expect(page.locator(".work-pill")).toHaveText([/^Todo \d+\/\d+$/]);
     await receipt.click();
     await expect(page.locator(".inspector")).toBeVisible();
     await expect(tab(page, "Todo")).toHaveAttribute("aria-selected", "true");

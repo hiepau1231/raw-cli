@@ -37,9 +37,15 @@ try {
   for (const scheme of ["dark", "light"] as const) {
     await desktop.page.emulateMedia({ colorScheme: scheme });
     await shoot(desktop.page, "desktop", scheme);
+    // The work view, as in the mockup: the first group open, with the edit's diff and the failed command's card.
+    const group = desktop.page.locator(".work-group").first();
+    if ((await group.locator(".work-toggle").getAttribute("aria-expanded")) === "false") await group.locator(".work-toggle").click();
+    const edit = group.locator(".tool-row[data-kind=edit] .tool-toggle");
+    if ((await edit.getAttribute("aria-expanded")) === "false") await edit.click();
     await desktop.page.locator(".conversation-scroll").evaluate((element) => { element.scrollTop = 0; });
-    await expect(desktop.page.locator(".work-group").first()).toBeInViewport();
+    await expect(group).toBeInViewport();
     await shoot(desktop.page, "work", scheme, ".chat-main");
+    await group.locator(".work-toggle").click();
     await desktop.page.locator(".conversation-scroll").evaluate((element) => { element.scrollTop = element.scrollHeight; });
     await shoot(desktop.page, "composer", scheme, ".composer-area");
   }

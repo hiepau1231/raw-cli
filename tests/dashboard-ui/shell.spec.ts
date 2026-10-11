@@ -324,17 +324,16 @@ test("legacy tool IDs reused in different turns retain separate results and hone
     });
   }
   await page.goto(raw.server.launchUrl.replace("/#", `/chat/${session.id}#`));
-  await expect(page.locator(".tool-card")).toHaveCount(2);
-  for (const group of await page.locator(".work-group").all())
-    if ((await group.getAttribute("open")) === null)
-      await group.locator(":scope > summary").click();
-  const first = page.locator(".tool-card").first();
-  if ((await first.getAttribute("open")) === null)
-    await first.locator(":scope > summary").click();
+  await expect(page.locator(".tool-row")).toHaveCount(2);
+  for (const toggle of await page.locator(".work-toggle").all())
+    if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+  const first = page.locator(".tool-row").first();
+  if ((await first.locator(".tool-toggle").getAttribute("aria-expanded")) === "false")
+    await first.locator(".tool-toggle").click();
   await expect(first).toContainText("Result 1");
-  await expect(first).toContainText("Display abbreviated");
-  await expect(first).toContainText("Tool truncated its output");
-  const second = page.locator(".tool-card").nth(1);
+  await expect(first.locator(".tool-foot-meta")).toContainText("Display abbreviated");
+  await expect(first.locator(".tool-foot-meta")).toContainText("Tool truncated its output");
+  const second = page.locator(".tool-row").nth(1);
   await expect(second).toContainText("Result 2");
   await expect(second).toContainText("Outcome unknown");
   expect(raw.provider.requests.length).toBe(0);

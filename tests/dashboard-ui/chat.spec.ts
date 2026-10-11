@@ -79,7 +79,7 @@ test("real chat renders highlighted Markdown, reasoning and context without dupl
     page.getByRole("heading", { name: "Ready", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".hljs-keyword")).toContainText("const");
-  await page.getByText("Work", { exact: true }).click();
+  await page.locator(".work-toggle").click();
   await expect(
     page.getByText("Checking the request.", { exact: true }),
   ).toBeVisible();

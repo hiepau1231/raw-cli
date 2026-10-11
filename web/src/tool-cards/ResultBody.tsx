@@ -4,9 +4,10 @@ import type { ToolResultType } from "../../../src/tools/display.js";
 import { highlightLine, Markdown } from "../markdown.js";
 import { CopyButton } from "../ui.js";
 import { JsonTree } from "./JsonTree.js";
+import { parseTerminalPreview, type TerminalLine } from "./terminal.js";
+import { bodyKind, diffKinds, parsedJson, textOf } from "./result-data.js";
 
 const HIDDEN = /^… \[(\d+) lines hidden\] …$/;
-const textOf = (segments: PreviewSegment[]) => segments.map((segment) => segment.text).join("\n");
 
 /** A dark terminal frame with a copy button; the output keeps its lines and spacing. */
 export function TerminalFrame({ label, text }: { label: string; text: string }) {
@@ -24,7 +25,9 @@ export function TerminalFrame({ label, text }: { label: string; text: string }) 
 }
 
 /** Code lines with their file line numbers: they start at the window's first line and skip the hidden lines. */
-function CodeLines({ segments, start, path }: { segments: PreviewSegment[]; start: number; path?: string | undefined }) {
+function CodeLines({ segments, start, path, label = true }: {
+  segments: PreviewSegment[]; start: number; path?: string | undefined; /** Off in a tool card, whose footer has the path and Copy. */ label?: boolean;
+}) {
   const language = path?.split("/").pop()?.split(".").slice(1).pop()?.toLowerCase() ?? "text";
   let line = start;
   const rows: ReactNode[] = segments.map((segment, index) => {
@@ -50,13 +53,15 @@ function CodeLines({ segments, start, path }: { segments: PreviewSegment[]; star
   });
   return (
     <div className="code-block code-file">
-      <div className="code-label">
-        <span>{path ?? language}</span>
-        <CopyButton
-          value={textOf(segments.filter((segment) => segment.kind === "code"))}
-          label="Copy code"
-        />
-      </div>
+      {label && (
+        <div className="code-label">
+          <span>{path ?? language}</span>
+          <CopyButton
+            value={textOf(segments.filter((segment) => segment.kind === "code"))}
+            label="Copy code"
+          />
+        </div>
+      )}
       <pre tabIndex={0}>
         <code>{rows}</code>
       </pre>
@@ -64,42 +69,19 @@ function CodeLines({ segments, start, path }: { segments: PreviewSegment[]; star
   );
 }
 
-/**
- * Each line's class in a unified diff. File headers are recognized only outside a hunk; inside one, the line counts of
- * its `@@` header decide where it ends, so a changed line whose text starts with `--` or `++` stays a change.
- */
-function diffKinds(lines: string[]): string[] {
-  let oldLeft = 0;
-  let newLeft = 0;
-  return lines.map((line) => {
-    const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);
-    if (hunk) {
-      oldLeft = Number(hunk[1] ?? 1);
-      newLeft = Number(hunk[2] ?? 1);
-      return "diff-hunk";
-    }
-    if (oldLeft > 0 || newLeft > 0) {
-      if (line.startsWith("+")) { newLeft--; return "diff-add"; }
-      if (line.startsWith("-")) { oldLeft--; return "diff-remove"; }
-      if (line.startsWith("\\")) return "diff-meta";
-      oldLeft--;
-      newLeft--;
-      return "diff-context";
-    }
-    return /^(diff |index |--- |\+\+\+ |@@)/.test(line) ? "diff-meta" : line.startsWith("+") ? "diff-add"
-      : line.startsWith("-") ? "diff-remove" : "diff-context";
-  });
-}
 
-export function Diff({ text }: { text: string }) {
+/** A unified diff; in a tool card the card's footer carries the path and Copy diff, so `label` is off there. */
+export function Diff({ text, label = true }: { text: string; label?: boolean }) {
   const lines = text.replace(/\n$/, "").split("\n");
   const kinds = diffKinds(lines);
   return (
     <div className="code-block diff-view">
-      <div className="code-label">
-        <span>diff</span>
-        <CopyButton value={text} label="Copy diff" />
-      </div>
+      {label && (
+        <div className="code-label">
+          <span>diff</span>
+          <CopyButton value={text} label="Copy diff" />
+        </div>
+      )}
       <pre tabIndex={0}>
         <code>
           {lines.map((line, index) => (
@@ -114,32 +96,41 @@ export function Diff({ text }: { text: string }) {
   );
 }
 
-function parsedJson(result: VisibleToolResult): unknown[] | undefined {
-  if (result.json) return result.json;
-  // Old records carry only the pretty-printed preview.
-  if (!result.segments.length || !result.segments.every((segment) => segment.kind === "json")) return undefined;
-  try {
-    return [JSON.parse(textOf(result.segments))];
-  } catch {
-    return undefined;
-  }
+
+/** A command's preview in a tool card: markers removed, stderr lines in the error colour (docs/chat-design.md §6). */
+export function TerminalLines({ lines }: { lines: TerminalLine[] }) {
+  return (
+    <pre className="tool-terminal" tabIndex={0}>
+      <code>
+        {lines.map((line, index) => (
+          <span className={`term-line${line.notice ? " notice" : ""}`} data-channel={line.channel} key={index}>
+            {line.text}
+            {"\n"}
+          </span>
+        ))}
+      </code>
+    </pre>
+  );
 }
 
 /**
  * The result body by type (docs/tool-ux-design.md §5.4). An error or a denial shows its message as text; a command that
  * exited nonzero, timed out or was cancelled keeps its terminal output.
  */
-export function ResultBody({ result, hint }: { result: VisibleToolResult; hint?: ToolResultType | undefined }) {
+export function ResultBody({ result, hint, card = false }: {
+  result: VisibleToolResult; hint?: ToolResultType | undefined; /** Inside a chat tool card, whose footer has Copy. */ card?: boolean;
+}) {
   const type = result.resultType ?? hint;
   // Structured JSON is always a tree; the other segments (text, a capping notice, MCP markdown) get the body of the type.
   const json = parsedJson(result);
   const segments = json ? result.segments.filter((segment) => segment.kind !== "json") : result.segments;
   const text = textOf(segments);
   const failed = result.status ? !["ok", "exit"].includes(result.status) : result.failed;
-  const refused = result.status ? ["error", "denied"].includes(result.status) : result.failed && result.exitCode === undefined;
+  const kind = bodyKind(result, hint);
   const body = (): ReactNode => {
-    if (type === "terminal" && !refused) return <TerminalFrame label="Output" text={text} />;
-    if (!failed && type === "diff" && (result.host?.diff || text)) return <Diff text={result.host?.diff ?? text} />;
+    if (kind === "terminal")
+      return card ? <TerminalLines lines={parseTerminalPreview(text).lines} /> : <TerminalFrame label="Output" text={text} />;
+    if (kind === "diff") return <Diff text={result.host?.diff ?? text} label={!card} />;
     if (!segments.length) return null;
     if (!failed && type === "code" && segments.some((segment) => segment.kind === "code"))
       return (
@@ -147,6 +138,7 @@ export function ResultBody({ result, hint }: { result: VisibleToolResult; hint?:
           segments={segments}
           start={result.host?.range?.start ?? 1}
           path={result.host?.path ?? segments.find((segment) => segment.path)?.path}
+          label={!card}
         />
       );
     if (!failed && type === "markdown")

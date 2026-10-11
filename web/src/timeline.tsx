@@ -1,18 +1,9 @@
 import { InteractionView } from "./panels/InteractionView.js";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { InlineToolView } from "./panels/ToolView.js";
 import type { ActionHost } from "./panels/actions.js";
 import type { InsertRef } from "./panels/status.js";
-import {
-  Ban,
-  CheckCircle2,
-  ChevronRight,
-  CircleDashed,
-  CircleX,
-  Clock,
-  ShieldQuestion,
-  Brain,
-} from "lucide-react";
+import { Brain, ChevronRight, LoaderCircle, ShieldQuestion } from "lucide-react";
 import type { HistoryView } from "../../src/sessions/view.js";
 import type {
   VisibleToolCall,
@@ -26,13 +17,18 @@ import { api, errorText } from "./api.js";
 import { isTerminal, type ChatState } from "./session.js";
 import { CodeBlock, Markdown } from "./markdown.js";
 import { CopyButton, ErrorMessage } from "./ui.js";
+import type { PanelIcon, PanelReceipt } from "../../src/panels/contract.js";
 import { Receipt } from "./panels/Receipt.js";
+import { PanelGlyph } from "./panels/Tabs.js";
 import { receiptPanel } from "./panels/panel-state.js";
+import { COMMANDS_ID } from "./panels/commands-state.js";
 import { HistoryAttachments } from "./composer/HistoryAttachments.js";
-import { ToolIcon } from "./tool-cards/ToolIcon.js";
-import { ResultBody } from "./tool-cards/ResultBody.js";
-import { FullOutput } from "./tool-cards/FullOutput.js";
-import { formatDuration, statusBadge } from "./tool-cards/status.js";
+import { ToolRow } from "./tool-cards/ToolRow.js";
+import { diffTotals } from "./tool-cards/diff-totals.js";
+import { statusBadge } from "./tool-cards/status.js";
+
+/** The owner of the files-changed panel the editing tools share (src/tools/write-changes.ts FILES_CHANGED_OWNER). */
+const FILES_CHANGED_OWNER = "host/files_changed";
 
 export function ApprovalActions({ approval }: { approval: Approval }) {
   const [busy, setBusy] = useState(false);
@@ -93,100 +89,6 @@ export function ApprovalActions({ approval }: { approval: Approval }) {
       </small>
       <ErrorMessage>{error}</ErrorMessage>
     </section>
-  );
-}
-function ToolCard({
-  call,
-  result,
-  status,
-  approval,
-  preferences,
-  previewAbbreviated,
-  sessionId,
-}: {
-  call?: VisibleToolCall | undefined;
-  result?: VisibleToolResult | undefined;
-  status?: string | undefined;
-  approval?: Approval | undefined;
-  preferences: Preferences;
-  previewAbbreviated?: boolean | undefined;
-  sessionId: string;
-}) {
-  const badge = statusBadge({ result, lifecycle: status, approval: !!approval, started: !!call?.started });
-  const failed = badge.tone === "error";
-  const StatusIcon =
-    badge.state === "approval"
-      ? ShieldQuestion
-      : badge.tone === "ok"
-        ? CheckCircle2
-        : badge.state === "timeout"
-          ? Clock
-          : badge.state === "cancelled" || badge.state === "denied"
-            ? Ban
-            : failed
-              ? CircleX
-              : CircleDashed;
-  const name = call?.name ?? result?.name ?? "Historical tool";
-  const args = call?.arguments;
-  // The projected title and summary (docs/tool-ux-design.md §5.4); old records fall back to the name and identity.
-  const title = call?.title ?? name;
-  const summary = call?.summary;
-  const fallback = call?.identity ?? result?.identity;
-  const callId = call?.id ?? result?.id;
-  const fullOutput =
-    !!result && !!callId && (!!result.host?.fullOutputPath || !!previewAbbreviated || result.truncated);
-  return (
-    <details
-      className={`tool-card ${failed ? "failed" : ""}`}
-      data-kind={call?.kind ?? result?.kind ?? "other"}
-      open={preferences.toolDetails || !!approval || failed || undefined}
-    >
-      <summary>
-        <ToolIcon icon={call?.icon} identity={call?.identity ?? result?.identity} kind={call?.kind ?? result?.kind} />
-        <strong className="tool-title">{title}</strong>
-        {summary ? (
-          <code className="tool-summary">{summary}</code>
-        ) : (
-          <span className="tool-summary">{fallback ?? ""}</span>
-        )}
-        <span className={`tool-status tone-${badge.tone}`} data-status={badge.state}>
-          <StatusIcon size={13} aria-hidden="true" />
-          {badge.label}
-        </span>
-        {result?.durationMs !== undefined && (
-          <span className="tool-duration">{formatDuration(result.durationMs)}</span>
-        )}
-      </summary>
-      <div className="tool-content">
-        {result ? (
-          <>
-            <ResultBody result={result} hint={call?.result} />
-            {fullOutput && <FullOutput sessionId={sessionId} callId={callId} />}
-            <p className="muted small tool-notes">
-              Saved preview
-              {result.code && result.code !== badge.state ? ` · ${result.code}` : ""}
-              {previewAbbreviated ? " · Display abbreviated" : ""}
-              {result.truncated ? " · Tool truncated its output" : ""}
-            </p>
-          </>
-        ) : (
-          <p className="muted">
-            Waiting for the result. Live shell output is available in Commands.
-          </p>
-        )}
-        <details className="tool-arguments">
-          <summary>Arguments</summary>
-          {args ? (
-            <CodeBlock code={JSON.stringify(args, null, 2)} language="json" />
-          ) : (
-            <p className="muted">
-              Arguments are unavailable in this history record.
-            </p>
-          )}
-        </details>
-        {approval && <ApprovalActions approval={approval} />}
-      </div>
-    </details>
   );
 }
 function Compaction({ details }: { details: CompactionDetails }) {
@@ -274,47 +176,86 @@ function PagedLive({
     </div>
   );
 }
+/** A reasoning row: one muted italic line that opens to the full text. */
+function ReasoningRow({ text, preferences }: { text: string; preferences: Preferences }) {
+  const [expanded, setExpanded] = useState<boolean>();
+  const open = expanded ?? preferences.reasoning;
+  const body = useId();
+  return (
+    <div className="reasoning">
+      <button type="button" className="reasoning-toggle" aria-expanded={open} aria-controls={body} onClick={() => setExpanded(!open)}>
+        <Brain size={14} aria-hidden="true" />
+        <i>{open ? "Reasoning" : text.replace(/\s+/g, " ").trim()}</i>
+      </button>
+      {/* Rendered only when open, so the text is on the page once. */}
+      <div className="reasoning-body" id={body} hidden={!open}>
+        {open && <Markdown>{text}</Markdown>}
+      </div>
+    </div>
+  );
+}
+/** A header pill: one panel the group updated, opening it in the side panel. */
+interface WorkPill { key: string; label: ReactNode; name: string; icon: PanelIcon; error: boolean; onOpen: () => void }
+/**
+ * A turn's tool activity (docs/chat-design.md §6): a summary line (time, tool count, failed and approval chips, one pill
+ * per panel updated) over the reasoning and tool rows. It opens on the user's toggle, by preference, or while a call in it
+ * waits for approval.
+ */
 function WorkGroup({
   children,
   count,
+  failed,
+  approval,
   active,
-  error,
   preferences,
   elapsedMs,
+  pills,
 }: {
   children: ReactNode;
   count: number;
+  failed: number;
+  approval: boolean;
   active: boolean;
-  error: boolean;
   preferences: Preferences;
   elapsedMs?: number | undefined;
+  pills: WorkPill[];
 }) {
   const [expanded, setExpanded] = useState<boolean>();
-  const open = expanded ?? (active || error || preferences.reasoning);
+  // A pending approval's actions are in its row's card, so its group opens while it waits.
+  const open = expanded ?? (approval || preferences.reasoning || preferences.toolDetails);
+  const content = useId();
   return (
-    <details
-      className="work-group"
-      open={open}
-      onToggle={(event) => {
-        if (event.currentTarget.open !== open)
-          setExpanded(event.currentTarget.open);
-      }}
-    >
-      <summary>
-        <ChevronRight className="chevron" size={16} aria-hidden="true" />
-        <span>Work</span>
-        <span className="muted">
-          {count ? `${count} ${count === 1 ? "tool" : "tools"}` : "Reasoning"}
-          {active
-            ? " · Working"
-            : elapsedMs !== undefined
-              ? ` · ${(elapsedMs / 1000).toFixed(1)}s`
-              : ""}
-          {error ? " · Needs review" : ""}
-        </span>
-      </summary>
-      <div className="work-content">{children}</div>
-    </details>
+    <div className="work-group" data-state={active ? "running" : "done"}>
+      <div className="work-head">
+        <button type="button" className="work-toggle" aria-expanded={open} aria-controls={content} onClick={() => setExpanded(!open)}>
+          <ChevronRight className="chevron" size={14} aria-hidden="true" />
+          <strong className="work-time">
+            {active ? "Working" : elapsedMs !== undefined ? `Worked ${(elapsedMs / 1000).toFixed(1)}s` : "Worked"}
+          </strong>
+          <span className="work-count">· {count ? `${count} ${count === 1 ? "tool" : "tools"}` : "Reasoning"}</span>
+          {failed > 0 && <span className="sp-chip tone-error">{failed} failed</span>}
+          {approval && <span className="sp-chip tone-warning">Needs approval</span>}
+        </button>
+        <span className="tool-spacer" />
+        {pills.map((pill) => (
+          <button
+            type="button"
+            key={pill.key}
+            className={`work-pill${pill.error ? " tone-error" : ""}`}
+            aria-label={pill.name}
+            title={`Show ${pill.name} in the side panel`}
+            onClick={pill.onOpen}
+          >
+            <PanelGlyph icon={pill.icon} size={12} />
+            <span className="pill-text">{pill.label}</span>
+          </button>
+        ))}
+        {active && <LoaderCircle className="work-spinner" size={13} aria-hidden="true" />}
+      </div>
+      <div className="work-content" id={content} hidden={!open}>
+        {children}
+      </div>
+    </div>
   );
 }
 export function Timeline({
@@ -438,33 +379,84 @@ export function Timeline({
       });
     }
   const result: ReactNode[] = [];
-  let work: ReactNode[] = [];
-  let count = 0;
+  /** The open group's entries; rows are built at flush, when the receipts of its calls are known. */
+  let work: Array<{ reasoning: string; id: string } | { key: string; callId: string; operationId?: string | undefined }> = [];
+  let receipts: PanelReceipt[] = [];
   let workId = "";
-  let workError = false;
   let workActive = false;
   let elapsedMs: number | undefined;
   const renderedTools = new Set<string>();
   const renderedCompact = new Set<string>();
   const renderedViews = new Set<string>();
   const availabilityRevision = `${state.snapshotCount}:${state.session.agentName}:${state.operations.filter(op => isTerminal(op.state)).map(op => `${op.id}:${op.state}`).join(",")}`;
+  const stackOf = (receipt: PanelReceipt) => state.panels.find((panel) => panel.panel === receiptPanel(receipt));
   const flush = () => {
-    if (work.length)
+    if (work.length) {
+      const byCall = new Map<string, PanelReceipt[]>();
+      for (const receipt of receipts) byCall.set(receipt.toolCallId, [...(byCall.get(receipt.toolCallId) ?? []), receipt]);
+      let failed = 0;
+      let approvals = false;
+      const results: VisibleToolResult[] = [];
+      const rows = work.map((entry) => {
+        if ("reasoning" in entry) return <ReasoningRow key={entry.id} text={entry.reasoning} preferences={preferences} />;
+        const pair = pairs.get(entry.key)!;
+        const approval = state.approvals.find((pending) => pending.operationId === entry.operationId && pending.callId === entry.callId);
+        const badge = statusBadge({ result: pair.result, lifecycle: pair.status, approval: !!approval, started: !!pair.call?.started });
+        if (badge.tone === "error") failed++;
+        approvals ||= !!approval;
+        if (pair.result) results.push(pair.result);
+        return (
+          <ToolRow
+            key={entry.key}
+            call={pair.call}
+            result={pair.result}
+            status={pair.status}
+            approval={!!approval}
+            preferences={preferences}
+            previewAbbreviated={pair.abbreviated}
+            sessionId={state.session.id}
+            // Files changed is the header's +a −r pill; other panels get a pill on the row that updated them.
+            receipts={(byCall.get(entry.callId) ?? []).filter((receipt) => receipt.owner !== FILES_CHANGED_OWNER).map((receipt) => ({
+              receipt, panelTitle: stackOf(receipt)?.title ?? receipt.title, icon: stackOf(receipt)?.icon ?? "panel", onOpen: () => onOpenPanel(receiptPanel(receipt)) }))}
+            onOpenCommands={() => onOpenPanel(COMMANDS_ID)}
+          >
+            {approval && <ApprovalActions approval={approval} />}
+          </ToolRow>
+        );
+      });
+      // One pill per panel, in the order the group first updated it, showing its latest receipt.
+      const latest = new Map<string, PanelReceipt>();
+      for (const receipt of receipts) latest.set(receiptPanel(receipt), receipt);
+      const pills = [...latest].map(([panel, receipt]): WorkPill => {
+        const stack = stackOf(receipt);
+        const pill = { key: panel, icon: stack?.icon ?? "panel", error: false, onOpen: () => onOpenPanel(panel) };
+        if (receipt.error) return { ...pill, label: receipt.title, name: `${receipt.title}: update rejected`, error: true };
+        // This group's own lines, from its diff results; the receipt's summary counts the whole session.
+        const totals = receipt.owner === FILES_CHANGED_OWNER ? diffTotals(results) : undefined;
+        if (totals)
+          return { ...pill, name: `${receipt.title} +${totals.added} −${totals.removed}`,
+            label: <><span className="add">+{totals.added}</span> <span className="remove">−{totals.removed}</span></> };
+        const title = stack?.title ?? receipt.title;
+        const label = receipt.progress && receipt.progress.total > 0 ? `${title} ${receipt.progress.done}/${receipt.progress.total}` : receipt.title;
+        return { ...pill, label, name: label };
+      });
       result.push(
         <WorkGroup
           key={`work:${workId}`}
-          count={count}
+          count={rows.length - work.filter((entry) => "reasoning" in entry).length}
+          failed={failed}
+          approval={approvals}
           active={workActive}
-          error={workError}
           preferences={preferences}
           elapsedMs={elapsedMs}
+          pills={pills}
         >
-          {work}
+          {rows}
         </WorkGroup>,
       );
+    }
     work = [];
-    count = 0;
-    workError = false;
+    receipts = [];
     workActive = false;
     elapsedMs = undefined;
   };
@@ -501,47 +493,24 @@ export function Timeline({
       );
       elapsedMs ??= state.operations.find((op) => op.id === item.operationId)
         ?.metrics?.elapsedMs;
-      if (item.kind === "reasoning")
-        work.push(
-          <div className="reasoning" key={item.id}>
-            <span className="eyebrow">Reasoning</span>
-            <Markdown>{item.text ?? ""}</Markdown>
-          </div>,
-        );
+      if (item.kind === "reasoning") work.push({ reasoning: item.text ?? "", id: item.id });
       else {
         const key = keyFor(item);
         if (renderedTools.has(key)) continue;
         renderedTools.add(key);
-        count++;
-        const pair = pairs.get(key)!;
-        const approval = state.approvals.find(
-          (pending) =>
-            pending.operationId === item.operationId &&
-            pending.callId === item.callId,
-        );
-        workError ||= !!pair.result?.failed || !!approval;
-        work.push(
-          <ToolCard
-            key={key}
-            call={pair.call}
-            result={pair.result}
-            status={pair.status}
-            approval={approval}
-            preferences={preferences}
-            previewAbbreviated={pair.abbreviated}
-            sessionId={state.session.id}
-          />,
-        );
+        work.push({ key, callId: item.callId!, operationId: item.operationId });
       }
       continue;
     }
     if (item.panelReceipt) {
-      // Under its tool result, inside the same work group; alone when the receipt outlived its group.
-      const full = receiptPanel(item.panelReceipt);
-      const icon = state.panels.find((panel) => panel.panel === full)?.icon ?? "panel";
-      const row = <Receipt key={item.id} receipt={item.panelReceipt} icon={icon} onOpen={() => onOpenPanel(full)} />;
-      if (work.length) work.push(row);
-      else result.push(row);
+      // A call's receipt is a pill of its group; one without a call in the open group (a user action) is a row of its own.
+      const receipt = item.panelReceipt;
+      if (receipt.source === "tool" && work.some((entry) => "callId" in entry && entry.callId === receipt.toolCallId)) {
+        receipts.push(receipt);
+        continue;
+      }
+      flush();
+      result.push(<Receipt key={item.id} receipt={receipt} icon={stackOf(receipt)?.icon ?? "panel"} onOpen={() => onOpenPanel(receiptPanel(receipt))} />);
       continue;
     }
     flush();

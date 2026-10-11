@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, errorText, fetchFullToolOutput } from "../api.js";
 import { TerminalFrame } from "./ResultBody.js";
 
-type State =
+export type FullOutputState =
   | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "loaded"; text: string; capped: boolean }
@@ -10,14 +10,8 @@ type State =
   | { kind: "error"; message: string };
 
 /** Loads the call's saved full output through the read-only session route; a missing copy keeps the preview. */
-export function FullOutput({
-  sessionId,
-  callId,
-}: {
-  sessionId: string;
-  callId: string;
-}) {
-  const [state, setState] = useState<State>({ kind: "idle" });
+export function useFullOutput(sessionId: string, callId: string): { state: FullOutputState; load: () => Promise<void> } {
+  const [state, setState] = useState<FullOutputState>({ kind: "idle" });
   const abort = useRef<AbortController | undefined>(undefined);
   useEffect(() => () => abort.current?.abort(), []);
   const load = async () => {
@@ -36,6 +30,12 @@ export function FullOutput({
       else setState({ kind: "error", message: errorText(cause) });
     }
   };
+  return { state, load };
+}
+
+/** The Commands panel's Load full output: a button, then the saved output in a terminal frame. */
+export function FullOutput({ sessionId, callId }: { sessionId: string; callId: string }) {
+  const { state, load } = useFullOutput(sessionId, callId);
   if (state.kind === "loaded")
     return (
       <div className="full-output">

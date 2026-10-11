@@ -71,3 +71,14 @@ export function formatDuration(ms: number): string {
   const seconds = Math.round(ms / 1000);
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
+
+export type StatusGlyph = "check" | "x" | "spinner" | "pending" | "shield" | "ban" | "clock";
+/** A row's status glyph (docs/chat-design.md §6): one per state, so a row reads without its chip. */
+export function statusGlyph(badge: StatusBadge): StatusGlyph {
+  if (badge.state === "approval") return "shield";
+  if (badge.tone === "ok") return "check";
+  if (badge.state === "timeout") return "clock";
+  if (badge.state === "denied" || badge.state === "cancelled") return "ban";
+  if (badge.tone === "error") return "x";
+  return badge.state === "running" ? "spinner" : "pending";
+}

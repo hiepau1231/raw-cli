@@ -410,11 +410,11 @@ The line is cut to 120 characters on every surface, with the full arguments avai
 
 ### 5.4 Surfaces
 
-- **Dashboard tool card** (`web/src/timeline.tsx`).
-  - **Header:** kind icon, title, summary (monospace for commands and paths), status badge, duration.
-  - **Body:** collapsed by default except for errors.
+- **Dashboard tool row** (`web/src/tool-cards/ToolRow.tsx`; layout in [chat-design.md](chat-design.md) §6, which supersedes the header below).
+  - **Row:** status glyph, title, summary (monospace for commands and paths), a chip for states other than OK, duration.
+  - **Card:** closed by default except for errors.
   - **Expanded view by result type:**
-    - `terminal`: a dark terminal frame with the output and a copy button. The full output link is shown when `fullOutputPath` exists.
+    - `terminal`: the output without its channel markers, stderr in the error colour, Copy in the footer. **Full output** is shown when `fullOutputPath` exists.
     - `code`: a highlighted file view with line numbers.
     - `diff`: a unified diff with `+`/`−` coloring.
     - `markdown`: rendered markdown.

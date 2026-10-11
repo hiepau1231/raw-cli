@@ -1,5 +1,6 @@
 import { chromium } from "@playwright/test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dashboardFixture } from "../fixtures/dashboard.js";
 import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
@@ -22,6 +23,8 @@ const raw = await dashboardFixture({
     call("bash1", "bash", { command: "printf 'all 42 tests passed\\n'", description: "Run the tests" }), answer("Tests passed."),
     call("bash2", "bash", { command: "printf 'error: missing semicolon\\n' >&2; exit 2", description: "Run the linter" }), answer("Lint failed."),
   ],
+  // The workspace is in the temporary directory; as HOME it shows as ~/… in the chat header, as on a real machine.
+  env: { HOME: realpathSync(tmpdir()) },
 });
 writeFileSync(join(raw.root, "README.md"), "# Raw\nold\n");
 const browser = await chromium.launch();
@@ -36,8 +39,8 @@ try {
     await page.getByTestId("assistant-message").nth(count - 1).waitFor({ timeout: 20000 });
   };
   await send("Fix the parser and tell me when the suite passes", 1);
-  await page.getByText("Work", { exact: true }).first().click();
-  await page.locator(".panel-receipt").first().waitFor();
+  await page.locator(".work-toggle").first().click();
+  await page.locator(".receipt-pill").first().waitFor();
   await page.getByText("Update the docs", { exact: true }).waitFor();
   await page.screenshot({ path: "docs/dashboard/chat-dark-side-panel.png", animations: "disabled" });
   console.log("wrote docs/dashboard/chat-dark-side-panel.png");
