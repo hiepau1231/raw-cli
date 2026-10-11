@@ -34,7 +34,12 @@ There are no full-height or full-width rules. Regions are separated by tone and 
 
 ## 4. Header
 
-To be written with the header phase.
+On a chat the app toolbar is not shown: the chat header is the card's first row and carries the toolbar's controls (the `chat-dark`, `chat-light` and `narrow` mockups). Other pages, and `/chat` before a session is open, keep the toolbar inside the card.
+
+- **One row,** 52 px high, 18 px left and 14 px right padding, no rule under it. Its centre is the frame's centre line (§3).
+- **Left to right:** "Workspace menu" (below 900 px only, opens the drawer); the session title (15 px, weight 600, one line with an ellipsis, the whole title in its tooltip); the agent as a muted chip; the workspace path (12 px muted, `~/…` under the home directory once the workspace listing reports it, otherwise the full path; the full path in its tooltip); then icon buttons with an 8 px radius, 32 px (the mockup's 30 px raised to the dashboard's minimum target size): Quick navigation (⌘K), Activity (warning colour while an approval waits, the count of running operations as a badge), Side panel (tinted while the side panel is open, `aria-expanded`) and More actions (agent, rename, Copy workspace path, delete).
+- **Below 600 px** the agent chip, the path and Quick navigation are hidden; the path stays in the title row's More actions → Copy workspace path, and ⌘K still opens Quick navigation.
+- **Width.** The conversation column and the composer are 720 px at most with 28 px at the sides (14 px below 600 px), centred in the card.
 
 ## 5. Messages
 

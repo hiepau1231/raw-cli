@@ -20,7 +20,7 @@ See [session operations](sessions.md), [management](management.md) and the [dash
 
 ## Chat workspace
 
-The rail, the workspace sidebar and the side panel sit on a darker backdrop, and the page you are on is one rounded card between them; no rules divide the screen ([chat-design.md](chat-design.md) §3). Below 600 px the card fills the window.
+The rail, the workspace sidebar and the side panel sit on a darker backdrop, and the page you are on is one rounded card between them; no rules divide the screen ([chat-design.md](chat-design.md) §3). Below 600 px the card fills the window. On a chat the card starts with a single header row (the title, the agent, the workspace path as `~/…` under your home directory, Quick navigation, Activity, Side panel and More actions) in place of the toolbar the other pages show ([chat-design.md](chat-design.md) §4).
 
 Selected agent hooks appear in the conversation history as compact receipts showing the hook ID, event and outcome. A successful hook is visible even when its command writes no stdout. Hook messages are host status, never assistant text sent to the model. See [hooks](hooks.md) for events, filters and cancellation behavior.
 

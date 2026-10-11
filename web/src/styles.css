@@ -869,6 +869,89 @@ main > .error-banner {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The chat header: one 52 px row with the title, the agent, the path and the shell's controls (docs/chat-design.md §4). */
+.page-header.chat-header {
+  justify-content: flex-start;
+  gap: 10px;
+  height: 52px;
+  min-height: 52px;
+  padding: 0 14px 0 18px;
+  border-bottom: 0;
+}
+.chat-header .chat-title {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.page-header.chat-header h1 {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+}
+.chat-header .metadata {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 50%;
+  min-width: 0;
+}
+/* Its own width up to 160 px or the room it has, then an ellipsis; the path shrinks first. */
+.chat-header .agent-chip {
+  flex: none;
+  max-width: min(160px, calc(100% - 8px));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 7px;
+  background: var(--panel-hover);
+  color: var(--muted);
+  line-height: 16px;
+}
+.chat-header .workspace-path {
+  font-size: 12px;
+}
+.chat-header .actions {
+  flex: none;
+}
+/* 32 px, not the mockup's 30: every button keeps the dashboard's 32 px minimum target. */
+.chat-header .icon-button {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--muted);
+}
+.chat-header .icon-button:hover:not(:disabled) {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+.chat-header .icon-button.selected,
+.chat-header .icon-button.selected:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.chat-header .chat-activity.attention {
+  color: var(--warning);
+}
+.chat-activity .count {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  min-width: 15px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--text);
+}
 .conversation-scroll {
   /* Keep positioned message controls and their hidden announcements inside this scroller. */
   position: relative;
@@ -877,10 +960,11 @@ main > .error-banner {
   min-height: 0;
   scrollbar-gutter: stable;
 }
+/* The conversation column and the composer: 720 px at most with 28 px at the sides (docs/chat-design.md §4). */
 .conversation {
-  max-width: 52rem;
+  max-width: 720px;
   margin: 0 auto;
-  padding: 24px 32px 32px;
+  padding: 24px 28px 32px;
   min-width: 0;
 }
 .message {
@@ -960,7 +1044,7 @@ main > .error-banner {
 }
 .composer-area {
   width: 100%;
-  max-width: 56rem;
+  max-width: 720px;
   padding: 12px 28px 14px;
   margin: 0 auto;
   flex: none;
@@ -1762,14 +1846,6 @@ code.tool-summary {
     background: #0004;
     z-index: 5;
   }
-  .conversation {
-    padding-left: 24px;
-    padding-right: 24px;
-  }
-  .composer-area {
-    padding-left: 20px;
-    padding-right: 20px;
-  }
   .page-header {
     padding-left: 24px;
     padding-right: 24px;
@@ -1798,13 +1874,6 @@ code.tool-summary {
   }
   .rail a {
     width: 50px;
-  }
-  .conversation {
-    padding: 24px;
-  }
-  .composer-area {
-    padding-left: 20px;
-    padding-right: 20px;
   }
 }
 @media (max-width: 599px) {
@@ -1892,6 +1961,12 @@ code.tool-summary {
   .conversation {
     padding: 20px 14px;
   }
+  .page-header.chat-header .actions {
+    gap: 8px;
+  }
+  .page-header.chat-header :is(.agent-chip, .workspace-path, .chat-search) {
+    display: none;
+  }
   .message {
     font-size: var(--chat-size);
     margin-bottom: 20px;
@@ -1900,7 +1975,7 @@ code.tool-summary {
     padding: 12px;
   }
   .composer-area {
-    padding: 8px 10px;
+    padding: 8px 14px;
   }
   .composer {
     padding: 10px;

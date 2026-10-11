@@ -16,6 +16,7 @@ export const keys = {
   bootstrap: () => "/bootstrap",
   config: () => "/config",
   activity: () => "/activity",
+  workspaces: () => "/workspaces",
   sessions: ({ cwd, title, limit = 50, before }: SessionsQuery) =>
     `/sessions?cwd=${enc(cwd)}&title=${enc(title)}&limit=${limit}${before ? `&before=${enc(before)}` : ""}`,
   composer: (agent: string) => `/agents/${enc(agent)}/composer`,

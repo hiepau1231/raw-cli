@@ -18,7 +18,7 @@ export const answer = {
 };
 export const test = base.extend<{
   raw: Awaited<ReturnType<typeof dashboardFixture>>;
-  scenario: { responses?: MockResponse[]; agent?: Record<string, unknown>; extraAgents?: Record<string, Record<string, unknown>>; model?: Record<string, unknown>; config?: Record<string, unknown> };
+  scenario: { responses?: MockResponse[]; agent?: Record<string, unknown>; extraAgents?: Record<string, Record<string, unknown>>; model?: Record<string, unknown>; config?: Record<string, unknown>; env?: Record<string, string> };
 }>({
   scenario: [{}, { option: true }],
   raw: async ({ scenario }, use) => {
@@ -28,6 +28,7 @@ export const test = base.extend<{
       ...(scenario.extraAgents ? { extraAgents: scenario.extraAgents } : {}),
       ...(scenario.model ? { model: scenario.model } : {}),
       ...(scenario.config ? { config: scenario.config } : {}),
+      ...(scenario.env ? { env: scenario.env } : {}),
     });
     try {
       await use(f);

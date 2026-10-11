@@ -1,5 +1,6 @@
 import { chromium, expect, type Page } from "@playwright/test";
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dashboardFixture } from "../fixtures/dashboard.js";
 import { chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
@@ -21,7 +22,8 @@ const shoot = async (page: Page, view: string, scheme: string, target?: string) 
 };
 /** A fresh dashboard with the stress session run up to `stage`. */
 const session = async (stage: "answer" | "question", viewport: { width: number; height: number }) => {
-  const raw = await dashboardFixture(chatScenario);
+  // The workspace is in the temporary directory; as HOME it shows as ~/… in the header, as on a real machine.
+  const raw = await dashboardFixture({ ...chatScenario, env: { HOME: realpathSync(tmpdir()) } });
   installChatWorkspace(raw);
   const page = await browser.newPage({ viewport, deviceScaleFactor: 2 });
   await page.emulateMedia({ colorScheme: "dark" });

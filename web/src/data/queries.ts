@@ -56,6 +56,11 @@ export function useComponents(kind: string) {
   return useSWR<ComponentInfo[]>(keys.components(kind));
 }
 
+/** The server's home directory, from the workspace listing; empty until it is known. Paths under it show as `~/…`. */
+export function useHome() {
+  return useSWR<{ home: string }>(keys.workspaces(), { revalidateOnFocus: false, dedupingInterval: 600_000 }).data?.home ?? "";
+}
+
 /** Composer capabilities per agent. Cached, so switching agents/chats never blanks the controls. */
 export function useComposerMeta(agent: string) {
   const swr = useSWR<ComposerMeta>(agent ? keys.composer(agent) : null, {

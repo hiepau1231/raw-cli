@@ -1,7 +1,9 @@
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
-import { chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
+import { REQUEST, chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
 
 // The chat area and the frame around it with real-length data (docs/chat-design.md), at the supported widths, in both
 // themes. Values come from the approved mockups (kept local).
@@ -10,6 +12,8 @@ const THEMES = {
   light: { backdrop: "rgb(238, 236, 243)", frame: "rgb(228, 225, 234)", canvas: "rgb(255, 255, 255)" },
 } as const;
 const TRANSPARENT = "rgba(0, 0, 0, 0)";
+// Theme switches are measured at once: no colour transitions in between.
+test.use({ reducedMotion: "reduce" });
 
 const setTheme = (page: Page, theme: keyof typeof THEMES) => page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
 const axe = async (page: Page) =>
@@ -27,6 +31,15 @@ const probe = (page: Page, selectors: string[]) => page.evaluate((list) => Objec
     paddingTop: style.paddingTop, paddingLeft: style.paddingLeft,
   }];
 })), selectors);
+/** A colour token resolved to the rgb() string computed styles report. */
+const tokenColour = (page: Page, name: string) => page.evaluate((token) => {
+  const sample = document.createElement("i");
+  sample.style.color = `var(${token})`;
+  document.body.append(sample);
+  const colour = getComputedStyle(sample).color;
+  sample.remove();
+  return colour;
+}, name);
 const near = (actual: number, expected: number, slack = 1) => expect(Math.abs(actual - expected), `${actual} vs ${expected}`).toBeLessThanOrEqual(slack);
 
 test.describe("app frame", () => {
@@ -56,10 +69,9 @@ test.describe("app frame", () => {
         expect(card.radius).toBe("14px");
         expect(card.borderColor).toBe(colours.frame);
         expect(card.background).toBe(colours.canvas);
-        // Until the chat header replaces it, the toolbar sits on the backdrop above the card, with no rule.
-        near(toolbar.top, 8);
-        expect(toolbar.borderBottom).toBe("0px");
-        near(card.top, toolbar.bottom);
+        // The chat header replaces the toolbar: the card starts on the workspace button's line.
+        expect(toolbar).toBeNull();
+        near(card.top, 8);
         near(card.bottom, 900 - 8);
         // The sidebar content is 16 px from the card; the rail logo and the 52 px workspace button share a centre line.
         near(card.left - ws.right, 16);
@@ -123,6 +135,7 @@ test.describe("app frame", () => {
       expect(p[".rail"]!.borderRight).toBe("0px");
       expect(p[".chat-main"]!.radius).toBe("14px");
       near(p[".chat-main"]!.left, p[".rail"]!.right, 1);
+      expect(await page.locator(".chat-header .agent-chip").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
       await axe(page);
     }
     await page.getByRole("button", { name: "Workspace menu" }).click();
@@ -196,5 +209,155 @@ test.describe("app frame", () => {
     await expect.poll(async () => (await page.locator(".inspector").boundingBox())?.width ?? 999).toBeLessThan(360);
     await expect(page.getByRole("dialog").locator(".inspector-resize")).toBeVisible();
     near(await drag("Inspector width", ".inspector", 6), -6);
+  });
+});
+
+test.describe("chat header", () => {
+  // The workspace lives in the temporary directory: as HOME, its path shows as ~/….
+  test.use({ scenario: { ...chatScenario, env: { HOME: realpathSync(tmpdir()) } } });
+  const header = ".chat-main > .page-header";
+
+  test("at 1440 px one 52 px row on the frame's centre line replaces the toolbar", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await seedChat(page, raw);
+    const bar = page.locator(header);
+    const title = bar.getByRole("heading", { level: 1 });
+    const path = bar.locator(".workspace-path");
+    const sidePanel = bar.getByRole("button", { name: "Side panel", exact: true });
+    const cwd = realpathSync(raw.root);
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      await expect(page.locator(".app-toolbar")).toHaveCount(0);
+      const p = await probe(page, [header, ".chat-main", ".workspace-button", ".rail .brand", ".side-panel-title"]);
+      const row = p[header]!;
+      near(p[".chat-main"]!.top, 8);
+      near(row.height, 52);
+      expect(row.borderBottom).toBe("0px");
+      expect(row.paddingLeft).toBe("18px");
+      for (const other of [".workspace-button", ".rail .brand", ".side-panel-title"]) near(p[other]!.centre, row.centre);
+      // One line: a 15 px title that ends in an ellipsis, then the agent and the shortened path.
+      // The session title is the request, cut by the server; the whole title is in the tooltip.
+      const text = (await title.textContent())!;
+      expect(text.length).toBeGreaterThan(40);
+      expect(REQUEST.startsWith(text)).toBe(true);
+      await expect(title).toHaveAttribute("title", text);
+      await expect(title).toHaveCSS("font-size", "15px");
+      await expect(title).toHaveCSS("font-weight", "600");
+      await expect(title).toHaveCSS("text-overflow", "ellipsis");
+      await expect(title).toHaveCSS("white-space", "nowrap");
+      await expect(bar.locator(".agent-chip")).toHaveText("raw");
+      // A short name is never clipped; only the path gives way.
+      expect(await bar.locator(".agent-chip").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await expect(path).toHaveText(`~/${cwd.split("/").pop()}`);
+      await expect(path).toHaveAttribute("title", cwd);
+      const tops = await bar.locator("h1, .agent-chip, .workspace-path, button:visible").evaluateAll((list) => list.map((element) => {
+        const box = element.getBoundingClientRect();
+        return box.top + box.height / 2;
+      }));
+      for (const centre of tops) near(centre, row.centre, 1.5);
+      // The toolbar's controls, as icon buttons at the 32 px minimum target; the drawer trigger only below 900 px.
+      await expect(bar.getByRole("button", { name: "Workspace menu" })).toBeHidden();
+      for (const name of ["Quick navigation", "Activity", "Side panel", "More actions"]) {
+        const button = bar.getByRole("button", { name, exact: name !== "Activity" });
+        await expect(button).toBeVisible();
+        await expect(button).toHaveCSS("width", "32px");
+        await expect(button).toHaveCSS("border-top-left-radius", "8px");
+      }
+      // The side panel is open: the button says so and is tinted.
+      await expect(sidePanel).toHaveAttribute("aria-expanded", "true");
+      await expect(sidePanel).toHaveCSS("background-color", await tokenColour(page, "--accent-soft"));
+      await axe(page);
+    }
+    await sidePanel.click();
+    await expect(sidePanel).toHaveAttribute("aria-expanded", "false");
+    await expect(sidePanel).toHaveCSS("background-color", TRANSPARENT);
+    // Search and Activity open the shell's one palette and one activity dialog.
+    await bar.getByRole("button", { name: "Quick navigation" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await bar.getByRole("button", { name: "Activity" }).click();
+    await expect(page.getByRole("dialog", { name: "Activity" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    // Other pages keep their toolbar and breadcrumb.
+    await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Agents", exact: true }).click();
+    await expect(page.locator(".app-toolbar .breadcrumb")).toContainText("Agents");
+  });
+
+  test("at 390 px the header keeps the title, the drawer trigger and the actions", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await seedChat(page, raw);
+    const bar = page.locator(header);
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      await expect(page.locator(".app-toolbar")).toHaveCount(0);
+      const row = (await probe(page, [header]))[header]!;
+      near(row.height, 52);
+      expect(row.borderBottom).toBe("0px");
+      // The mockup's spacing holds at 390 px: 18 px and 14 px at the ends, 10 px between the parts, 8 px between buttons.
+      expect(await bar.evaluate((element) => [getComputedStyle(element).paddingLeft, getComputedStyle(element).paddingRight, getComputedStyle(element).columnGap]))
+        .toEqual(["18px", "14px", "10px"]);
+      await expect(bar.locator(".actions")).toHaveCSS("column-gap", "8px");
+      await expect(bar.getByRole("heading", { level: 1 })).toBeVisible();
+      await expect(bar.locator(".agent-chip")).toBeHidden();
+      await expect(bar.locator(".workspace-path")).toBeHidden();
+      await expect(bar.getByRole("button", { name: "Quick navigation" })).toBeHidden();
+      await expect(bar.getByRole("button", { name: "Activity" })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+      await axe(page);
+    }
+    await bar.getByRole("button", { name: "More actions" }).click();
+    await expect(page.getByRole("menuitem", { name: "Copy workspace path" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await bar.getByRole("button", { name: "Workspace menu" }).click();
+    await expect(page.getByRole("dialog", { name: "Workspace navigation" })).toBeVisible();
+  });
+});
+
+test.describe("chat header with a long agent name", () => {
+  const name = "documentation-link-checker-with-a-very-long-agent-name-that-never-breaks";
+  test.use({ scenario: { ...chatScenario, extraAgents: { [name]: { model: "fixture", system_prompt: "Check links", tools: { use: [] } } } } });
+  test("the agent chip ends in an ellipsis and stays inside the header at every width", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(raw.server.launchUrl);
+    await page.getByRole("button", { name: "New chat agent" }).click();
+    await page.getByRole("menuitemradio", { name }).click();
+    await page.getByRole("button", { name: "New chat", exact: true }).first().click();
+    // The long request becomes the title, so the title, the chip and the path all compete for the row.
+    await page.getByRole("textbox", { name: "Message" }).fill(REQUEST);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const bar = page.locator(".chat-main > .page-header");
+    await expect(bar.getByRole("heading", { level: 1 })).toHaveText(/^Rà soát/);
+    const chip = bar.locator(".agent-chip");
+    await expect(chip).toHaveText(name);
+    await expect(chip).toHaveAttribute("title", name);
+    await expect(bar.locator(".workspace-path")).toHaveAttribute("title", /.+/);
+    for (const width of [1440, 1000, 800, 600]) {
+      await page.setViewportSize({ width, height: 900 });
+      const boxes = await bar.evaluate((element) => {
+        const box = (selector: string) => element.querySelector(selector)!.getBoundingClientRect();
+        const chip = element.querySelector<HTMLElement>(".agent-chip")!;
+        return { bar: element.getBoundingClientRect(), metadata: box(".metadata"), chip: box(".agent-chip"), path: box(".workspace-path"), actions: box(".actions"), clipped: chip.scrollWidth > chip.clientWidth };
+      });
+      expect(boxes.clipped, `${width}`).toBe(true);
+      near(boxes.bar.height, 52);
+      expect(boxes.chip.right, `${width}`).toBeLessThanOrEqual(boxes.metadata.right + 0.5);
+      expect(boxes.chip.right, `${width}`).toBeLessThanOrEqual(boxes.path.left + 0.5);
+      expect(boxes.metadata.right, `${width}`).toBeLessThanOrEqual(boxes.actions.left);
+    }
+  });
+});
+
+test.describe("chat header outside HOME", () => {
+  test.use({ scenario: { ...chatScenario, env: { HOME: "/raw-test-home-elsewhere" } } });
+  test("a workspace outside HOME shows its full path", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await seedChat(page, raw);
+    const path = page.locator(".chat-main > .page-header .workspace-path");
+    await expect(path).toHaveText(realpathSync(raw.root));
+    await expect(path).toHaveAttribute("title", realpathSync(raw.root));
   });
 });

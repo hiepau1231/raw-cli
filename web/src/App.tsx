@@ -17,7 +17,7 @@ import {
 import { DropdownMenu } from "radix-ui";
 import type { SessionSummary } from "../../src/sessions/store.js";
 import { api, errorText } from "./api.js";
-import { Chat } from "./chat.js";
+import { Chat, type ChatShell } from "./chat.js";
 import { mutate as globalMutate } from "swr";
 import { keys } from "./data/keys.js";
 import {
@@ -216,6 +216,18 @@ export function App() {
     setError("");
   };
   const running = activity.operations.filter((op) => !isTerminal(op.state));
+  // A chat replaces the toolbar with its own header, which reuses the toolbar's controls (docs/chat-design.md §4).
+  const chatSession = !!bootstrap && page === "chat" && !!sessionId;
+  const shell: ChatShell = {
+    openDrawer: () => setDrawer(true),
+    openSearch: () => {
+      setCommand("");
+      setPalette(true);
+    },
+    openActivity: () => setActivityOpen(true),
+    approvals: activity.approvals.length,
+    running: running.length,
+  };
   const sidebar = (
     <div className="context-panel-inner">
       <WorkspaceSwitcher
@@ -512,6 +524,7 @@ export function App() {
           }
         />
         <div className="main-column">
+          {!chatSession && (
           <div className="app-toolbar">
             <button
               className="icon-button mobile-nav"
@@ -550,6 +563,7 @@ export function App() {
               </button>
             </div>
           </div>
+          )}
           <main id="main" tabIndex={-1} ref={main}>
             <ErrorMessage>{error}</ErrorMessage>
             <PageErrorBoundary resetKey={path}>
@@ -567,6 +581,7 @@ export function App() {
                 <Chat
                   key={sessionId}
                   id={sessionId}
+                  shell={shell}
                   summary={
                     sessions.items.find((item) => item.id === sessionId) ??
                     (created?.id === sessionId ? created : undefined)

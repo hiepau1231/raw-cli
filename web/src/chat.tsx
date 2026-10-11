@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   ArrowDown,
   Bot,
   Check,
   ChevronRight,
   Copy,
+  Menu,
   PanelRight,
   MoreHorizontal,
   Pencil,
+  Search,
   Trash2,
 } from "lucide-react";
 import { Dialog, DropdownMenu } from "radix-ui";
@@ -16,7 +19,8 @@ import type { SessionOperation } from "../../src/sessions/operations.js";
 import type { SessionSummary } from "../../src/sessions/store.js";
 import type { Preferences } from "./preferences.js";
 import { api, ApiError, errorText } from "./api.js";
-import { useComposerMeta } from "./data/queries.js";
+import { useComposerMeta, useHome } from "./data/queries.js";
+import { shortenPath } from "./workspace/workspace-state.js";
 import { Skeleton, TimelineSkeleton } from "./states.js";
 import { ContextRing } from "./composer/ContextRing.js";
 import { contextUsage, contextUsageText } from "./composer/context-usage.js";
@@ -36,8 +40,18 @@ import { useAttachments } from "./composer/useAttachments.js";
 import { fileProvider } from "./composer/files.js";
 import { slashProvider } from "./composer/commands.js";
 
+/** The app shell's controls that the chat header shows in place of the toolbar. */
+export interface ChatShell {
+  openDrawer: () => void;
+  openSearch: () => void;
+  openActivity: () => void;
+  approvals: number;
+  running: number;
+}
+
 export function Chat({
   id,
+  shell,
   summary,
   bootstrap,
   preferences,
@@ -47,6 +61,7 @@ export function Chat({
   resizeInspector,
 }: {
   id: string;
+  shell: ChatShell;
   /** Known before the stream connects (from the session list), so the header never blanks. */
   summary: SessionSummary | undefined;
   bootstrap: DashboardBootstrap;
@@ -304,6 +319,7 @@ export function Chat({
   };
   const title_ = state?.session.title ?? summary?.title;
   const cwd_ = state?.session.cwd ?? summary?.cwd;
+  const home = useHome();
   const metrics = state?.metrics;
   const context = metrics?.context;
   const milestone = state?.approvals.length
@@ -359,30 +375,45 @@ export function Chat({
     <Dialog.Root open={inspector} onOpenChange={setInspector} modal={narrow}>
       <div className={`chat-workspace ${inspector ? "has-inspector" : ""}`}>
         <section className="chat-main" aria-label="Conversation">
-          <header className="page-header">
-            <div>
-              {title_ ? <h1>{title_}</h1> : <h1 aria-label="Loading session"><Skeleton width={30} className="skeleton-title" /></h1>}
+          <header className="page-header chat-header">
+            <button className="icon-button mobile-nav" aria-label="Workspace menu" title="Workspace menu" onClick={shell.openDrawer}>
+              <Menu size={17} aria-hidden="true" />
+            </button>
+            <div className="chat-title">
+              {title_ ? <h1 title={title_}>{title_}</h1> : <h1 aria-label="Loading session"><Skeleton width={30} className="skeleton-title" /></h1>}
               <div className="metadata">
-                {agent && <span className="agent-chip">{agent}</span>}
+                {agent && <span className="agent-chip" title={agent}>{agent}</span>}
                 <span className="workspace-path" title={cwd_}>
-                  {cwd_ ?? <Skeleton width={50} className="skeleton-small" />}
+                  {cwd_ ? shortenPath(cwd_, home) : <Skeleton width={50} className="skeleton-small" />}
                 </span>
               </div>
             </div>
             <div className="actions">
+              <button className="icon-button chat-search" aria-label="Quick navigation" title="Quick navigation (⌘K)" onClick={shell.openSearch}>
+                <Search size={16} aria-hidden="true" />
+              </button>
+              <button
+                className={`icon-button chat-activity ${shell.approvals ? "attention" : ""}`}
+                aria-label={`Activity${shell.approvals ? ` · ${shell.approvals} approvals` : ""}`}
+                title="Activity"
+                onClick={shell.openActivity}
+              >
+                <Activity size={16} aria-hidden="true" />
+                {shell.running > 0 && <span className="count">{shell.running}</span>}
+              </button>
               <Dialog.Trigger asChild>
                 <button
                   className={`icon-button ${inspector ? "selected" : ""}`}
                   aria-label="Side panel"
                   title="Side panel"
                 >
-                  <PanelRight size={19} aria-hidden="true" />
+                  <PanelRight size={16} aria-hidden="true" />
                 </button>
               </Dialog.Trigger>
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
                   <button className="icon-button" aria-label="More actions" title="More actions" disabled={!state}>
-                    <MoreHorizontal size={19} aria-hidden="true" />
+                    <MoreHorizontal size={16} aria-hidden="true" />
                   </button>
                 </DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
