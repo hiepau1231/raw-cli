@@ -1,6 +1,6 @@
 import { useId } from "react";
 import { Popover, RadioGroup, Slider } from "radix-ui";
-import { Brain } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import {
   pillDescription,
   pillText,
@@ -40,17 +40,16 @@ export function RequestControls({
           aria-label={`Request settings: ${pillDescription(controls, choice)}`}
           title="Request settings for the next turn"
         >
-          <Brain size={15} aria-hidden="true" />
+          <Sparkles size={13} aria-hidden="true" />
           <span className="pill-text">
             <span className="pill-label">{label}</span>
-            {level && (
-              <span className="pill-value">
-                <span className="pill-colon" aria-hidden="true">
-                  :{" "}
-                </span>
-                {level}
+            {/* `default` at the agent's own setting, as in the composer mockup. */}
+            <span className={`pill-value${level ? "" : " default"}`}>
+              <span className="pill-colon" aria-hidden="true">
+                :{" "}
               </span>
-            )}
+              {level || "default"}
+            </span>
             {tier && (
               <span className="pill-value">
                 <span aria-hidden="true"> · </span>

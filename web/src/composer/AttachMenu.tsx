@@ -18,11 +18,11 @@ export function AttachMenu({
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
-          className="icon-button"
+          className="icon-button composer-add"
           aria-label="Add attachment"
           title="Add attachment"
         >
-          <Plus size={16} aria-hidden="true" />
+          <Plus size={15} aria-hidden="true" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>

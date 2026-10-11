@@ -1,4 +1,4 @@
-import { test, expect, openChat } from "./fixtures.js";
+import { test, expect, openChat, openContext } from "./fixtures.js";
 import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
 
 for (const outcome of ["failure", "cancelled", "not_smaller"] as const)
@@ -44,14 +44,13 @@ for (const outcome of ["failure", "cancelled", "not_smaller"] as const)
       await page.getByRole("textbox", { name: "Message" }).fill("More");
       await page.getByRole("button", { name: "Send", exact: true }).click();
       await expect(page.getByTestId("assistant-message")).toHaveCount(2);
-      await expect(
-        page.getByRole("button", { name: "Compact context", exact: true }),
-      ).toBeEnabled();
+      const card = await openContext(page);
+      await expect(card.getByRole("button", { name: "Compact now", exact: true })).toBeEnabled();
       const id = new URL(page.url()).pathname.split("/").at(-1)!;
       const before = raw.server.context.store!.getContextSummary(id);
-      await page
-        .getByRole("button", { name: "Compact context", exact: true })
-        .click();
+      await card.getByRole("button", { name: "Compact now", exact: true }).click();
+      // The card closes; the operation runs.
+      await expect(card).toHaveCount(0);
       if (outcome === "cancelled") {
         await expect.poll(() => raw.provider.requests.length).toBe(3);
         // The timeline does not show a running compaction yet, so the status line does.
@@ -134,9 +133,10 @@ test.describe("compaction", () => {
     await page.getByRole("textbox", { name: "Message" }).fill("Thanks");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByTestId("assistant-message")).toHaveCount(2);
-    await expect(
-      page.getByRole("button", { name: "Compact context", exact: true }),
-    ).toBeEnabled();
+    const card = await openContext(page);
+    await expect(card.getByRole("button", { name: "Compact now", exact: true })).toBeEnabled();
+    await page.keyboard.press("Escape");
+    await expect(card).toHaveCount(0);
     // Details offers the same action next to the context use.
     await page.getByRole("button", { name: "Side panel", exact: true }).click();
     await page.getByRole("tab", { name: "Details", exact: true }).click();
@@ -168,9 +168,10 @@ test.describe("compaction", () => {
     raw,
   }) => {
     await openChat(page, raw);
-    await page
-      .getByRole("button", { name: "Compact context", exact: true })
-      .click();
+    // Before the first turn the card has no measurement, and still offers Compact now.
+    const card = await openContext(page);
+    await expect(card).toContainText("Measured after the first turn.");
+    await card.getByRole("button", { name: "Compact now", exact: true }).click();
     await expect(
       page.getByText("Nothing to compact", { exact: false }),
     ).toBeVisible();
@@ -220,9 +221,7 @@ test.describe("automatic compaction", () => {
     await page.getByRole("textbox", { name: "Message" }).fill("one");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByTestId("assistant-message")).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Compact context", exact: true }),
-    ).toBeEnabled();
+    await expect(page.locator(".composer-area").getByRole("button", { name: /^Context: \d+% used$/ })).toBeVisible();
     await page.getByRole("textbox", { name: "Message" }).fill("two");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(
@@ -340,15 +339,21 @@ test.describe("context usage and title", () => {
     await openChat(page, raw);
     await page.getByRole("textbox", { name: "Message" }).fill("hello");
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    const footer = page.locator(".composer-footer");
-    await expect(footer).toContainText("/ 4,000");
-    await expect(footer).toContainText("until auto compact");
-    await expect(footer).not.toContainText("8,192");
-    const shown = /~([\d,]+) \/ 4,000 · ([\d.]+)%/.exec((await footer.textContent()) ?? "");
-    expect(shown).not.toBeNull();
-    const tokens = Number(shown![1]!.replaceAll(",", ""));
-    expect(Number(shown![2])).toBeCloseTo(tokens / 4000 * 100, 1);
-    await expect(footer.locator(".context-ring")).toContainText(`${Math.round(tokens / 40)}%`);
+    // The ring's percent and the card's tokens are against the 4,000-token trigger, not the 8,192 window.
+    const ring = page.locator(".composer-area").getByRole("button", { name: /^Context: \d+% used$/ });
+    await expect(ring).toBeVisible();
+    const percent = Number(/(\d+)%/.exec((await ring.getAttribute("aria-label")) ?? "")![1]);
+    await expect(ring).toContainText(`${percent}%`);
+    const card = await openContext(page);
+    await expect(card.locator(".context-of")).toHaveText("/ 4k tokens until auto compact");
+    await expect(card).not.toContainText("8.2k");
+    const tokens = /^~([\d.]+)(k?)$/.exec((await card.locator(".context-big").textContent()) ?? "");
+    expect(tokens).not.toBeNull();
+    const estimate = Number(tokens![1]) * (tokens![2] ? 1000 : 1);
+    // The big number is rounded to 0.1k; the percent comes from the exact count.
+    expect(Math.abs(percent - estimate / 40)).toBeLessThanOrEqual(3);
+    await expect(card.locator(".context-line")).toContainText("auto compact at 4k");
+    await page.keyboard.press("Escape");
     // Details keeps the rounded trigger in the context line and the exact one in Context limits.
     await page.getByRole("button", { name: "Side panel", exact: true }).click();
     await page.getByRole("tab", { name: "Details", exact: true }).click();

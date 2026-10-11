@@ -12,11 +12,19 @@ const out = "test-results/chat";
 mkdirSync(out, { recursive: true });
 mkdirSync("docs/dashboard", { recursive: true });
 const browser = await chromium.launch();
-const shoot = async (page: Page, view: string, scheme: string, target?: string) => {
+const shoot = async (page: Page, view: string, scheme: string, target?: string | string[]) => {
   await page.mouse.move(0, 0);
+  // No focus ring on the message box, as in the mockups; an open Context card keeps its focus.
+  await page.evaluate(() => { const active = document.activeElement as HTMLElement | null; if (active?.closest(".composer-box")) active.blur(); });
   await page.waitForTimeout(300);
   const file = `chat-${view}-${scheme}.png`;
-  if (target) await page.locator(target).first().screenshot({ path: join(out, file), animations: "disabled" });
+  if (Array.isArray(target)) {
+    // The region around several elements, such as the composer and its Context card above it.
+    const boxes = await Promise.all(target.map(async (selector) => (await page.locator(selector).first().boundingBox())!));
+    const x = Math.min(...boxes.map((box) => box.x)), y = Math.min(...boxes.map((box) => box.y));
+    const right = Math.max(...boxes.map((box) => box.x + box.width)), bottom = Math.max(...boxes.map((box) => box.y + box.height));
+    await page.screenshot({ path: join(out, file), animations: "disabled", clip: { x, y, width: right - x, height: bottom - y } });
+  } else if (target) await page.locator(target).first().screenshot({ path: join(out, file), animations: "disabled" });
   else await page.screenshot({ path: join(out, file), animations: "disabled" });
   copyFileSync(join(out, file), join("docs/dashboard", file));
 };
@@ -43,19 +51,26 @@ try {
     if ((await group.locator(".work-toggle").getAttribute("aria-expanded")) === "false") await group.locator(".work-toggle").click();
     const edit = group.locator(".tool-row[data-kind=edit] .tool-toggle");
     if ((await edit.getAttribute("aria-expanded")) === "false") await edit.click();
+    // Tall enough for the whole open group, its last card's footer above the composer.
+    await desktop.page.setViewportSize({ width: 1440, height: 1240 });
     await desktop.page.locator(".conversation-scroll").evaluate((element) => { element.scrollTop = 0; });
-    await expect(group).toBeInViewport();
+    const foot = (await group.locator(".tool-card-foot").last().boundingBox())!;
+    const composer = (await desktop.page.locator(".composer-area").boundingBox())!;
+    if (foot.y + foot.height > composer.y) throw new Error("the work group's last card is under the composer");
     await shoot(desktop.page, "work", scheme, ".chat-main");
+    await desktop.page.setViewportSize({ width: 1440, height: 900 });
     await group.locator(".work-toggle").click();
     await desktop.page.locator(".conversation-scroll").evaluate((element) => { element.scrollTop = element.scrollHeight; });
   }
   shots.push("desktop", "work");
   await desktop.raw.close();
-  // The composer of an idle conversation.
+  // The composer of an idle conversation, its Context card open, as in the mockup.
   const idle = await session("answer", { width: 1440, height: 900 });
+  await idle.page.locator(".composer-area").getByRole("button", { name: /^Context: / }).click();
+  await idle.page.locator(".context-popover").waitFor();
   for (const scheme of ["dark", "light"] as const) {
     await idle.page.emulateMedia({ colorScheme: scheme });
-    await shoot(idle.page, "composer", scheme, ".composer-area");
+    await shoot(idle.page, "composer", scheme, [".composer-area", ".context-popover"]);
   }
   shots.push("composer");
   await idle.raw.close();
@@ -67,8 +82,8 @@ try {
   }
   shots.push("question");
   await question.raw.close();
-  // 390 px: the full-bleed frame.
-  const narrow = await session("answer", { width: 390, height: 844 });
+  // 390 px: the full-bleed frame, with the pending question as in the mockup.
+  const narrow = await session("question", { width: 390, height: 844 });
   for (const scheme of ["dark", "light"] as const) {
     await narrow.page.emulateMedia({ colorScheme: scheme });
     await shoot(narrow.page, "narrow", scheme);

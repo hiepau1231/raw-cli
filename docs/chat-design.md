@@ -69,7 +69,15 @@ On a chat the app toolbar is not shown: the chat header is the card's first row 
 
 ## 8. Composer
 
-To be written with the composer phase.
+The composer is a card under the conversation, in the same 720 px column with 28 px at the sides and 16 px under it (the `composer` and `narrow` mockups).
+
+- **The card.** A 1 px border, a 16 px radius, the side panel's card colour, 12 px padding at the top and right, 10 px at the bottom and 16 px at the left, and an accent border while something in it has focus. The message box is 15 px, as chat prose. Attachment chips and the command list keep their places above the box.
+- **The toolbar,** left to right: **Add attachment** (`+`, a round 32 px button with a border), the request pill (`Reasoning: default` or `Reasoning: high` with a sparkles icon; its accessible name lists every setting, as before), a spacer, the context button, then **Send** or **Stop**. Send is a round 32 px button in the text colour with an arrow, at 35 % opacity while it is disabled; Stop has the same shape with a square, while an operation you started here runs.
+- **The context button** is an 18 px ring and the percent of the context used, against the auto-compact trigger when the agent sets one and otherwise the model's window. The ring is the accent colour, amber from 80 % and red from 95 %. Its accessible name is `Context: 71% used` (`Context: not measured yet` before the first turn).
+- **The Context card.** The button opens a 250 px card above it: `Context` and the percent chip; the tokens in large type, `~5.9k / 8.2k tokens` (without `~` when the provider reported them), followed by `until auto compact` when the limit is the trigger; a 6 px bar in the ring's colour; one line with the messages kept and the trigger (`30 messages kept · auto compact at 7.4k`, or `auto compact off`), ending in `· last measured` when the measurement is older than the conversation. **Compact now** summarizes the model context, as `/compact` and Details' Compact now do; while it cannot run (the session is loading, no agent, work is running) it is disabled and the reason is written under it. **Details** opens the side panel on its Details tab. Before the first turn the card says "Measured after the first turn." and keeps Compact now.
+- **No footer.** Context usage is only in the button and its card; there is no line of text under the composer.
+- **The hint** under the card, centred in 11.5 px muted text, says how to send: `Enter to send · Shift Enter for a new line · / for commands`, or `Ctrl/⌘ Enter to send · Enter for a new line · / for commands` with the Ctrl/Cmd-Enter preference. The message box refers to it for screen readers.
+- **At 390 px** the card is 12 px from the sides and the hint is read by screen readers only.
 
 ## 9. Verification
 

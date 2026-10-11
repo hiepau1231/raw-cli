@@ -101,6 +101,9 @@ The server describes the settings a turn may override in `GET /api/agents/:name/
 
 Excluded: `reasoning_mode`, token budgets, `/reasoning` and `/tier` commands, per-model filtering. The client remembers the choice per session in `sessionStorage` and defaults to "Agent default". Support is never guessed: the chosen value is sent, a provider rejection fails only that turn (the timeline shows `error · <provider message>`), and Agent default is always selectable. While metadata loads or fails the saved choice is kept but neither shown nor sent; it is pruned only after the selected agent's controls have loaded and no longer offer it.
 
+### D14. Context usage lives in the toolbar
+The context measurement is a ring with the percent in the toolbar, before Send, and its Context card ([chat-design.md](chat-design.md) §8) holds the numbers, Compact now and a link to Details. The footer line under the composer that repeated the same numbers was removed. Compact now, `/compact` and Details' Compact now run the same compact operation with the same disabled reasons.
+
 ## Limits
 
 | Item | Value |

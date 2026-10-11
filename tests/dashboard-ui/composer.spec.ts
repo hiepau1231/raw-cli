@@ -1,5 +1,5 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import { test, expect, openChat } from "./fixtures.js";
+import { test, expect, openChat, openContext } from "./fixtures.js";
 
 const message = (page: import("@playwright/test").Page) => page.getByLabel("Message", { exact: true });
 const lastUserText = (raw: { provider: { requests: Array<{ body: unknown }> } }) => {
@@ -109,7 +109,10 @@ test.describe("slash commands", () => {
     await input.fill("seed");
     await input.press("Enter");
     await expect(page.getByTestId("assistant-message")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Compact context", exact: true })).toBeEnabled();
+    const card = await openContext(page);
+    await expect(card.getByRole("button", { name: "Compact now", exact: true })).toBeEnabled();
+    await page.keyboard.press("Escape");
+    await expect(card).toHaveCount(0);
     const id = new URL(page.url()).pathname.split("/").at(-1)!;
     await input.pressSequentially("/compact");
     await page.keyboard.press("Enter");

@@ -1,26 +1,21 @@
-/** Circular progress toward the level the footer text reports: the auto-compact trigger when set, else the context window. */
-export function ContextRing({ percent }: { percent: number | undefined }) {
-  const radius = 6;
+/** An 18 px ring filled to the share of the context used (docs/chat-design.md §8); empty before the first measurement. */
+export function ContextRing({ percent, tone }: { percent: number | undefined; tone: "accent" | "warning" | "error" }) {
+  const radius = 7;
   const circumference = 2 * Math.PI * radius;
-  const known = percent !== undefined && Number.isFinite(percent);
-  const used = known ? Math.min(100, Math.max(0, percent)) : 0;
+  const used = percent === undefined ? 0 : Math.min(100, Math.max(0, percent));
   return (
-    <span className="context-ring">
-      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-        <circle className="ring-track" cx="8" cy="8" r={radius} />
-        {known && (
-          <circle
-            className={`ring-fill ${used >= 90 ? "high" : ""}`}
-            cx="8"
-            cy="8"
-            r={radius}
-            strokeDasharray={circumference}
-            strokeDashoffset={circumference * (1 - used / 100)}
-            transform="rotate(-90 8 8)"
-          />
-        )}
-      </svg>
-      {known && <span aria-hidden="true">{Math.round(used)}%</span>}
-    </span>
+    <svg className="context-ring" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <circle className="ring-track" cx="9" cy="9" r={radius} />
+      {percent !== undefined && (
+        <circle
+          className={`ring-fill tone-${tone}`}
+          cx="9"
+          cy="9"
+          r={radius}
+          strokeDasharray={`${(circumference * used) / 100} ${circumference}`}
+          transform="rotate(-90 9 9)"
+        />
+      )}
+    </svg>
   );
 }

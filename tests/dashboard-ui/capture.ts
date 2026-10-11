@@ -10,6 +10,8 @@ import { makePngOfSize } from "../fixtures/images.js";
 mkdirSync("docs/dashboard", { recursive: true });
 const cleanup: string[] = [];
 const raw = await dashboardFixture({
+  // The workspace is in the temporary directory; as HOME it shows as ~/… in the chat header, as on a real machine.
+  env: { HOME: realpathSync(tmpdir()) },
   model: { vision: true },
   agent: { tools: { use: ["builtin/bash"] } },
   responses: [

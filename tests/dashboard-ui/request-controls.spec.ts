@@ -31,7 +31,7 @@ async function describe(page: Page, edit: (meta: any) => void) {
 test.describe("openai agent", () => {
   test("the pill shows the provider's label, and the slider and radio group work by keyboard", async ({ page, raw }) => {
     await openChat(page, raw);
-    await expect(pill(page)).toHaveText("Reasoning");
+    await expect(pill(page)).toHaveText("Reasoning: default");
     await expect(pill(page)).toHaveAccessibleName("Request settings: Reasoning Agent default, Service tier Agent default");
     await pill(page).click();
     await expect(page.getByRole("radiogroup", { name: "Service tier" })).toBeVisible();
@@ -45,10 +45,10 @@ test.describe("openai agent", () => {
     await page.keyboard.press("ArrowLeft");
     await expect(pill(page)).toHaveText("Reasoning: xhigh");
     await page.keyboard.press("Home");
-    await expect(pill(page)).toHaveText("Reasoning");
+    await expect(pill(page)).toHaveText("Reasoning: default");
     await expect(slider(page)).toHaveAttribute("aria-valuetext", "Agent default");
     await page.getByRole("radio", { name: /^priority/ }).click();
-    await expect(pill(page)).toHaveText("Reasoning · priority");
+    await expect(pill(page)).toHaveText("Reasoning: default · priority");
     await page.keyboard.press("Escape");
     await expect(page.getByRole("radiogroup")).toHaveCount(0);
     await expect(pill(page)).toBeFocused();
@@ -80,7 +80,7 @@ test.describe("openai agent", () => {
     // The choice is remembered, not consumed by the turn.
     await expect(pill(page)).toHaveText("Reasoning: max · priority");
     await page.getByRole("button", { name: "New chat", exact: true }).first().click();
-    await expect(pill(page)).toHaveText("Reasoning");
+    await expect(pill(page)).toHaveText("Reasoning: default");
     await page.goBack();
     await expect(pill(page)).toHaveText("Reasoning: max · priority");
     await page.reload();
@@ -91,7 +91,7 @@ test.describe("openai agent", () => {
     await pill(page).click();
     await page.getByRole("button", { name: "Reset" }).click();
     await page.keyboard.press("Escape");
-    await expect(pill(page)).toHaveText("Reasoning");
+    await expect(pill(page)).toHaveText("Reasoning: default");
     await send(page, "third");
     await expect(page.getByTestId("assistant-message")).toHaveCount(3);
     expect(lastBody(raw)).not.toHaveProperty("reasoning_effort");
@@ -136,7 +136,7 @@ test.describe("openai agent", () => {
       ];
     });
     await page.reload();
-    await expect(pill(page)).toHaveText("Effort");
+    await expect(pill(page)).toHaveText("Effort: default");
     await expect(pill(page)).toHaveAccessibleName("Request settings: Effort Agent default");
     await pill(page).click();
     await expect(page.getByRole("slider")).toHaveCount(1);
@@ -168,7 +168,7 @@ test.describe("openai agent", () => {
       await expect(pill(page)).toHaveCount(0);
       expect(await stored(page)).toHaveLength(1);
       release();
-      await expect(pill(page)).toHaveText("Thinking");
+      await expect(pill(page)).toHaveText("Thinking: default");
       expect(await stored(page)).toEqual([]);
       await send(page, "hello");
       await expect(page.getByTestId("assistant-message")).toHaveCount(1);

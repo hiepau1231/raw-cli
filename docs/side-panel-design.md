@@ -95,7 +95,7 @@ One card per command ([gallery](dashboard/side-panel-commands-dark.png)): runnin
 
 ([gallery](dashboard/side-panel-details-dark.png))
 
-- **Context card.** Tokens in large type (`6.9k / 8.2k tokens`), the percent chip and a bar coloured by fill (warning from 80 %, error from 95 %), then one line with the retained messages, whether a summary exists and the auto-compact trigger ("auto compact off" without one, rounded), and **Compact now** (the composer's Compact context, disabled while it is).
+- **Context card.** Tokens in large type (`6.9k / 8.2k tokens`), the percent chip and a bar coloured by fill (warning from 80 %, error from 95 %), then one line with the retained messages, whether a summary exists and the auto-compact trigger ("auto compact off" without one, rounded), and **Compact now** (the same action as the composer's Context card, disabled while it is).
 - **Usage card.** Key/value rows as in details.png: "Last turn" and "This session" (requests, then the input and output tokens when reported: "2 requests · 1,500 in · 40 out"), "Cache reads" for the last turn (requests that reported cache reads of all, and their tokens), then only what was reported: session cache reads, cache writes, cache read share (with the requests it covers: "66.7% (1 of 2)") and derived uncached input, each as "turn · session in session", a dash for a scope that did not report it. One note when the provider reports no input, output or cache token counts.
 - **Summary card** when a summary exists (expandable, copyable).
 - **Continue in terminal** with the copyable resume command.

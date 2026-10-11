@@ -18,13 +18,3 @@ export function contextUsage(context: ContextUsageInput | undefined | null): Con
   const limit = basis === "compact" ? context.compactTrigger! : context.contextWindow!;
   return { limit, basis, percent: context.estimatedTokens / limit * 100 };
 }
-
-/** The footer text: `~N / limit · P%` plus what the limit is, or a note when no limit is known. */
-export function contextUsageText(context: ContextUsageInput | undefined | null, stale: boolean): string {
-  if (!context) return "Context usage unavailable";
-  const usage = contextUsage(context);
-  const tokens = `${context.source === "provider" ? "" : "~"}${context.estimatedTokens.toLocaleString()}`;
-  const suffix = stale ? " · last measured" : "";
-  if (!usage) return `${tokens} tokens · window unavailable${suffix}`;
-  return `${tokens} / ${usage.limit.toLocaleString()} · ${usage.percent.toFixed(1)}%${usage.basis === "compact" ? " · until auto compact" : ""}${suffix}`;
-}

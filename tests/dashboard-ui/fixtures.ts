@@ -49,3 +49,15 @@ export async function openChat(
     .click();
   await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
 }
+/** The composer's Context card (docs/chat-design.md §8), opened from the context ring. */
+export async function openContext(page: import("@playwright/test").Page) {
+  await page.locator(".composer-area").getByRole("button", { name: /^Context: / }).click();
+  const card = page.getByRole("dialog", { name: "Context", exact: true });
+  await expect(card).toBeVisible();
+  return card;
+}
+/** Compact now in the composer's Context card. */
+export async function compactNow(page: import("@playwright/test").Page) {
+  const card = await openContext(page);
+  await card.getByRole("button", { name: "Compact now", exact: true }).click();
+}

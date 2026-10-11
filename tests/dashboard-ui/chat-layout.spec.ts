@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Locator, Page } from "@playwright/test";
-import { test, expect } from "./fixtures.js";
+import { test, expect, openContext } from "./fixtures.js";
 import { openPath, seedLibrary } from "./library-seed.js";
 import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
 import { QUESTION, REQUEST, chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
@@ -938,6 +938,131 @@ test.describe("question", () => {
     await expect(after.locator(".tool-terminal, .tool-text, .json-tree, .tool-markdown")).toHaveCount(0);
     await after.getByRole("button", { name: "Arguments", exact: true }).click();
     await expect(after.locator(".tool-arguments")).toContainText(QUESTION);
+  });
+});
+
+test.describe("composer", () => {
+  test.use({ scenario: chatScenario });
+  const CARD = { dark: "rgb(20, 16, 32)", light: "rgb(255, 255, 255)" } as const;
+  const HINT = "Enter to send · Shift Enter for a new line · / for commands";
+
+  test("a card with a round Send, the context ring and its Context card, and the hint under it", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await seedChat(page, raw, "answer");
+    const area = page.locator(".composer-area");
+    const box = area.locator(".composer-box");
+    await expect(area.locator(".composer-footer")).toHaveCount(0);
+    // A bubble and the group after it are about as far apart as in the mockup, its hover row included.
+    const bubble = (await page.getByTestId("user-message").first().locator(".bubble").boundingBox())!;
+    const group = (await page.locator(".work-group").first().boundingBox())!;
+    expect(group.y - (bubble.y + bubble.height)).toBeLessThanOrEqual(40);
+    // The toolbar, left to right.
+    const toolbar = area.locator(".composer-toolbar");
+    const names = await toolbar.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
+    expect(names).toEqual(["Add attachment", expect.stringMatching(/^Request settings: /), expect.stringMatching(/^Context: \d+% used$/), "Send"]);
+    await expect(toolbar.locator(".request-pill .pill-text")).toHaveText("Reasoning: default");
+    const ring = toolbar.getByRole("button", { name: /^Context: / });
+    const send = toolbar.getByRole("button", { name: "Send", exact: true });
+    const sendBox = (await send.boundingBox())!;
+    expect([sendBox.width, sendBox.height]).toEqual([32, 32]);
+    expect((await ring.boundingBox())!.x).toBeLessThan(sendBox.x);
+    await expect(send).toHaveCSS("border-top-left-radius", "50%");
+    await expect(send).toBeDisabled();
+    await expect(send).toHaveCSS("opacity", "0.35");
+    const add = (await toolbar.getByRole("button", { name: "Add attachment" }).boundingBox())!;
+    expect([add.width, add.height]).toEqual([32, 32]);
+    await expect(ring.locator("svg")).toHaveAttribute("width", "18");
+    await expect(ring).toHaveText(/^\d+%$/);
+    // The hint is visible under the card and describes the message box.
+    const hint = area.locator(".composer-hint");
+    await expect(hint).toHaveText(HINT);
+    await expect(hint).toBeVisible();
+    expect((await hint.boundingBox())!.y).toBeGreaterThan((await box.boundingBox())!.y + (await box.boundingBox())!.height - 1);
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveAccessibleDescription(HINT);
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      await expect(box).toHaveCSS("border-top-left-radius", "16px");
+      await expect(box).toHaveCSS("border-top-width", "1px");
+      await expect(box).toHaveCSS("background-color", CARD[theme]);
+      for (const [side, value] of [["top", "12px"], ["right", "12px"], ["bottom", "10px"], ["left", "16px"]] as const)
+        await expect(box).toHaveCSS(`padding-${side}`, value);
+      await expect(page.getByRole("textbox", { name: "Message" })).toHaveCSS("font-size", "15px");
+    }
+    // The Context card: the percent chip, the tokens, the bar, the line, Compact now and Details.
+    const percent = (await ring.textContent())!;
+    const card = await openContext(page);
+    await expect(card.locator(".context-head .sp-chip")).toHaveText(percent);
+    await expect(card.locator(".context-big")).toHaveText(/^~[\d.]+k$/);
+    await expect(card.locator(".context-of")).toHaveText("/ 8.2k tokens");
+    await expect(card.locator(".context-bar")).toBeVisible();
+    await expect(card.locator(".context-line")).toHaveText(/^\d+ messages kept · auto compact off$/);
+    expect((await card.boundingBox())!.width).toBe(250);
+    // Above the ring.
+    expect((await card.boundingBox())!.y + (await card.boundingBox())!.height).toBeLessThanOrEqual((await ring.boundingBox())!.y);
+    await expect(card.getByRole("button", { name: "Compact now", exact: true })).toBeEnabled();
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      await axe(page);
+    }
+    // Details opens the side panel on Details and closes the card.
+    await card.getByRole("button", { name: "Details", exact: true }).click();
+    await expect(card).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Details", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator('.details-card[data-card="context"]')).toBeVisible();
+  });
+
+  test("while work runs: Stop is the round button and Compact now says why it waits", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await seedChat(page, raw, "approval");
+    const toolbar = page.locator(".composer-toolbar");
+    await expect(toolbar.getByRole("button", { name: "Send", exact: true })).toHaveCount(0);
+    const stop = toolbar.getByRole("button", { name: "Stop", exact: true });
+    const box = (await stop.boundingBox())!;
+    expect([box.width, box.height]).toEqual([32, 32]);
+    await expect(stop).toHaveCSS("border-top-left-radius", "50%");
+    const card = await openContext(page);
+    await expect(card.getByRole("button", { name: "Compact now", exact: true })).toBeDisabled();
+    await expect(card.locator(".context-reason")).toHaveText("Wait for the current work to finish");
+    await axe(page);
+  });
+
+  test("the Ctrl/⌘-Enter preference changes the hint", async ({ page, raw }) => {
+    await page.addInitScript(() => localStorage.setItem("raw.dashboard.preferences.v1", JSON.stringify({ version: 1, sendMode: "modifier" })));
+    await page.goto(raw.server.launchUrl);
+    await page.getByRole("button", { name: "New chat", exact: true }).first().click();
+    const hint = "Ctrl/⌘ Enter to send · Enter for a new line · / for commands";
+    await expect(page.locator(".composer-hint")).toHaveText(hint);
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveAccessibleDescription(hint);
+    // Not measured yet: the ring has no percent and its card says so.
+    const ring = page.locator(".composer-toolbar").getByRole("button", { name: "Context: not measured yet", exact: true });
+    await expect(ring).toHaveText("");
+    const card = await openContext(page);
+    await expect(card.locator(".context-note")).toHaveText("Measured after the first turn.");
+    await expect(card.locator(".context-bar")).toHaveCount(0);
+    await expect(card.getByRole("button", { name: "Compact now", exact: true })).toBeEnabled();
+  });
+
+  test("at 390 px the card is 12 px from the sides, the pill keeps its label and the hint is for screen readers", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await seedChat(page, raw, "answer");
+    const area = page.locator(".composer-area");
+    const box = (await area.locator(".composer-box").boundingBox())!;
+    const frame = (await area.boundingBox())!;
+    expect(box.x - frame.x).toBeCloseTo(12, 0);
+    expect(frame.x + frame.width - (box.x + box.width)).toBeCloseTo(12, 0);
+    await expect(area.locator(".request-pill .pill-text")).toHaveText("Reasoning: default");
+    expect((await area.locator(".composer-toolbar").boundingBox())!.height).toBeLessThanOrEqual(34);
+    const hint = area.locator(".composer-hint");
+    expect((await hint.boundingBox())!.height).toBeLessThanOrEqual(1);
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveAccessibleDescription(HINT);
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+      await axe(page);
+    }
   });
 });
 

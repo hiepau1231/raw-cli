@@ -30,6 +30,7 @@ export function Composer({
   chips,
   onFiles,
   controls,
+  context,
   accept,
   note,
 }: {
@@ -45,8 +46,10 @@ export function Composer({
   /** Attachment chips, rendered above the message box. */
   chips: ReactNode;
   onFiles: (files: File[]) => void;
-  /** Request-controls pill, rendered in the toolbar before Send/Stop. */
+  /** Request-controls pill, rendered in the toolbar after Add attachment. */
   controls?: ReactNode;
+  /** The context button, rendered before Send/Stop. */
+  context?: ReactNode;
   /** `accept` attribute for the file picker, from composer metadata. */
   accept: string;
   note?: string;
@@ -155,6 +158,7 @@ export function Composer({
   const hasFiles = (event: React.DragEvent) =>
     Array.from(event.dataTransfer.types).includes("Files");
   return (
+    <>
     <div
       className={`composer-box ${dragging ? "dragging" : ""}`}
       ref={boxRef}
@@ -267,11 +271,6 @@ export function Composer({
           onSend();
         }}
       />
-      <span id={hintId} className="sr-only">
-        {sendMode === "enter"
-          ? "Enter to send, Shift-Enter for newline"
-          : "Ctrl or Command-Enter to send"}
-      </span>
       {note && <p className="composer-note muted small">{note}</p>}
       <div className="composer-toolbar">
         <AttachMenu
@@ -295,20 +294,26 @@ export function Composer({
             event.target.value = "";
           }}
         />
-        <span className="composer-spacer" />
         {controls}
+        <span className="composer-spacer" />
+        {context}
         {stop ? (
-          <button type="button" className="stop" onClick={stop}>
-            <Square size={14} aria-hidden="true" />
-            Stop
+          <button type="button" className="composer-send stop" aria-label="Stop" title="Stop" onClick={stop}>
+            <Square size={12} fill="currentColor" aria-hidden="true" />
           </button>
         ) : (
-          <button type="submit" className="primary" disabled={sendDisabled}>
-            <ArrowUp size={17} aria-hidden="true" />
-            Send
+          <button type="submit" className="composer-send" aria-label="Send" title="Send" disabled={sendDisabled}>
+            <ArrowUp size={16} aria-hidden="true" />
           </button>
         )}
       </div>
     </div>
+    {/* How to send, under the card; the message box refers to it (docs/chat-design.md §8). */}
+    <p id={hintId} className="composer-hint">
+      {sendMode === "enter"
+        ? "Enter to send · Shift Enter for a new line · / for commands"
+        : "Ctrl/⌘ Enter to send · Enter for a new line · / for commands"}
+    </p>
+    </>
   );
 }

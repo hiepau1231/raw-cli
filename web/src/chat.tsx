@@ -22,8 +22,9 @@ import { api, ApiError, errorText } from "./api.js";
 import { useComposerMeta, useHome } from "./data/queries.js";
 import { shortenPath } from "./workspace/workspace-state.js";
 import { Skeleton, TimelineSkeleton } from "./states.js";
-import { ContextRing } from "./composer/ContextRing.js";
-import { contextUsage, contextUsageText } from "./composer/context-usage.js";
+import { ContextPopover } from "./composer/ContextPopover.js";
+import { contextCard } from "./composer/context-card.js";
+import { DETAILS_ID } from "./panels/panel-state.js";
 import { RequestControls } from "./composer/RequestControls.js";
 import { useRequestChoice } from "./composer/useRequestChoice.js";
 import { forgetSession, isTerminal, useSession } from "./session.js";
@@ -616,6 +617,13 @@ export function Chat({
                     onChange={request.update}
                   />
                 }
+                context={
+                  <ContextPopover
+                    card={contextCard(context, { stale: !!state?.metricsStale, messages: state?.context.messageCount })}
+                    compact={{ run: () => { void send("compact"); }, disabled: compactDisabled }}
+                    onDetails={() => panels.show(DETAILS_ID)}
+                  />
+                }
                 onFiles={att.addFiles}
                 accept={
                   meta.attachmentKinds.flatMap((kind) => kind.accept).join(",") ||
@@ -642,22 +650,6 @@ export function Chat({
                   : {})}
               />
             </form>
-            <div className="composer-footer">
-              <span>
-                {contextUsageText(context, !!state?.metricsStale)}
-              </span>
-              <button
-                className="text-button"
-                disabled={!state || !!busy || !agent}
-                title="Summarize model context while keeping visible history"
-                onClick={() => {
-                  void send("compact");
-                }}
-              >
-                <ContextRing percent={contextUsage(context)?.percent} />
-                Compact context
-              </button>
-            </div>
           </div>
           <span className="sr-only" role="status" aria-live="polite">
             {milestone}
@@ -672,7 +664,7 @@ export function Chat({
             narrow={narrow}
             resizeInspector={resizeInspector}
             keepFocus={keepFocus}
-            compact={{ run: () => { void send("compact"); }, disabled: !state || !!busy || !agent }}
+            compact={{ run: () => { void send("compact"); }, disabled: !!compactDisabled }}
             stack={{
               agent: panels.stackAgent,
               items: panels.items,

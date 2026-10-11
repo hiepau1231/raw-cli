@@ -984,6 +984,8 @@ main > .error-banner {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  /* The hover row under the bubble keeps its 32 px buttons; it is most of the space to what follows. */
+  margin-bottom: 4px;
 }
 .message.user .bubble {
   max-width: 78%;
@@ -1185,27 +1187,29 @@ main > .error-banner {
   padding: 8px 12px;
   margin: 16px 0;
 }
+/* The composer (docs/chat-design.md §8): a card in the conversation column, its toolbar, and the hint under it. */
 .composer-area {
   width: 100%;
   max-width: 720px;
-  padding: 12px 28px 14px;
+  padding: 0 28px 16px;
   margin: 0 auto;
   flex: none;
   position: relative;
 }
-.composer {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px 14px;
-  background: var(--canvas);
-  box-shadow: 0 2px 8px #00000006;
-}
-.composer:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent-soft);
-}
 .composer-box {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 12px 12px 10px 16px;
+  background: var(--sp-card);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+}
+.composer-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
 }
 .composer textarea {
   display: block;
@@ -1223,26 +1227,158 @@ main > .error-banner {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
+  min-width: 0;
 }
 .composer-spacer {
   flex: 1;
 }
-.composer-toolbar .primary {
-  min-height: 34px;
-  padding: 6px 10px;
+/* Round buttons: Add attachment with a border, Send and Stop in the text colour. 32 px, the dashboard's minimum target. */
+.composer-toolbar .composer-add {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+}
+.composer-toolbar .composer-add:hover:not(:disabled) {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+.composer-send {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--text);
+  color: var(--canvas);
+}
+.composer-send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 86%, var(--canvas));
+}
+.composer-send:disabled {
+  opacity: 0.35;
+}
+.context-button {
+  flex: none;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.context-button:hover:not(:disabled),
+.context-button[data-state="open"] {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+.composer-hint {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+/* The Context card above the ring. */
+.context-popover {
+  z-index: 40;
+  width: 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--sp-card);
+  box-shadow: 0 12px 30px rgba(20, 12, 40, 0.14);
+  font-size: 12.5px;
+}
+:root[data-theme="dark"] .context-popover {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+.context-head,
+.context-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.context-head strong {
+  font-weight: 600;
+}
+.context-meter {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+}
+.context-big {
+  font-size: 18px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.context-of,
+.context-note {
+  color: var(--muted);
+}
+.context-note,
+.context-line,
+.context-reason {
+  margin: 0;
+}
+.context-popover .context-bar {
+  height: 6px;
+}
+.context-line,
+.context-reason {
+  font-size: 11px;
+  color: var(--muted);
+}
+.context-actions button {
+  min-height: 32px;
+  font-size: 12px;
+}
+.context-actions .foot-button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+}
+.context-actions .foot-button:hover:not(:disabled) {
+  background: var(--panel-hover);
+}
+.context-details {
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: 11.5px;
+}
+.context-details:hover:not(:disabled) {
+  background: transparent;
+  text-decoration: underline;
 }
 .suggestions {
   position: absolute;
-  left: -14px;
-  right: -14px;
-  bottom: calc(100% + 12px);
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
   max-height: 260px;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--canvas);
+  border-radius: 12px;
+  background: var(--sp-card);
   box-shadow: 0 6px 24px #00000018;
   z-index: 20;
 }
@@ -1282,23 +1418,6 @@ main > .error-banner {
 .suggestion-empty {
   margin: 0;
   padding: 10px 14px;
-}
-.stop {
-  color: var(--error);
-  min-height: 34px;
-}
-.composer-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-top: 6px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.composer-footer button {
-  font-size: 11px;
-  white-space: nowrap;
 }
 .jump-latest {
   position: absolute;
@@ -2461,24 +2580,20 @@ code.tool-summary {
     margin-bottom: 20px;
   }
   .composer-area {
-    padding: 8px 14px;
+    padding: 0 12px 12px;
   }
-  .composer {
-    padding: 10px;
+  /* The hint is for screen readers only at this width. */
+  .composer-hint {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    margin: 0;
   }
   .suggestions {
-    left: -10px;
-    right: -10px;
     max-height: 45vh;
-  }
-  .composer-footer {
-    align-items: flex-start;
-    gap: 4px;
-    flex-wrap: wrap;
-    font-size: 10px;
-  }
-  .composer-footer button {
-    font-size: 10px;
   }
   .tool-summary {
     display: none;
@@ -3443,7 +3558,7 @@ code.tool-summary {
   }
 }
 .composer-note {
-  margin: 8px 0 0;
+  margin: 0;
 }
 .composer-box.dragging {
   outline: 2px dashed var(--accent);
@@ -3529,10 +3644,11 @@ code.tool-summary {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 34px;
+  min-height: 32px;
   max-width: 100%;
   min-width: 0;
-  padding: 6px 10px;
+  padding: 0 8px;
+  border-radius: 999px;
   border-color: transparent;
   background: transparent;
   color: var(--muted);
@@ -3551,6 +3667,9 @@ code.tool-summary {
 }
 .request-pill .pill-value {
   color: var(--text);
+}
+.request-pill .pill-value.default {
+  color: inherit;
 }
 .request-popover {
   width: min(25rem, calc(100vw - 16px));
@@ -3678,21 +3797,12 @@ code.tool-summary {
   margin-top: 12px;
 }
 @media (max-width: 599px) {
-  .request-pill .pill-label,
-  .request-pill .pill-colon {
-    display: none;
-  }
   .request-pill .pill-text {
     max-width: 9rem;
   }
 }
 
 .context-ring {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.context-ring svg {
   flex: none;
 }
 .ring-track,
@@ -3701,14 +3811,17 @@ code.tool-summary {
   stroke-width: 2.5;
 }
 .ring-track {
-  stroke: var(--border);
+  stroke: var(--panel-hover);
 }
 .ring-fill {
   stroke: var(--accent);
   stroke-linecap: round;
 }
-.ring-fill.high {
-  stroke: #b12d42;
+.ring-fill.tone-warning {
+  stroke: var(--warning);
+}
+.ring-fill.tone-error {
+  stroke: var(--error);
 }
 
 /* Workspace switcher */
@@ -4118,7 +4231,9 @@ code.tool-summary {
 .inline-tool-view,
 .work-group,
 .approval,
-.interaction-receipt {
+.interaction-receipt,
+.composer-area,
+.context-popover {
   --sp-card: var(--canvas);
   --sp-tint-accent: var(--accent-soft);
   --sp-tint-success: color-mix(in srgb, var(--success) 14%, transparent);
@@ -4140,7 +4255,9 @@ code.tool-summary {
 :root[data-theme="dark"] .inline-tool-view,
 :root[data-theme="dark"] .work-group,
 :root[data-theme="dark"] .approval,
-:root[data-theme="dark"] .interaction-receipt {
+:root[data-theme="dark"] .interaction-receipt,
+:root[data-theme="dark"] .composer-area,
+:root[data-theme="dark"] .context-popover {
   --sp-card: #141020;
   --sp-tint-success: #10261c;
   --sp-tint-warning: #2a2110;
