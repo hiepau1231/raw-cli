@@ -53,9 +53,7 @@ try {
     await select("Overview");
     await shot("02-overview.png");
     await select("Commands");
-    const completed = page.getByRole("button", { name: /^Completed \(/ });
-    if ((await completed.getAttribute("aria-expanded")) !== "true") await completed.click();
-    await page.locator("li.command-row button.command-toggle").first().click();
+    await page.locator("li.command-card", { hasText: "missing semicolon" }).first().getByRole("button", { name: "Output", exact: true }).click();
     await page.locator(".command-output pre", { hasText: "missing semicolon" }).waitFor();
     await shot("03-commands.png");
     await page.emulateMedia({ colorScheme: "light" });

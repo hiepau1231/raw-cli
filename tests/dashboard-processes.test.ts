@@ -121,3 +121,49 @@ test("foreground rows carry the call's description, call id and saved full outpu
     assert.equal(listing.items[0]?.command,`job ${count-1}`,"newest first");
   }
 });
+
+test("foreground rows carry the last three non-empty output lines, sanitized and bounded, refreshed as output arrives; background rows never do", async () => {
+  const {Commands}=await import("../src/processes/presentation.js");
+  const job={id:"bg",sessionId:"s",command:"sleep 60",cwd:"/w",state:"running" as const,createdAt:1,updatedAt:1,cursor:9,droppedBytes:0,earliestCursor:0,hostToken:"h",generation:0};
+  const commands=new Commands({hostToken:"h",list:()=>[job] as never,output:()=>{throw new Error("unused");}});
+  const run=commands.forSession("s").begin("make all","/w",{label:"Build"});
+  const row=()=>commands.list("s").find(item=>item.kind==="foreground")!;
+  const settle=()=>new Promise(resolve=>setTimeout(resolve,300));
+  assert.equal(row().tail,undefined,"no tail before any output");
+  run.output("stdout","line 1\nline 2\n\n   \n");
+  await settle();
+  assert.deepEqual(row().tail,[{channel:"stdout",text:"line 1"},{channel:"stdout",text:"line 2"}]);
+  // A line split across chunks is joined; control sequences go; a carriage return keeps what follows it; channels are kept.
+  run.output("stdout","line 3 is spl");
+  run.output("stdout","it\n\x1b[31merror\x1b[0m-free 50%\r100%\n");
+  run.output("stderr","\x1b]8;;https://x\x07fatal: boom\x1b]8;;\x07\n");
+  await settle();
+  assert.deepEqual(row().tail,[{channel:"stdout",text:"line 3 is split"},{channel:"stdout",text:"100%"},{channel:"stderr",text:"fatal: boom"}]);
+  // A long line is cut to 160 bytes on a character boundary and the whole tail stays within 512 bytes.
+  run.output("stdout",`${"é".repeat(400)}\n${"x".repeat(300)}\n${"y".repeat(300)}`);
+  run.finish({isError:true,content:[],exitCode:1});
+  const tail=row().tail!;
+  assert.equal(tail.length,3);
+  assert.ok(tail.every(line=>Buffer.byteLength(line.text)<=160&&!line.text.includes("�")));
+  assert.ok(tail.reduce((sum,line)=>sum+Buffer.byteLength(line.text),0)<=512);
+  assert.equal(tail[2]!.text,"y".repeat(160));
+  assert.equal(row().state,"failed");
+  const background=commands.list("s").find(item=>item.kind==="background")!;
+  assert.equal(background.id,"bg");
+  assert.equal("tail" in background,false);
+});
+
+test("the tail reads past trailing blank lines and long lines, and a carriage return hides what came before it", async () => {
+  const {commandTail}=await import("../src/processes/presentation.js");
+  const chunk=(text:string,channel:"stdout"|"stderr"="stdout")=>({channel,start:0,end:0,text});
+  assert.deepEqual(commandTail([chunk("one\ntwo\nthree\n"),chunk("\n".repeat(20000)),chunk("   \n\t\n")]).map(line=>line.text),["one","two","three"]);
+  const long=commandTail([chunk("before\n"),chunk(`${"z".repeat(20000)}\n`)]);
+  assert.deepEqual(long.map(line=>line.text),["before","z".repeat(160)]);
+  // Blank after the last carriage return: nothing is shown for that line, not the text it overwrote.
+  assert.deepEqual(commandTail([chunk("kept\nold\r   \n")]).map(line=>line.text),["kept"]);
+  // CRLF endings are line endings, not overwrites; a trailing carriage return keeps the last progress state.
+  assert.deepEqual(commandTail([chunk("a\r\nb\r\n10%\r55%\r")]).map(line=>line.text),["a","b","55%"]);
+  // The channel of a line is the channel of its last non-empty piece.
+  assert.deepEqual(commandTail([chunk("warn: ","stderr"),chunk("x\n","stdout"),chunk("e\n","stderr")]),[{channel:"stdout",text:"warn: x"},{channel:"stderr",text:"e"}]);
+  assert.deepEqual(commandTail([]),[]);
+});

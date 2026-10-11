@@ -4,7 +4,7 @@ import { derivedProgress, derivedSummary } from "../../../src/panels/render.js";
 import type { PanelStackItem } from "../../../src/panels/stack.js";
 import type { CommandRecord } from "../../../src/processes/presentation.js";
 import { contextUsage, type ContextUsageInput } from "../composer/context-usage.js";
-import { commandRunning } from "./commands-state.js";
+import { commandFailed, commandRunning } from "./commands-state.js";
 import { formatDuration } from "./panel-state.js";
 
 export type Tone = "accent" | "success" | "warning" | "error" | "muted";
@@ -81,8 +81,6 @@ export function summarizePanel(item: PanelStackItem): PanelSummary {
 }
 
 /** A command that ended badly: a nonzero exit, a failure, a timeout or a lost process. A stopped job is not a failure. */
-export const commandFailed = (item: CommandRecord): boolean =>
-  !commandRunning(item) && item.state !== "stopped" && !(item.state === "exited" && !item.exitCode);
 const newest = (a: CommandRecord, b: CommandRecord) => b.createdAt - a.createdAt;
 const failure = (item: CommandRecord) => (item.state === "timed_out" ? "timed out" : item.exitCode ? `exit ${item.exitCode}` : item.signal ?? "failed");
 

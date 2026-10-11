@@ -57,14 +57,14 @@ Overview and Details cannot be moved or hidden.
 
 One card per command, newest first by start time ([commands.png](design/side-panel/commands.png)).
 
-- **Filter.** Chips `All N`, `Running N`, `Failed N` (failed includes timed out), stored per session. An empty filter shows a short note and keeps the chips.
+- **Filter.** Chips `All N`, `Running N`, `Failed N` (failed includes timed out and lost), stored per session. An empty filter shows a short note and keeps the chips. The chip counts cover the listed rows; "Older commands not shown" closes the list when the server cut older ones.
 - **Running card.** Accent border, a `Running` chip with a spinner and the ticking duration, the call's description as the title (else the command), the command line in monospace with an ellipsis and the full text in `title`, the last three output lines for foreground Bash, and a footer: start time, foreground or background, **Output**, and **Stop for background jobs only**. Foreground Bash stops with the turn's Stop in the composer, because per-command Stop exists only for supervisor-managed processes.
 - **Failed card.** Error border, an `Exit N` chip, duration and time, title, command, the last error lines, **Copy** and **Output**.
 - **Timed out, stopped, lost.** One compact card with its own chip.
-- **Succeeded.** One compact line: check glyph, title with ellipsis, duration; the command as a muted second line.
+- **Succeeded.** One compact line: check glyph, title with ellipsis, duration; the command as a muted second line when the title is the description. Activating a compact card shows the whole card, opens its output and moves focus to its **Output** button.
 - **Cards in use stay put.** A card whose output is open, that holds focus, that is stopping or that shows a notice stays in the current filter after its state changes, and leaves it only when it is no longer in use. New cards inserted above keep the reader's scroll anchor.
 - **Output** opens the terminal frame inside the card (auto-follow, Copy output, Load more, full output and `@`). Background output is read through the process control only after Output is opened; there is no live tail for background jobs because every read of their output is policy-checked and audited.
-- **Tail.** Foreground command records carry `tail`: the last three non-empty lines (512 bytes at most, terminal control sequences removed, each with its channel), refreshed whenever the record is saved ([dashboard-api.md](dashboard-api.md)).
+- **Tail.** Foreground command records carry `tail`: the last three non-empty lines, each with its channel, terminal control sequences removed, a carriage return keeping only what follows it (progress bars), 160 bytes per line and 512 bytes in all, refreshed whenever the record is saved ([dashboard-api.md](dashboard-api.md)). A failed card highlights stderr lines.
 
 ## 5. Todo (checklist blocks)
 

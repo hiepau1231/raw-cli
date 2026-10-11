@@ -10,7 +10,11 @@ export interface CommandRecord {
   endedAt?: number; exitCode?: number | null; signal?: string | null; error?: string; cursor: number; droppedBytes: number;
   /** Foreground Bash: the model's call id, and the complete output the call saved (docs/tool-ux-design.md §6.4). */
   toolCallId?: string; fullOutputPath?: string; fullOutputCapped?: boolean;
+  /** Foreground Bash: the last non-empty output lines, sanitized and bounded (docs/dashboard-api.md). */
+  tail?: CommandTailLine[];
 }
+export interface CommandTailLine { channel: "stdout" | "stderr"; text: string }
+const TAIL_LINES = 3, TAIL_LINE_BYTES = 160, TAIL_BYTES = 512;
 /** The newest rows the dashboard shows; `omitted` counts the older ones that were cut. */
 export const COMMAND_ROWS = 132;
 export interface CommandListing { items: CommandRecord[]; omitted: number }
@@ -28,6 +32,42 @@ export function presentProcess(record: ProcessRecord): CommandRecord {
 }
 export function commandText(row: CommandRecord): string {
   return `${row.label ?? row.command} — ${row.state}${row.exitCode == null ? "" : ` (exit ${row.exitCode})`} [${row.cwd}]`;
+}
+/** What a terminal shows for one line: a carriage return keeps only what follows it (a CRLF ending is not one). */
+function shownLine(text: string): string | undefined {
+  const body = text.endsWith("\r") ? text.slice(0, -1) : text;
+  const shown = terminalText(body.slice(body.lastIndexOf("\r") + 1)).trimEnd();
+  return shown.trim() ? shown : undefined;
+}
+/** The last non-empty lines of the retained output, newest last, each cut to its byte share. */
+export function commandTail(chunks: readonly ProcessChunk[]): CommandTailLine[] {
+  const lines: CommandTailLine[] = [];
+  // Built from the end: the line being read, and the channel of its last non-empty piece.
+  let line: { channel?: CommandTailLine["channel"]; text: string } = { text: "" };
+  const close = () => {
+    const shown = shownLine(line.text);
+    if (shown !== undefined) lines.unshift({ channel: line.channel ?? "stdout", text: shown });
+    line = { text: "" };
+  };
+  read: for (let index = chunks.length - 1; index >= 0; index--) {
+    const chunk = chunks[index]!;
+    const parts = chunk.text.split("\n");
+    for (let part = parts.length - 1; part >= 0; part--) {
+      line.text = parts[part]! + line.text;
+      if (!line.channel && terminalText(parts[part]!).trim()) line.channel = chunk.channel;
+      if (part > 0) { close(); if (lines.length >= TAIL_LINES) break read; }
+    }
+  }
+  if (lines.length < TAIL_LINES) close();
+  const tail: CommandTailLine[] = [];
+  let total = 0;
+  for (const entry of lines.slice(-TAIL_LINES).reverse()) {
+    const text = utf8Prefix(entry.text, Math.min(TAIL_LINE_BYTES, TAIL_BYTES - total)).text;
+    if (!text) break;
+    total += Buffer.byteLength(text);
+    tail.unshift({ channel: entry.channel, text });
+  }
+  return tail;
 }
 interface Entry {record:CommandRecord;chunks:ProcessChunk[];forgotten?:boolean;timer?:NodeJS.Timeout}
 /** Independent durable host projection; never writes to a PanelHost or model transcript. */
@@ -52,6 +92,7 @@ export class Commands {
     const r=entry.record;
     if(entry.forgotten||(this.options.store&&!this.options.store.getSession(r.sessionId)))return;
     r.updatedAt=Date.now();
+    if(r.kind==="foreground"){const tail=commandTail(entry.chunks);if(tail.length)r.tail=tail;else delete r.tail;}
     this.options.store?.database.prepare("INSERT INTO session_commands(id,session_id,host_token,created_at,record_json,chunks_json) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET record_json=excluded.record_json,chunks_json=excluded.chunks_json")
       .run(r.id,r.sessionId,this.options.hostToken,r.createdAt,JSON.stringify(r),JSON.stringify(entry.chunks));
     this.options.store?.database.prepare("DELETE FROM session_commands WHERE session_id=? AND id NOT IN (SELECT id FROM session_commands WHERE session_id=? ORDER BY created_at DESC,id DESC LIMIT 100)").run(r.sessionId,r.sessionId);

@@ -1,7 +1,7 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
-import { ACTIVE_TODO, BACKGROUND, FAILING, installStressTools, seedStress, stressScenario } from "./side-panel-stress.js";
+import { ACTIVE_TODO, BACKGROUND, FAILING, FOREGROUND, installStressTools, seedStress, stressScenario } from "./side-panel-stress.js";
 
 // Geometry and content of the side panel with real-length data (docs/side-panel-design.md §10), at the supported widths.
 const PREFERENCES = "raw.dashboard.preferences.v1";
@@ -24,6 +24,32 @@ function layoutFaults(page: Page) {
     }
     for (const title of root.querySelectorAll<HTMLElement>(".sp-card-title"))
       if (title.getBoundingClientRect().height > 24) faults.push(`card title wraps: "${title.textContent}"`);
+    return faults;
+  });
+}
+
+/** Command cards: no overflow, chips on the first row, truncated text with its full value in a title or the card's name. */
+function commandFaults(page: Page) {
+  return page.getByRole("tabpanel").evaluate((root) => {
+    const faults: string[] = [];
+    if (root.scrollWidth > root.clientWidth) faults.push(`tab content overflows by ${root.scrollWidth - root.clientWidth}px`);
+    for (const card of root.querySelectorAll<HTMLElement>("li.command-card:not([hidden])")) {
+      const box = card.getBoundingClientRect();
+      if (card.scrollWidth > card.clientWidth) faults.push(`card ${card.dataset.id} overflows`);
+      for (const child of card.querySelectorAll<HTMLElement>("button, .command-chip, code, .command-tail-line"))
+        if (child.getBoundingClientRect().right > box.right + 0.5) faults.push(`"${child.textContent}" sticks out of its card`);
+      for (const text of card.querySelectorAll<HTMLElement>(".command-card-title, .command-card-line, .command-card-sub, .command-tail-line")) {
+        const cut = text.scrollWidth > text.clientWidth + 1 || text.scrollHeight > text.clientHeight + 1;
+        const full = (text.closest("[title]") as HTMLElement | null)?.title ?? "";
+        const value = (text.textContent ?? "").replace(/^stderr: /, "").replace(/…$/, "");
+        if (cut && !full.startsWith(value) && !card.getAttribute("aria-label")?.startsWith(value)) faults.push(`cut without its full value: "${text.textContent}"`);
+      }
+      const head = card.querySelector<HTMLElement>(".command-card-head");
+      if (head && head.getBoundingClientRect().height > 22) faults.push(`card head wraps in ${card.dataset.id}`);
+      const glyph = card.querySelector(".command-card-glyph svg")?.getBoundingClientRect();
+      const title = card.querySelector<HTMLElement>(".command-card-open > .command-card-title")?.getBoundingClientRect();
+      if (glyph && title && Math.abs(glyph.top + glyph.height / 2 - (title.top + title.height / 2)) > 3) faults.push(`glyph off the title line in ${card.dataset.id}`);
+    }
     return faults;
   });
 }
@@ -79,6 +105,34 @@ test.describe("side panel layout", () => {
         await expect(selected).toHaveAttribute("aria-selected", "true");
         await expect(page.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", (await selected.getAttribute("id"))!);
         await tab(page, "Overview").click();
+      }
+    });
+
+    test(`at ${width} px the Commands tab shows one readable card per command`, async ({ page, raw }) => {
+      installStressTools(raw);
+      await page.addInitScript(([key, value]) => {
+        if (!localStorage.getItem(key!)) localStorage.setItem(key!, JSON.stringify({ version: 1, inspectorWidth: Number(value) }));
+      }, [PREFERENCES, String(width)]);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await seedStress(page, raw);
+      await tab(page, "Commands").click();
+      const cards = page.getByRole("tabpanel").locator("li.command-card");
+      await expect(cards).toHaveCount(3);
+      const [running, failed, succeeded] = [cards.nth(0), cards.nth(1), cards.nth(2)];
+      await expect(running.locator(".command-chip")).toHaveText("Running");
+      await expect(running.locator(".command-card-title")).toHaveText(BACKGROUND.description);
+      await expect(running.locator("code.command-card-line")).toHaveAttribute("title", BACKGROUND.command);
+      await expect(running.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+      await expect(failed.locator(".command-chip")).toHaveText("Exit 2");
+      await expect(failed.locator('.command-tail-line[data-channel="stderr"]')).toHaveText("stderr: error: missing semicolon");
+      await expect(succeeded).toHaveAttribute("data-compact", "true");
+      await expect(succeeded.locator(".command-card-title")).toHaveText(FOREGROUND.description);
+      // Compact: one line for the title, one for the command.
+      expect((await succeeded.boundingBox())!.height).toBeLessThanOrEqual(56);
+      for (const theme of ["dark", "light"]) {
+        await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+        expect(await commandFaults(page)).toEqual([]);
+        expect((await new AxeBuilder({ page }).include(".inspector").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
       }
     });
   }
