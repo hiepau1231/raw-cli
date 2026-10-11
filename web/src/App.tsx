@@ -106,6 +106,7 @@ export function App() {
   const page = path.split("/")[1] || "chat";
   const librarySection = page === "library" ? path.split("/")[2] || "tools" : undefined;
   const main = useRef<HTMLElement>(null);
+  const drag = useRef<{ x: number; width: number } | null>(null);
   const shownPage = useRef<string | undefined>(undefined);
   // Route transition: the DOM swaps synchronously (so clicks never hit stale UI) and the new
   // area eases in. Only whole-area changes animate (Chat/Agents/Library/Settings): opening or
@@ -492,13 +493,19 @@ export function App() {
           }}
           onPointerDown={(event) => {
             event.currentTarget.setPointerCapture(event.pointerId);
+            // The width follows the pointer's movement from here, wherever the handle sits in the gap.
+            drag.current = { x: event.clientX, width: preferences.contextWidth };
           }}
           onPointerMove={(event) => {
-            if (event.currentTarget.hasPointerCapture(event.pointerId))
+            const start = drag.current;
+            if (start && event.currentTarget.hasPointerCapture(event.pointerId))
               setPreferences((old) => ({
                 ...old,
-                contextWidth: Math.max(240, Math.min(320, event.clientX - 72)),
+                contextWidth: Math.max(240, Math.min(320, start.width + event.clientX - start.x)),
               }));
+          }}
+          onPointerUp={() => {
+            drag.current = null;
           }}
           onDoubleClick={() =>
             setPreferences((old) => ({ ...old, contextWidth: 260 }))

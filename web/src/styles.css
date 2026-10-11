@@ -45,6 +45,18 @@
   --code-size: 14px;
   --context-width: 260px;
   --inspector-width: 320px;
+  /* The app frame (docs/chat-design.md §3): the backdrop, the one card on it, and what sits on the backdrop. */
+  --backdrop: #eeecf3;
+  --frame: #e4e1ea;
+  --card-shadow: 0 1px 2px rgba(20, 12, 40, 0.05), 0 4px 14px rgba(20, 12, 40, 0.04);
+  --on-backdrop: #ffffff;
+  --on-backdrop-shadow: 0 1px 2px rgba(20, 12, 40, 0.08);
+  --backdrop-hover: rgba(255, 255, 255, 0.6);
+  --backdrop-field: rgba(255, 255, 255, 0.55);
+  --seg: rgba(255, 255, 255, 0.55);
+  --seg-ring: inset 0 0 0 1px var(--frame);
+  --seg-on: #ffffff;
+  --seg-on-shadow: 0 1px 2px rgba(20, 12, 40, 0.1);
 }
 /* Code everywhere uses the bundled monospace, never the browser's default. */
 code,
@@ -80,6 +92,17 @@ samp {
   --danger-text: #ffa3b4;
   --danger-border: #4d1a2c;
   --danger-hover: #3a1424;
+  --backdrop: #07060b;
+  --frame: #211b2d;
+  --card-shadow: none;
+  --on-backdrop: var(--accent-soft);
+  --on-backdrop-shadow: none;
+  --backdrop-hover: var(--panel-hover);
+  --backdrop-field: transparent;
+  --seg: #1b1626;
+  --seg-ring: none;
+  --seg-on: #2a2338;
+  --seg-on-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
 /* Diagram geometry comes from Mermaid; presentation stays in host CSS under CSP. */
@@ -370,6 +393,8 @@ small,
   height: 100dvh;
   display: flex;
   overflow: hidden;
+  padding: 8px 0;
+  background: var(--backdrop);
 }
 .rail {
   width: 72px;
@@ -378,9 +403,7 @@ small,
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 16px 7px 12px;
-  background: var(--panel);
-  border-right: 1px solid var(--border);
+  padding: 6px 7px 4px;
 }
 .rail a {
   display: flex;
@@ -397,10 +420,11 @@ small,
 }
 .rail a:hover {
   text-decoration: none;
-  background: var(--panel-hover);
+  background: var(--backdrop-hover);
 }
 .rail a.active {
-  background: var(--accent-soft);
+  background: var(--on-backdrop);
+  box-shadow: var(--on-backdrop-shadow);
   color: var(--accent-text);
 }
 .rail .brand {
@@ -418,30 +442,30 @@ small,
 .context-panel {
   width: var(--context-width);
   flex: none;
-  background: var(--panel);
-  border-right: 1px solid var(--border);
   overflow: hidden;
 }
 .context-panel-inner {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 20px 16px 16px;
+  padding: 1px 16px 8px;
   min-height: 0;
 }
+/* 52 px from the card's top edge: its centre is the chat header's and the side panel title's (docs/chat-design.md §3). */
 .workspace-button {
   text-align: left;
-  padding: 9px 12px;
+  height: 52px;
+  padding: 0 12px;
   margin-bottom: 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--canvas);
+  background: var(--backdrop-field);
   justify-content: flex-start;
   width: 100%;
   gap: 12px;
 }
 .workspace-button:hover {
-  background: var(--panel-hover);
+  background: var(--backdrop-hover);
 }
 .workspace-button > span:nth-child(2) {
   display: flex;
@@ -525,7 +549,7 @@ small,
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 0 10px;
-  background: var(--canvas);
+  background: var(--backdrop-field);
   color: var(--muted);
   min-height: 38px;
 }
@@ -561,11 +585,12 @@ small,
   min-width: 0;
 }
 .session-row:hover {
-  background: var(--panel-hover);
+  background: var(--backdrop-hover);
   text-decoration: none;
 }
 .session-row.selected {
-  background: var(--accent-soft);
+  background: var(--on-backdrop);
+  box-shadow: var(--on-backdrop-shadow);
 }
 .session-row > span:last-child {
   display: flex;
@@ -621,7 +646,8 @@ small,
   color: var(--text);
 }
 .context-nav a[aria-current="page"] {
-  background: var(--accent-soft);
+  background: var(--on-backdrop);
+  box-shadow: var(--on-backdrop-shadow);
   color: var(--accent-text);
 }
 .context-empty {
@@ -629,22 +655,40 @@ small,
   padding: 11px 10px;
   font-size: 13px;
 }
+/* In the gap before the card, invisible until hovered or focused. */
 .resize-handle {
   width: 4px;
   flex: none;
   cursor: col-resize;
-  margin-left: -2px;
-  margin-right: -2px;
+  margin-left: -10px;
+  margin-right: 6px;
+  border-radius: 2px;
   z-index: 2;
 }
-.resize-handle:hover {
+.resize-handle:hover,
+.resize-handle:focus-visible {
   background: var(--accent);
 }
+/* The one card on the backdrop: the page with its toolbar, or on a chat the conversation (.chat-main). */
 .main-column {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-width: 0;
+  margin-right: 8px;
+  overflow: hidden;
+  background: var(--canvas);
+  border: 1px solid var(--frame);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
+}
+.app-shell:has(.chat-main) .main-column {
+  margin-right: 0;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 .app-toolbar {
   height: 58px;
@@ -654,7 +698,6 @@ small,
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid var(--border);
 }
 .breadcrumb {
   display: flex;
@@ -753,6 +796,18 @@ main > .error-banner {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  margin-right: 8px;
+  overflow: hidden;
+  background: var(--canvas);
+  border: 1px solid var(--frame);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
+}
+/* The side panel sits beside the card on the backdrop and takes the right padding. */
+@media (min-width: 1200px) {
+  .chat-workspace.has-inspector .chat-main {
+    margin-right: 0;
+  }
 }
 .page-header {
   display: flex;
@@ -1029,10 +1084,9 @@ main > .error-banner {
 .inspector {
   flex: none;
   width: var(--inspector-width);
-  border-left: 1px solid var(--border);
   overflow: auto;
   padding: 22px 20px;
-  background: var(--panel);
+  background: var(--backdrop);
   z-index: 6;
 }
 .inspector-shade {
@@ -1580,7 +1634,8 @@ code.tool-summary {
   left: 0;
   top: 0;
   transform: none;
-  border-radius: 0;
+  border-radius: 0 14px 14px 0;
+  background: var(--backdrop);
   height: 100dvh;
   width: min(340px, 100vw);
   max-height: none;
@@ -1756,14 +1811,24 @@ code.tool-summary {
   .app-shell {
     flex-direction: column;
   }
+  /* Full-bleed: the rail on the backdrop tone over the card, no rule between them. */
+  .app-shell {
+    padding: 0;
+  }
   .rail {
     flex-direction: row;
     width: 100%;
     height: 54px;
     padding: 3px 10px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+    background: var(--backdrop);
     gap: 8px;
+  }
+  .main-column,
+  .chat-main {
+    margin-right: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
   .rail a {
     width: auto;
@@ -3480,12 +3545,19 @@ code.tool-summary {
   gap: 6px;
 }
 
-/* Side panel: Overview and one tab per panel (docs/side-panel-design.md). */
+/* Side panel: Overview and one tab per panel (docs/side-panel-design.md), on the backdrop 16 px from the card. */
 .inspector {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding: 0;
+  margin-right: 8px;
+  padding: 0 0 0 16px;
+}
+@media (max-width: 1199px) {
+  .inspector {
+    margin-right: 0;
+    padding-right: 8px;
+  }
 }
 /* The side panel's tokens; an inline tool view in the chat uses the same chips and cards. */
 .inspector,
@@ -3500,8 +3572,7 @@ code.tool-summary {
   --sp-success-text: color-mix(in srgb, var(--success) 75%, var(--text));
 }
 :root[data-theme="dark"] .inspector {
-  /* The mockups' dark palette: the canvas surface, solid status tints and their plain colours as text. */
-  background: var(--canvas);
+  /* The mockups' dark palette: solid status tints and their plain colours as text. */
   --sp-card: #141020;
   --sp-tint-success: #10261c;
   --sp-tint-warning: #2a2110;
@@ -3541,8 +3612,9 @@ code.tool-summary {
   flex: none;
   align-items: center;
   gap: var(--space-2);
-  margin: 0;
-  padding: 12px 8px 8px 12px;
+  height: 52px;
+  margin: 1px 0 0;
+  padding: 0 0 0 2px;
 }
 .side-panel-title h2 {
   flex: 1 1 auto;
@@ -3562,12 +3634,15 @@ code.tool-summary {
   min-height: 0;
   flex-direction: column;
 }
+/* A segmented control: the selected tab raised on its own surface, no rule under the strip. */
 .sp-tabs {
   display: flex;
   flex: none;
   gap: 2px;
-  padding: 0 var(--space-2);
-  border-bottom: 1px solid var(--border);
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--seg);
+  box-shadow: var(--seg-ring);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -3581,10 +3656,9 @@ code.tool-summary {
   align-items: center;
   gap: 5px;
   min-height: 0;
-  padding: 8px 7px 9px;
+  padding: 5px 8px;
   border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
+  border-radius: 7px;
   background: transparent;
   color: var(--muted);
   font: inherit;
@@ -3601,7 +3675,11 @@ code.tool-summary {
 }
 .sp-tab.active {
   color: var(--text);
-  border-bottom-color: var(--accent);
+  background: var(--seg-on);
+  box-shadow: var(--seg-on-shadow);
+}
+.sp-tab.active:hover:not(:disabled) {
+  background: var(--seg-on);
 }
 .sp-tab:focus-visible {
   outline: 2px solid var(--focus);
@@ -3660,7 +3738,7 @@ code.tool-summary {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 10px 10px 12px;
+  padding: 12px 0;
   font-size: 13px;
   line-height: 1.45;
 }

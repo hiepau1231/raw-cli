@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { Dialog } from "radix-ui";
 import { Info, X } from "lucide-react";
 import type { DashboardBootstrap } from "../../src/dashboard/contract.js";
@@ -179,6 +180,8 @@ export function Inspector({
   stack: Omit<SidePanelProps, "details" | "sessionId" | "context" | "heading" | "close">;
   compact?: CompactAction | undefined;
 }) {
+  // Where a drag started: the width follows the pointer's movement, wherever the handle sits in the gap.
+  const drag = useRef<{ x: number; width: number } | null>(null);
   return (
     <>
       <Dialog.Overlay className="inspector-shade" />
@@ -221,14 +224,20 @@ export function Inspector({
                 );
               }
             }}
-            onPointerDown={(event) =>
-              event.currentTarget.setPointerCapture(event.pointerId)
-            }
+            onPointerDown={(event) => {
+              event.currentTarget.setPointerCapture(event.pointerId);
+              // The rendered width: a narrow window can clip the preferred one.
+              const panel = event.currentTarget.closest(".inspector");
+              drag.current = { x: event.clientX, width: panel?.getBoundingClientRect().width ?? preferences.inspectorWidth };
+            }}
             onPointerMove={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId))
+              if (drag.current && event.currentTarget.hasPointerCapture(event.pointerId))
                 resizeInspector(
-                  Math.max(300, Math.min(360, innerWidth - event.clientX)),
+                  Math.max(300, Math.min(360, drag.current.width - (event.clientX - drag.current.x))),
                 );
+            }}
+            onPointerUp={() => {
+              drag.current = null;
             }}
             onDoubleClick={() => resizeInspector(320)}
           />

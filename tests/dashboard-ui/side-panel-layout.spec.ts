@@ -214,14 +214,14 @@ test.describe("side panel type", () => {
       }, names);
       expect((await style(".inspector", "font-family"))[0]).toMatch(/^"Inter Variable"/);
       expect((await style(".command-card-line", "font-family"))[0]).toMatch(/^"JetBrains Mono Variable"/);
-      expect(await style(".sp-tab", "padding-top", "padding-bottom")).toEqual(["8px", "9px"]);
-      // The approved mockups: the title row, the tabs, the body and a command card.
+      // The approved mockups: the title row, the segmented tabs (docs/chat-design.md §3), the body and a command card.
       expect(await style(".side-panel-title h2", "font-size", "font-weight")).toEqual(["14px", "600"]);
-      expect(await style(".side-panel-title", "padding-top", "padding-left")).toEqual(["12px", "12px"]);
-      expect(await style(".sp-tab", "font-size", "padding-left", "padding-right")).toEqual(["12.5px", "7px", "7px"]);
-      expect(await style('.sp-tab[aria-selected="true"]', "font-weight", "background-color")).toEqual(["400", "rgba(0, 0, 0, 0)"]);
+      expect(await style(".side-panel-title", "height", "padding-left")).toEqual(["52px", "2px"]);
+      expect(await style(".sp-tabs", "padding-top", "border-top-left-radius", "border-bottom-width")).toEqual(["3px", "10px", "0px"]);
+      expect(await style(".sp-tab", "font-size", "padding-top", "padding-left", "border-top-left-radius")).toEqual(["12.5px", "5px", "8px", "7px"]);
+      expect(await style('.sp-tab[aria-selected="true"]', "font-weight", "background-color", "border-bottom-width")).toEqual(["400", "rgb(255, 255, 255)", "0px"]);
       expect(await style(".sp-badge", "font-size")).toEqual(["10.5px"]);
-      expect(await style(".sp-content", "padding-top", "padding-left", "padding-bottom", "font-size")).toEqual(["10px", "10px", "12px", "13px"]);
+      expect(await style(".sp-content", "padding-top", "padding-left", "padding-bottom", "font-size")).toEqual(["12px", "0px", "12px", "13px"]);
       expect(await style("li.command-card:not([data-compact])", "padding-top", "padding-left", "border-radius", "row-gap")).toEqual(["10px", "11px", "10px", "6px"]);
       expect(await style("li.command-card:not([data-compact]) .command-card-title", "font-size", "font-weight")).toEqual(["13px", "550"]);
       expect(await style(".command-chip", "font-size", "font-weight")).toEqual(["11px", "600"]);
@@ -241,9 +241,10 @@ test.describe("side panel type", () => {
       await tab(page, "Details").click();
       expect((await style('.details-card[data-card="resume"] code', "font-family"))[0]).toMatch(/^"JetBrains Mono Variable"/);
       expect(await style('.details-card[data-card="context"] .sp-bar', "height")).toEqual(["6px"]);
-      // The dark palette of the mockups: the canvas surface and solid status tints.
+      // The dark palette of the mockups: the backdrop beside the card, the raised tab and solid status tints.
       await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
-      expect(await style(".inspector", "background-color")).toEqual(["rgb(15, 12, 22)"]);
+      expect(await style(".inspector", "background-color")).toEqual(["rgb(7, 6, 11)"]);
+      expect(await style('.sp-tab[aria-selected="true"]', "background-color")).toEqual(["rgb(42, 35, 56)"]);
       await tab(page, "Commands").click();
       expect(await style('.command-chip[data-tone="failed"]', "background-color")).toEqual(["rgb(42, 15, 26)"]);
       expect(await style('li.command-card[data-tone="running"]', "border-top-color")).toEqual(["rgb(76, 58, 134)"]);

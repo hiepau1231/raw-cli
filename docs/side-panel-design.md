@@ -19,7 +19,7 @@ The new design gives each panel the full height in its own tab, and presents eac
 The side panel follows the rest of the dashboard (the OpenAI/ChatGPT-like look of the session list and chat), not VS Code:
 
 - **Type.** Inter (variable) for text and JetBrains Mono (variable) for code, both bundled with the dashboard under the SIL Open Font License 1.1 ([dashboard.md](dashboard.md#fonts)), so every system renders the mockups' type; no platform font is named. Body text 13 px at line height 1.45, titles 13 px at weight 550, 11 to 11.5 px muted secondary text, 11 px uppercase group labels with 0.8 px tracking.
-- **Spacing.** The values of `mockups.tsx` are the reference: the title row 14 px at weight 600 with 12 px padding, tabs 12.5 px with 7 px side padding, the tab body padded 10 px (12 px at the bottom) with 8 px between cards.
+- **Spacing.** The values of the approved mockups are the reference: the title row 52 px high, 14 px at weight 600; tabs 12.5 px in a segmented strip (5 px by 8 px, [chat-design.md](chat-design.md) §3); the tab body 12 px above and below, flush with the strip at the sides, with 8 px between cards.
 - Cards: 1 px `--border`, 10 px radius, 10 by 11 px padding, 6 px between rows.
 - Chips for status: 11 px, weight 600, pill radius, tinted backgrounds derived from `--accent`, `--success`, `--warning` and `--error` in both themes. Status is never colour-only: every chip has a word or a glyph with an accessible name.
 - Monospace (`--font-mono`) only for commands, output and paths in code: 11.5 px on a `--code` background, 6 px radius.
@@ -34,6 +34,8 @@ The side panel has a compact title row (Side panel, the selected panel's `⋯` m
 3. **Details**, always last.
 
 Overview and Details cannot be moved or hidden.
+
+The side panel sits on the app's backdrop beside the main card, with no border or background of its own; its 52 px title row shares the chat header's centre line, and the tab strip is a segmented control with no rule under it ([chat-design.md](chat-design.md) §3).
 
 - **Tabs.** The active tab shows its icon and label; inactive tabs show their icon and badge, and the label in their tooltip and accessible name. The strip scrolls horizontally when it overflows, keeping the active tab in view. A tab's tooltip and accessible description give the panel's explanation (its document `subtitle`) as a sentence, then its state ("Tracks the plan. 2 of 5 done, New update"). An unseen dot marks a panel updated since it was last viewed.
 - **Badges.** Checklist progress `done/total`; files: the file count; Commands: the running count (accent), else the failed count (error), else the total; Details: the context use in percent (warning from 80 %, error from 95 %); other panels: `done/total` when the document reports progress. A done or failed document shows a small status glyph instead; there is no text pill. Closed and Stale show as a muted chip in the Overview card; a closed panel's tab says so in a banner above its content.
