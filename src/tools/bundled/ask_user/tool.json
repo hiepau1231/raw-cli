@@ -161,7 +161,7 @@
         },
         {
           "id": "cancel",
-          "label": "Cancel",
+          "label": "Skip",
           "scope": "block",
           "blocks": [
             "form"

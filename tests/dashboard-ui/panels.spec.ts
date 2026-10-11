@@ -301,7 +301,7 @@ test.describe("tab chrome", () => {
     await expect(notes.locator(".sp-tab-header")).toHaveCount(0);
     await expect(tab(page, "Notes")).toHaveAttribute("title", /^Notes · Explains what this panel tracks\./);
     await expect(notes).not.toContainText("Explains what this panel tracks.");
-    await expect(notes.locator("h4")).toHaveText(["Checks"]);
+    await expect(notes.locator("h4")).toHaveText(["Checks · 2 rows"]);
     await expect(page.locator(".side-panel-title").getByRole("button", { name: "Notes panel menu", exact: true })).toBeVisible();
     // A done document shows a glyph on its tab, never a text pill.
     await expect(tab(page, "Notes").locator(".sp-doc-status.done")).toHaveCount(1);
@@ -317,24 +317,26 @@ test.describe("tab chrome", () => {
     await expect(code).toHaveCSS("border-radius", "0px");
   });
 
-  test("rows keep one height with 13 px text and file references keep the row size", async ({ page, raw }) => {
+  test("rows keep one height with 13 px text, a narrow table is cards, and file references are chips", async ({ page, raw }) => {
     seed(raw);
     await openChat(page, raw);
     await send(page, "publish");
     await expect(page.getByTestId("assistant-message")).toHaveCount(1);
     await side(page).click();
     await tab(page, "Notes").click();
-    // Checklist rows (one with a file reference) keep one height; table rows are 24 px; both use 13 px text.
+    // Checklist rows (one with a file reference) keep one height; at 320 px a table is one card per row whose title
+    // line is one 24 px row; both use 13 px text, and a file reference is an 11 px chip (kvtable.png).
     const items = page.getByRole("tabpanel").locator(".panel-checklist .todo-row");
     await expect(items).toHaveCount(2);
     const heights = await items.evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height));
     expect(heights[0]).toBe(heights[1]);
     expect(heights[0]).toBeLessThanOrEqual(32);
-    const rows = page.getByRole("tabpanel").locator(".panel-table tbody tr");
+    await expect(page.getByRole("tabpanel").locator("table")).toHaveCount(0);
+    const rows = page.getByRole("tabpanel").locator(".panel-table-card-head");
     await expect(rows).toHaveCount(2);
-    for (const row of await rows.all()) expect((await row.boundingBox())!.height).toBe(24);
+    for (const row of await rows.all()) expect((await row.boundingBox())!.height).toBeLessThanOrEqual(24);
     for (const row of [...await items.all(), ...await rows.all()]) expect(await row.evaluate((element) => getComputedStyle(element).fontSize)).toBe("13px");
-    await expect(page.getByRole("tabpanel").locator(".panel-ref").first()).toHaveCSS("font-size", "13px");
+    await expect(page.getByRole("tabpanel").locator(".panel-ref").first()).toHaveCSS("font-size", "11px");
   });
 });
 
@@ -447,12 +449,12 @@ test.describe("panel widgets", () => {
       await expect(body.locator(`[data-kind="${kind}"]`)).toHaveCount(1);
     await expect(body.getByText("Parent")).toBeVisible();
     await expect(body.locator(".panel-status.status-done").first().locator(".sr-only")).toHaveText("Done");
-    await expect(body.locator("progress")).toHaveCount(1);
-    await expect(body.getByRole("table")).toBeVisible();
+    await expect(body.getByRole("progressbar")).toHaveCount(1);
+    await expect(body.locator(".panel-table-card").first()).toBeVisible();
     await expect(body.locator("strong", { hasText: "bold" })).toBeVisible();
     await expect(body.getByTestId("panel-fallback")).toHaveText("Shown as plain text");
     // Steps show how long a finished step took; the timeline is newest first with relative time; files show a status letter.
-    await expect(body.locator('[data-kind="steps"] .panel-tag', { hasText: "10m" })).toHaveCount(1);
+    await expect(body.locator('[data-kind="steps"] .panel-step-time', { hasText: "10m" })).toHaveCount(1);
     await expect(body.locator('[data-kind="timeline"] li').first()).toContainText("Newer event");
     await expect(body.locator('[data-kind="timeline"] li').last()).toContainText("Older event");
     await expect(body.locator('[data-kind="timeline"] time').first()).toHaveText(/ago$/);
@@ -863,17 +865,21 @@ test.describe("actions on other blocks", () => {
     await page.getByRole("button", { name: "Actions for markdown" }).click();
     await page.getByRole("menuitem", { name: "Annotate" }).click();
     await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("About notes");
-    // A table row with actions keeps the 24 px row, and its menu button shows on hover or focus.
-    const tableRow = page.locator(".panel-table tbody tr", { hasText: "Alpha" });
+    // A table row (a card at 320 px) with actions keeps its 24 px title line, and its menu button shows on hover or focus.
+    const tableRow = page.locator(".panel-table-card-head", { hasText: "Alpha" });
     const rowMenu = page.getByRole("button", { name: "Actions for Alpha" });
-    expect((await tableRow.boundingBox())!.height).toBe(24);
+    expect((await tableRow.boundingBox())!.height).toBeLessThanOrEqual(24);
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.mouse.move(0, 0);
     await expect(rowMenu).toHaveCSS("opacity", "0");
     await tableRow.hover();
     await expect(rowMenu).toHaveCSS("opacity", "1");
     await page.mouse.move(0, 0);
+    // Keyboard focus (focus-visible) shows it too.
     await rowMenu.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(rowMenu).toBeFocused();
     await expect(rowMenu).toHaveCSS("opacity", "1");
     await rowMenu.click();
     await page.getByRole("menuitem", { name: "Open row" }).click();

@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 
 // Run after capture-side-panel.ts. Renders the approved mockups (docs/design/side-panel/mockups.tsx) at the gallery's
 // scale and writes test-results/side-panel/compare-<mockup>-<scheme>.png: the mockup on the left, the dashboard's tab on
-// the right, so the two can be compared at the same size. Not a pixel assertion.
+// the right, both at their CSS size, so the two can be compared. Not a pixel assertion.
 const out = "test-results/side-panel";
 mkdirSync(out, { recursive: true });
 execFileSync("npx", ["tsx", "docs/design/side-panel/mockups.tsx"], { stdio: "inherit" });
@@ -32,7 +32,7 @@ try {
       if (!existsSync(ours)) continue;
       const data = (file: string) => `data:image/png;base64,${readFileSync(file).toString("base64")}`;
       await page.setContent(`<body style="margin:0;background:#888;display:flex;gap:16px;padding:16px;align-items:flex-start">
-        <img src="${data(join(out, `mock-${id}.png`))}" style="width:320px"><img src="${data(ours)}" style="width:320px"></body>`);
+        <img src="${data(join(out, `mock-${id}.png`))}" style="zoom:0.5"><img src="${data(ours)}" style="zoom:0.5"></body>`);
       await page.screenshot({ path: join(out, `compare-${id}-${scheme}.png`), fullPage: true });
     }
   }

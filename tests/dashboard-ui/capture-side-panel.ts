@@ -28,13 +28,22 @@ try {
       if (title === "Files changed" && (await first.getAttribute("aria-expanded")) === "false") await first.click();
       await page.mouse.move(0, 0);
       await page.waitForTimeout(300);
+      // The whole tab, not only what fits: the window grows by what the tab scrolls.
+      const hidden = await page.locator(".sp-content").evaluate((element) => element.scrollHeight - element.clientHeight);
+      await page.setViewportSize({ width: 1280, height: 900 + Math.max(0, hidden) });
+      await page.waitForTimeout(100);
       const file = `side-panel-${slug(title)}-${scheme}.png`;
       await page.locator(".inspector").screenshot({ path: join(out, file), animations: "disabled" });
       copyFileSync(join(out, file), join("docs/dashboard", file));
+      await page.setViewportSize({ width: 1280, height: 900 });
     }
+    // The pending ask_user question, as the chat shows it (question.png).
+    const question = `side-panel-question-${scheme}.png`;
+    await page.locator(".inline-tool-view").last().screenshot({ path: join(out, question), animations: "disabled" });
+    copyFileSync(join(out, question), join("docs/dashboard", question));
   }
   await page.getByRole("tab", { name: "Overview", exact: true }).click();
-  console.log(`captured ${titles.length * 2} images: ${titles.join(", ")}`);
+  console.log(`captured ${titles.length * 2 + 2} images: ${titles.join(", ")}, Question`);
 } finally {
   await browser.close();
   await raw.close();

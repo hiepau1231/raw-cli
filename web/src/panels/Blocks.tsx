@@ -29,12 +29,19 @@ function Block({ block, title, onInsert, hideCompleted }: { block: PanelBlock; t
     default: return <p className="panel-fallback" data-testid="panel-fallback">{block.fallback ?? "This block type is not supported by this dashboard."}</p>;
   }
 }
+/** " · 1 of 3" for steps (done and skipped count as finished), " · 2 rows" for a table. */
+function counted(block: PanelBlock) {
+  const b = block as any;
+  if (block.kind === "steps" && b.items.length) return ` · ${b.items.filter((step: { status: string }) => step.status === "done" || step.status === "skipped").length} of ${b.items.length}`;
+  if (block.kind === "table") return ` · ${b.rows.length} ${b.rows.length === 1 ? "row" : "rows"}`;
+  return "";
+}
 function BlockView({ block, repeats, docTitle, onInsert, hideCompleted, onHideCompleted }: { block: PanelBlock; repeats: (text: string) => boolean; docTitle?: string | undefined; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted?: ((value: boolean) => void) | undefined }) {
   const toggle = block.kind === "checklist" && onHideCompleted;
   const hasActions = useOffered("block", block.id).length > 0;
   const title = block.title && !repeats(block.title) ? block.title : docTitle;
-  // A checklist puts its title on the line with its count.
-  const heading = block.kind === "checklist" ? undefined : title;
+  // A checklist puts its title on the line with its count; steps and tables add theirs to the title (steps.png, kvtable.png).
+  const heading = block.kind === "checklist" ? undefined : title && `${title}${counted(block)}`;
   return (
     <section className="panel-block" data-kind={block.kind}>
       {(heading || toggle || hasActions) && (
@@ -64,9 +71,11 @@ export function Blocks({ document, title, inline = false, onInsert, hideComplete
   const docTitle = document.title && !same(document.title) ? document.title : undefined;
   // A lone untitled checklist (the Todo shape) puts the document title on the line with its count.
   const lone = document.blocks.length === 1 && document.blocks[0]!.kind === "checklist" && !(document.blocks[0]!.title && !same(document.blocks[0]!.title));
+  // A lone untitled form (an ask_user question) leads with its state and question (question.png), not the document title.
+  const question = document.blocks.length === 1 && document.blocks[0]!.kind === "form" && !document.blocks[0]!.title;
   return (
     <>
-      {docTitle && !lone && <h4 className="panel-doc-title">{docTitle}</h4>}
+      {docTitle && !lone && !question && <h4 className="panel-doc-title">{docTitle}</h4>}
       {inline && document.subtitle && !same(document.subtitle) && <p className="muted small panel-subtitle">{document.subtitle}</p>}
       {inline && document.summary && <p className="panel-summary">{document.summary}</p>}
       {document.blocks.map((block) => <BlockView key={block.id} block={block} repeats={same} docTitle={lone ? docTitle : undefined} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={inline ? onHideCompleted : undefined} />)}

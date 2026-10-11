@@ -290,10 +290,10 @@ export function relativeTime(at: number, now: number): string {
   const seconds = Math.round((now - at) / 1000);
   if (seconds < 45) return "just now";
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} d ago`;
 }
 
 /** A receipt names its panel by the local id; the stack is keyed by the full id `<owner>#<panel>`. */

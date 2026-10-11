@@ -241,7 +241,7 @@ For ordered phases or a pipeline.
 ```
 
 - **Items.** Flat list, at most 30. Fields are `detail` (≤ 200 characters), `started_at` and `ended_at` (epoch ms).
-- **Dashboard.** A vertical stepper that shows how long each step took when it has both timestamps.
+- **Dashboard.** A vertical stepper that shows how long each step took when it has both timestamps, and how long a running step has run; the block title counts finished steps (`Steps · 1 of 3`). See [docs/side-panel-design.md §8](side-panel-design.md#8-plugin-blocks).
 - **Text rendering.** `1. [x] Plan — approved (10m)`.
 
 ### 7.3 `progress`
@@ -251,7 +251,7 @@ For ordered phases or a pipeline.
 ```
 
 - **Fields.** `value` and `max` are non-negative finite numbers with `value ≤ max` and `max > 0`. Alternatively, `"indeterminate": true` with no values.
-- **Dashboard.** A `role="progressbar"` element that respects `prefers-reduced-motion`.
+- **Dashboard.** The label and `value / max` over a thin `role="progressbar"` bar that respects `prefers-reduced-motion`. See [docs/side-panel-design.md §8](side-panel-design.md#8-plugin-blocks).
 - **Text rendering.** `Indexing 42%`.
 
 ### 7.4 `key_value`
@@ -263,7 +263,7 @@ For ordered phases or a pipeline.
 ```
 
 - **Limits.** At most 50 entries. `key` ≤ 60 characters, `value` ≤ 500 characters.
-- **Dashboard.** A description list (`<dl>`).
+- **Dashboard.** A description list (`<dl>`), each key above its value; a reference is a file chip. See [docs/side-panel-design.md §8](side-panel-design.md#8-plugin-blocks).
 
 ### 7.5 `table`
 
@@ -275,7 +275,7 @@ For ordered phases or a pipeline.
 
 - **Limits.** 1–8 columns and at most 200 rows. A cell is text of at most 300 characters. A missing cell renders empty.
 - **Row fields.** Optional `status` (shows a glyph column) and `ref`.
-- **Dashboard.** A table with horizontal scroll inside the panel. It never causes page overflow.
+- **Dashboard.** Narrower than 420 px (always in the side panel) one card per row; from 420 px a compact table with single-line cells. It never causes page overflow. See [docs/side-panel-design.md §8](side-panel-design.md#8-plugin-blocks).
 - **Text rendering.** Aligned columns. Rows past 50 are summarized as `… N more rows`.
 
 ### 7.6 `markdown`
@@ -307,7 +307,7 @@ For events, logs and history of a run.
 
 - **Fields.** `level` is `info` | `success` | `warning` | `error`. `label` ≤ 200 characters, `detail` ≤ 1000 characters.
 - **Cap.** `max` ranges 1–200 (default 100). The `append_events` patch drops the oldest events beyond `max`.
-- **Dashboard.** Newest first, with relative time.
+- **Dashboard.** Newest first, a dot in the level's colour, the relative time above the label. See [docs/side-panel-design.md §8](side-panel-design.md#8-plugin-blocks).
 
 ### 7.8 `files`
 

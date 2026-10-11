@@ -1,9 +1,10 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { test, expect, openChat } from "./fixtures.js";
 import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
-import { ACTIVE_TODO, BACKGROUND, FAILING, FOREGROUND, TIMED_OUT, installStressTools, seedStress, stressScenario } from "./side-panel-stress.js";
+import { ACTIVE_TODO, BACKGROUND, FAILING, FOREGROUND, TIMED_OUT, gadget, installStressTools, seedStress, stressScenario } from "./side-panel-stress.js";
 
 // Geometry and content of the side panel with real-length data (docs/side-panel-design.md §10), at the supported widths.
 const PREFERENCES = "raw.dashboard.preferences.v1";
@@ -248,6 +249,134 @@ test.describe("side panel type", () => {
       expect(await style('li.command-card[data-tone="running"]', "border-top-color")).toEqual(["rgb(76, 58, 134)"]);
     });
   }
+});
+
+/** Plugin-block faults: horizontal overflow anywhere in `root`, and status glyphs off their label's first line. */
+function blockFaults(page: Page, selector: string) {
+  return page.locator(selector).first().evaluate((root) => {
+    const faults: string[] = [];
+    if (root.scrollWidth > root.clientWidth + 1) faults.push(`overflows by ${root.scrollWidth - root.clientWidth}px`);
+    for (const element of root.querySelectorAll<HTMLElement>(".panel-block, .panel-step, .panel-event, .panel-kv > div, .panel-table-card"))
+      if (element.scrollWidth > element.clientWidth + 1) faults.push(`${element.className} overflows`);
+    for (const step of root.querySelectorAll<HTMLElement>(".panel-step")) {
+      const glyph = step.querySelector(".panel-status svg")!.getBoundingClientRect();
+      const label = step.querySelector<HTMLElement>(".panel-step-label")!;
+      const top = label.getBoundingClientRect().top;
+      const centre = glyph.top + glyph.height / 2;
+      if (centre < top || centre > top + parseFloat(getComputedStyle(label).lineHeight)) faults.push(`glyph off the first line of "${label.textContent}"`);
+    }
+    return faults;
+  });
+}
+
+test.describe("plugin blocks", () => {
+  test.use({ scenario: stressScenario });
+  for (const width of [320, 360]) {
+    test(`at ${width} px steps, progress, log, facts and results read as in steps.png and kvtable.png`, async ({ page, raw }) => {
+      installStressTools(raw);
+      await page.addInitScript(([key, value]) => {
+        if (!localStorage.getItem(key!)) localStorage.setItem(key!, JSON.stringify({ version: 1, inspectorWidth: Number(value) }));
+      }, [PREFERENCES, String(width)]);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await seedStress(page, raw);
+      await tab(page, "Gadget").click();
+      const body = page.getByRole("tabpanel");
+      const block = (kind: string) => body.locator(`.panel-block[data-kind="${kind}"]`);
+      // Block titles are group labels; steps and tables count what they hold.
+      await expect(body.locator(".panel-block-header h4")).toHaveText(["Steps · 1 of 3", "Progress", "Log", "Facts", "Results · 2 rows", "Notes", "Question", "Future"]);
+      expect(await body.locator(".panel-block-header h4").first().evaluate((element) => [getComputedStyle(element).fontSize, getComputedStyle(element).textTransform, getComputedStyle(element).letterSpacing])).toEqual(["11px", "uppercase", "0.8px"]);
+      // Steps: a stepper with a line between glyphs, the current step at weight 550 with its detail, durations at the right.
+      const steps = block("steps").locator(".panel-step");
+      await expect(steps).toHaveCount(3);
+      await expect(steps.nth(1)).toHaveAttribute("aria-current", "step");
+      expect(await steps.nth(1).locator(".panel-step-label").evaluate((element) => getComputedStyle(element).fontWeight)).toBe("550");
+      await expect(steps.nth(1).locator(".panel-step-detail")).toHaveText("đang chạy kiểm tra từng trang một, có thể mất vài phút");
+      await expect(steps.locator(".panel-step-time")).toHaveText(["10m", "2m"]);
+      await expect(steps.locator(".panel-step-line")).toHaveCount(2);
+      const labelBox = (await steps.first().locator(".panel-step-label").boundingBox())!;
+      const timeBox = (await steps.first().locator(".panel-step-time").boundingBox())!;
+      expect(timeBox.x).toBeGreaterThan(labelBox.x + labelBox.width - 1);
+      // Progress: the label and "3 / 10" on one line, then a 4 px bar.
+      const progress = block("progress");
+      await expect(progress.locator(".panel-progress-value")).toHaveText("3 / 10");
+      const [label, value] = [(await progress.locator(".panel-progress-label").boundingBox())!, (await progress.locator(".panel-progress-value").boundingBox())!];
+      expect(Math.abs(label.y + label.height / 2 - (value.y + value.height / 2))).toBeLessThan(2);
+      await expect(progress.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "3");
+      await expect(progress.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "10");
+      expect((await progress.locator(".sp-bar").boundingBox())!.height).toBe(4);
+      // Log: newest first, a coloured dot, the time above the label, the label in the text colour.
+      const events = block("timeline").locator(".panel-event");
+      await expect(events.locator(".panel-event-label")).toHaveText(["Lỗi kết nối", "Sửa liên kết getting-started thành công"]);
+      await expect(events.first().locator(".panel-event-detail")).toHaveText("ECONNRESET khi gọi docs.example.com sau 3 lần thử lại");
+      const colours = await events.first().evaluate((element) => ({
+        dot: getComputedStyle(element.querySelector(".panel-event-dot")!).backgroundColor,
+        label: getComputedStyle(element.querySelector(".panel-event-label")!).color,
+        text: getComputedStyle(document.querySelector(".inspector")!).color,
+      }));
+      expect(colours.label).toBe(colours.text);
+      expect(colours.dot).not.toBe("rgba(0, 0, 0, 0)");
+      expect((await events.first().locator("time").boundingBox())!.y).toBeLessThan((await events.first().locator(".panel-event-label").boundingBox())!.y);
+      // Facts: the key above its value; a reference is a file chip with its folder, inserting the path.
+      const facts = block("key_value").locator(".panel-kv > div");
+      const [key, val] = [(await facts.first().locator("dt").boundingBox())!, (await facts.first().locator("dd").boundingBox())!];
+      expect(val.y).toBeGreaterThanOrEqual(key.y + key.height - 1);
+      const chip = facts.nth(1).locator(".panel-ref");
+      await expect(chip).toHaveText("component-file-name.ts:42");
+      await expect(chip).toHaveAttribute("title", "Insert @src/very/deep/nested/directory/structure/component-file-name.ts into the message");
+      await expect(facts.nth(1).locator(".panel-ref-dir")).toHaveText("src/very/deep/nested/directory/structure");
+      // Results: below 420 px each row is a card, never a table.
+      const results = block("table");
+      await expect(results.locator("table")).toHaveCount(0);
+      const cards = results.locator(".panel-table-card");
+      await expect(cards).toHaveCount(2);
+      await expect(cards.locator(".panel-table-card-title")).toHaveText(["getting-started-with-the-command-line-and-configuration.md", "faq.md"]);
+      await expect(cards.locator(".panel-table-card-cells")).toHaveText(["Trạng thái: liên kết ổn, xem lại sau 30 ngày · Liên kết: 44", "Trạng thái: lỗi · Liên kết: 0"]);
+      await expect(cards.first().locator(".panel-status")).toHaveAttribute("title", "Done");
+      for (const theme of ["dark", "light"]) {
+        await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+        expect(await blockFaults(page, ".sp-content")).toEqual([]);
+        expect((await new AxeBuilder({ page }).include(".inspector").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
+      }
+      await chip.click();
+      await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("@src/very/deep/nested/directory/structure/component-file-name.ts ");
+    });
+  }
+});
+
+test.describe("inline plugin view", () => {
+  test.use({ scenario: { agent: { tools: { use: ["local/inline"] } }, responses: [
+    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "call", type: "function", function: { name: "inline", arguments: "{}" } }] }, "tool_calls"), openAiDone] },
+    { frames: [openAiFrame({ content: "received" }, "stop"), openAiDone] }] } });
+  test("at chat width the same blocks render, the table as a compact table, without overflow", async ({ page, raw }) => {
+    const folder = join(raw.env.XDG_CONFIG_HOME!, "raw", "tools", "inline");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "tool.json"), JSON.stringify({ api_version: 2, id: "inline", version: "1.0.0", name: "inline", description: "Inline", entry: "./index.mjs",
+      input_schema: { type: "object", properties: {}, additionalProperties: false }, panels: [{ id: "view", title: "Review", placement: "chat", actions: [
+        { id: "submit", label: "Send answer", kind: "response", scope: "block", response: "submit", blocks: ["form"] },
+        { id: "cancel", label: "Skip", kind: "response", scope: "block", response: "cancel", blocks: ["form"] }] }] }));
+    const blocks = gadget.blocks.filter((entry) => ["steps", "key_value", "table"].includes(entry.kind));
+    writeFileSync(join(folder, "index.mjs"), `export async function handler(args, context) { const result = await context.interactions.request({ panel: "view", document: { blocks: [
+      ...${JSON.stringify(blocks)}, { id: "form", kind: "form", fields: [{ id: "ok", label: "Looks right", kind: "single_select", required: true, options: [{ id: "y", label: "Yes" }, { id: "n", label: "No" }] }] }] } });
+      return { content: [{ type: "json", value: result }] }; }`);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await openChat(page, raw);
+    await page.getByRole("textbox", { name: "Message" }).fill("show");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const view = page.locator(".inline-tool-view").last();
+    await expect(view.locator(".panel-step")).toHaveCount(3);
+    // The view is wider than the 420 px switch, so the table is a table with single-line cells and their full text in title.
+    expect((await view.locator('.panel-block[data-kind="table"]').boundingBox())!.width).toBeGreaterThanOrEqual(420);
+    await expect(view.locator("table.panel-table")).toBeVisible();
+    await expect(view.locator(".panel-table-card")).toHaveCount(0);
+    const cell = view.locator("table.panel-table tbody td", { hasText: "liên kết ổn" });
+    await expect(cell).toHaveAttribute("title", "liên kết ổn, xem lại sau 30 ngày");
+    expect(await cell.evaluate((element) => getComputedStyle(element).whiteSpace)).toBe("nowrap");
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      expect(await blockFaults(page, ".inline-tool-view")).toEqual([]);
+      expect((await new AxeBuilder({ page }).include(".inline-tool-view").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
+    }
+  });
 });
 
 test("the bundled fonts' licences ship with the dashboard", () => {

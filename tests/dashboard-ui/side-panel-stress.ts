@@ -30,15 +30,25 @@ export const TIMED_OUT = { command: "sleep 5", description: "npm test", timeout:
 export const FOREGROUND = { command: "for page in $(cat pages.txt 2>/dev/null); do node scripts/check-links.mjs --page \"$page\" --verbose; done; echo checked", description: "Kiểm tra lại liên kết của từng trang sau khi cập nhật mục lục" };
 export const FAILING = { command: "printf 'error: missing semicolon\\n' >&2; exit 2", description: "Chạy linter" };
 export const BACKGROUND = { command: "for i in $(seq 1 100000); do echo \"tick $i đang chạy kiểm tra\"; sleep 1; done", description: "Theo dõi liên kết sau khi cập nhật mục lục", run_in_background: true };
+/** The plugin panel: steps, progress, log, facts and results as in steps.png and kvtable.png, then every other block kind. */
 export const gadget = {
   title: "Gadget", status: "active", progress: { done: 1, total: 2 },
   blocks: [
-    { id: "st", kind: "steps", title: "Steps", items: [{ id: "s1", label: LONG, status: "done", started_at: 1759140000000, ended_at: 1759140600000 }, { id: "s2", label: `Second ${LONG}`, status: "in_progress", detail: "đang chạy kiểm tra từng trang một, có thể mất vài phút" }, { id: "s3", label: "Gửi báo cáo", status: "pending" }] },
-    { id: "pr", kind: "progress", title: "Progress", label: "Kiểm tra liên kết của tất cả trang đã đăng ký trong hệ thống", value: 3, max: 10 },
-    { id: "kv", kind: "key_value", title: "Facts", entries: [{ key: "Nhánh làm việc hiện tại của dự án", value: "feature/very-long-branch-name-for-testing-overflow" }, { key: "Branch", value: "main" }, { key: "File", value: "x", ref: { path: "src/very/deep/nested/directory/structure/component-file-name.ts", line: 42 } }] },
-    { id: "tb", kind: "table", title: "Results", columns: [{ id: "n", label: "Trang" }, { id: "s", label: "Trạng thái" }, { id: "v", label: "Liên kết", align: "end" }], rows: [{ id: "r1", status: "done", cells: { n: "getting-started-with-the-command-line-and-configuration.md", s: "liên kết ổn, xem lại sau 30 ngày", v: "44" } }, { id: "r2", status: "failed", cells: { n: "faq.md", s: "lỗi", v: "0" } }] },
+    { id: "st", kind: "steps", title: "Steps", items: [
+      { id: "s1", label: "Sửa liên kết getting-started: trang đích đã đổi tên, không thể tải nội dung", status: "done", started_at: Date.now() - 1_500_000, ended_at: Date.now() - 900_000 },
+      { id: "s2", label: "Kiểm tra lại toàn bộ trang tài liệu", status: "in_progress", started_at: Date.now() - 120_000, detail: "đang chạy kiểm tra từng trang một, có thể mất vài phút" },
+      { id: "s3", label: "Gửi báo cáo", status: "pending" }] },
+    { id: "pr", kind: "progress", title: "Progress", label: "Kiểm tra liên kết của tất cả trang", value: 3, max: 10 },
+    { id: "tl", kind: "timeline", title: "Log", events: [
+      { id: "e1", at: Date.now() - 3_600_000, level: "success", label: "Sửa liên kết getting-started thành công" },
+      { id: "e2", at: Date.now() - 60_000, level: "error", label: "Lỗi kết nối", detail: "ECONNRESET khi gọi docs.example.com sau 3 lần thử lại" }] },
+    { id: "kv", kind: "key_value", title: "Facts", entries: [
+      { key: "Nhánh làm việc hiện tại của dự án", value: "feature/very-long-branch-name-for-testing-overflow" },
+      { key: "File", value: "", ref: { path: "src/very/deep/nested/directory/structure/component-file-name.ts", line: 42 } }] },
+    { id: "tb", kind: "table", title: "Results", columns: [{ id: "n", label: "Trang" }, { id: "s", label: "Trạng thái" }, { id: "v", label: "Liên kết", align: "end" }], rows: [
+      { id: "r1", status: "done", cells: { n: "getting-started-with-the-command-line-and-configuration.md", s: "liên kết ổn, xem lại sau 30 ngày", v: "44" } },
+      { id: "r2", status: "failed", cells: { n: "faq.md", s: "lỗi", v: "0" } }] },
     { id: "md", kind: "markdown", title: "Notes", text: "Một đoạn **ghi chú** dài để xem markdown xuống dòng thế nào trong panel hẹp, kèm `inline code` và [một link](https://example.com).\n\n- mục một\n- mục hai rất dài để xem cách xuống dòng của danh sách trong panel" },
-    { id: "tl", kind: "timeline", title: "Log", events: [{ id: "e1", at: Date.now() - 3600000, level: "success", label: LONG }, { id: "e2", at: Date.now() - 60000, level: "error", label: "Lỗi kết nối", detail: "ECONNRESET khi gọi docs.example.com sau 3 lần thử lại" }] },
     { id: "fm", kind: "form", title: "Question", fields: [{ id: "q", kind: "single_select", label: "Chọn cách xử lý liên kết hỏng", options: [{ id: "a", label: "Thử lại" }, { id: "b", label: "Bỏ qua" }] }, { id: "t", kind: "text", label: "Ghi chú", max_bytes: 400 }] },
     { id: "un", kind: "hologram", title: "Future", fallback: "Shown as plain text" },
   ],
@@ -57,7 +67,7 @@ export const stressScenario = {
     call("b2", "bash", FAILING), done("ok"),
     call("b3", "bash", BACKGROUND), done("ok"),
     call("g1", "gadget", {}), done("ok"),
-    call("a1", "ask_user", { question: "Bạn muốn xử lý 3 liên kết hỏng thế nào? Đây là câu hỏi dài để xem cách xuống dòng.", options: [{ label: "Sửa tất cả" }, { label: "Bỏ qua và báo cáo" }] }), done("ok"),
+    call("a1", "ask_user", { question: "Bạn muốn xử lý 3 liên kết hỏng thế nào?", options: [{ label: "Sửa tất cả" }, { label: "Bỏ qua và báo cáo" }] }), done("ok"),
   ],
 };
 

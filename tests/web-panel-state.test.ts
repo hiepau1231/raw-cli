@@ -235,9 +235,9 @@ test("step durations need both timestamps (zero counts) and relative times read 
   assert.equal(formatDuration(3900000), "1h 5m"); assert.equal(formatDuration(3600000), "1h");
   const now = 10_000_000;
   assert.equal(relativeTime(now - 10_000, now), "just now");
-  assert.equal(relativeTime(now - 5 * 60_000, now), "5m ago");
-  assert.equal(relativeTime(now - 3 * 3_600_000, now), "3h ago");
-  assert.equal(relativeTime(now - 2 * 86_400_000, now), "2d ago");
+  assert.equal(relativeTime(now - 5 * 60_000, now), "5 min ago");
+  assert.equal(relativeTime(now - 3 * 3_600_000, now), "3 h ago");
+  assert.equal(relativeTime(now - 2 * 86_400_000, now), "2 d ago");
 });
 
 test("durable question frames retain terminal states, ignore older revisions and reconcile from snapshots",async()=>{

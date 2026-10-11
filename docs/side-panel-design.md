@@ -104,10 +104,11 @@ One card per command ([commands.png](design/side-panel/commands.png)): running c
 
 ([steps.png](design/side-panel/steps.png), [kvtable.png](design/side-panel/kvtable.png))
 
-- **Steps.** A vertical stepper with a connecting line, the glyph on the first line, the current step bold with its detail and `aria-current="step"`, the duration muted on the right.
-- **Progress.** Label (ellipsis and `title`) and `value / max` on one line, a 6 px bar; indeterminate bars animate unless reduced motion is set.
-- **Timeline.** Newest first, a coloured level dot (with the level as hidden text), relative time above the label, detail below.
-- **Key/value.** The muted key above the value; values wrap at word boundaries; a ref is a file chip `name:line` with the full path in `title`, inserting `@path`.
+- **Block titles.** An 11 px uppercase group label; steps add how many are finished (done or skipped) of all (`Steps · 1 of 3`), a table its row count (`Results · 2 rows`).
+- **Steps.** A vertical stepper with a connecting line, the glyph on the first line, the current step at weight 550 with its detail and `aria-current="step"`, the duration muted on the right: how long a finished step took, or how long the running step has run (refreshed every 15 s).
+- **Progress.** Label (ellipsis and `title`) and `value / max` on one line, a 4 px bar; indeterminate bars animate unless reduced motion is set.
+- **Timeline.** Newest first, a coloured level dot (with the level as hidden text), relative time ("1 min ago", "1 h ago") above the label, detail below.
+- **Key/value.** The muted key above the value; values wrap at word boundaries; a ref is a file chip `name:line` (the full path is its accessible name and in `title`) inserting `@path`, followed by its folder cut to one line. Values use the text face: the contract has no hint that a value is code, so the mockup's monospace branch name is not reproduced.
 - **Table.** Narrower than 420 px (always in the side panel, whose maximum width is 360 px), each row is a card: status glyph, the first column as title, the others as `Label: value`, ref chip, actions. From 420 px (inline chat views) a compact table with single-line cells, ellipsis and `title`. Never wider than its container.
 - **Markdown.** 13 px prose; code blocks scroll inside.
 - Unknown kinds keep their fallback text.
@@ -116,13 +117,14 @@ One card per command ([commands.png](design/side-panel/commands.png)): running c
 
 ([question.png](design/side-panel/question.png))
 
-- Single-select options as radio cards, multi-select as checkbox cards, **Other…** as an inline text field when allowed, text fields full width.
-- **Skip** (cancel) secondary and **Send answer** primary; a status chip "Waiting for you", "Answered" or "Cancelled".
-- Byte limits appear only as a validation error. Submission, idempotency, disabled states and acknowledgements are unchanged.
+- A lone untitled form (an `ask_user` question) leads with its status chip and the question at 14 px, not the document title.
+- Single-select options as radio cards, multi-select as checkbox cards. When the choice has a paired `<id>_other` text field (`ask_user` with `allow_other`), an **Other…** card opens that field and focuses it; for a single choice it replaces the chosen option, and closing it clears its text. Other text fields are full width.
+- The cancel action first as a secondary button (`ask_user` labels it **Skip**), then the submit action (**Send answer**) as the primary button; a status chip "Waiting for you", "Answered", "Cancelled", "Expired" or "Interrupted".
+- Byte limits appear only as a validation error ("Other is too long: at most 65,536 bytes"), checked before sending. Submission, idempotency, disabled states and acknowledgements are unchanged.
 - Inline chat views use the same renderers at chat width.
 
 ## 10. Verification
 
 - A stress session (`tests/dashboard-ui/side-panel-stress.ts`) with long Vietnamese todo items, deep paths, failing and streaming commands, a background job, a plugin panel with every block kind and a question.
 - Geometry specs at 320 px and 360 px, light and dark, asserting the measured container width: no horizontal overflow, glyphs on the first text line, truncated text with its full value in `title` or the accessible name.
-- A gallery (`tests/dashboard-ui/capture-side-panel.ts`) writes one image per tab to `docs/dashboard/side-panel-*.png`; each is compared with its mockup by eye in review. These are not pixel assertions.
+- A gallery (`tests/dashboard-ui/capture-side-panel.ts`) writes one image per tab, in dark and light, plus the pending question as the chat shows it, to `docs/dashboard/side-panel-*.png`; each is compared with its mockup by eye in review. These are not pixel assertions.

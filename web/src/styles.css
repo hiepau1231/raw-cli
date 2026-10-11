@@ -3486,6 +3486,10 @@ code.tool-summary {
   flex-direction: column;
   overflow: hidden;
   padding: 0;
+}
+/* The side panel's tokens; an inline tool view in the chat uses the same chips and cards. */
+.inspector,
+.inline-tool-view {
   --sp-card: var(--canvas);
   --sp-tint-accent: var(--accent-soft);
   --sp-tint-success: color-mix(in srgb, var(--success) 14%, transparent);
@@ -3498,6 +3502,14 @@ code.tool-summary {
 :root[data-theme="dark"] .inspector {
   /* The mockups' dark palette: the canvas surface, solid status tints and their plain colours as text. */
   background: var(--canvas);
+  --sp-card: #141020;
+  --sp-tint-success: #10261c;
+  --sp-tint-warning: #2a2110;
+  --sp-tint-error: #2a0f1a;
+  --sp-warning-text: var(--warning);
+  --sp-success-text: var(--success);
+}
+:root[data-theme="dark"] .inline-tool-view {
   --sp-card: #141020;
   --sp-tint-success: #10261c;
   --sp-tint-warning: #2a2110;
@@ -3876,6 +3888,21 @@ button.sp-card:hover:not(:disabled) {
   font-size: var(--panel-font-sm);
   color: var(--muted);
 }
+/* A block's label is a group heading (steps.png): 11 px, uppercase, spaced; the block's content follows 8 px below. */
+.panel-block > .panel-block-header h4 {
+  margin: 0;
+  padding: 6px 2px 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.panel-block > .panel-block-header + * {
+  margin-top: 8px;
+}
+.panel-block + .panel-block {
+  margin-top: 8px;
+}
 .panel-summary {
   margin: var(--space-1) 0;
 }
@@ -3900,6 +3927,16 @@ button.sp-card:hover:not(:disabled) {
 .panel-fallback {
   white-space: pre-wrap;
   color: var(--muted);
+}
+.panel-markdown {
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+/* A link inside text is underlined: its colour alone is not 3:1 against the text around it. */
+.panel-markdown a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .panel-row {
   display: flex;
@@ -3971,21 +4008,45 @@ button.sp-card:hover:not(:disabled) {
   font-size: var(--panel-font-sm);
   line-height: 18px;
 }
+/* A file reference is a chip (kvtable.png): file icon, name:line; the whole path is in its title. */
 .panel-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
   min-height: 0;
-  padding: 0;
+  padding: 1px 7px;
   border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--accent-text);
+  border-radius: 999px;
+  background: var(--panel-hover);
+  color: var(--muted);
   font: inherit;
   font-family: var(--font-mono);
-  font-size: var(--panel-font-md);
-  line-height: inherit;
-  text-decoration: underline;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
+  vertical-align: middle;
+}
+.panel-ref svg {
+  flex: none;
+}
+.panel-ref-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.panel-ref:hover {
+  color: var(--text);
+}
+.panel-ref-dir {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 11px;
   overflow-wrap: anywhere;
-  text-align: left;
 }
 /* Todo (docs/side-panel-design.md §5): count and bar, then Now, Next and one Completed row. */
 .todo {
@@ -4336,31 +4397,226 @@ button.panel-file {
 .panel-file-diff .diff-line {
   padding: 0 8px;
 }
+/* Plugin blocks (docs/side-panel-design.md §8). Steps: glyphs joined by a line, the time each took at the right. */
+/* The mockups' type: 13 px at line-height 1.45, entries 8 px apart (their body's gap). */
+.panel-block[data-kind="steps"],
+.panel-block[data-kind="timeline"],
+.panel-block[data-kind="progress"],
+.panel-block[data-kind="key_value"],
+.panel-block[data-kind="table"] {
+  line-height: 1.45;
+}
+ol.panel-steps,
+ol.panel-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.panel-steps li.panel-step {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  column-gap: 9px;
+  align-items: start;
+  position: relative;
+  min-height: 0;
+  padding: 0 0 10px;
+  line-height: 1.45;
+}
+.panel-step-line {
+  position: absolute;
+  left: 8px;
+  top: 20px;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+.panel-step .panel-status,
+.panel-step .panel-glyph-button {
+  padding-top: 0;
+  margin-top: 1px;
+}
+.panel-step-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.panel-step[aria-current="step"] .panel-step-label {
+  font-weight: 550;
+}
+.panel-step-detail,
+.panel-step-time,
+.panel-event time,
+.panel-event-detail,
+.panel-progress-value,
+.panel-table-card-cells {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.panel-step-time,
+.panel-progress-value {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Progress: the label and value / max on one line over a thin bar. */
 .panel-progress-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.panel-progress-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.panel-progress-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel-progress-value {
+  margin-left: auto;
+}
+.panel-progress-bar.indeterminate > i {
+  width: 30%;
+  animation: panel-indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes panel-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+/* Timeline: newest first, a dot in the level's colour, the time above the label. */
+.panel-timeline li.panel-event {
   display: grid;
-  gap: var(--space-1);
+  grid-template-columns: 12px minmax(0, 1fr);
+  column-gap: 10px;
+  position: relative;
+  min-height: 0;
+  padding: 0 0 10px;
+  line-height: 1.45;
 }
-.panel-progress-block progress {
-  width: 100%;
-  accent-color: var(--accent);
+.panel-event-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--muted);
 }
+.panel-event.level-info .panel-event-dot {
+  background: var(--accent);
+}
+.panel-event.level-success .panel-event-dot {
+  background: var(--success);
+}
+.panel-event.level-warning .panel-event-dot {
+  background: var(--warning);
+}
+.panel-event.level-error .panel-event-dot {
+  background: var(--error);
+}
+.panel-event-line {
+  position: absolute;
+  left: 3.5px;
+  top: 16px;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+.panel-event-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Key/value: stacked, the key muted above its value. */
 .panel-kv {
-  display: grid;
-  gap: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   margin: 0;
 }
-.panel-kv div {
-  display: grid;
-  grid-template-columns: minmax(70px, 30%) 1fr;
-  gap: var(--space-2);
-  min-height: var(--panel-row-height);
-  align-items: center;
+.panel-kv > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 .panel-kv dt {
   color: var(--muted);
+  font-size: 11px;
 }
 .panel-kv dd {
   margin: 0;
+  font-size: 12.5px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+/* The chip keeps its whole name; the folder after it is cut to one line (its title has it all). */
+.panel-kv-ref {
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+}
+.panel-kv-ref .panel-ref {
+  flex: none;
+  max-width: 100%;
+}
+.panel-kv-ref .panel-ref-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel-kv-value + .panel-kv-ref {
+  margin-left: 6px;
+}
+/* Table: a list of cards when narrow (kvtable.png), a compact table from 420 px. */
+.panel-table-box {
+  min-width: 0;
+}
+.panel-table-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.panel-table-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--sp-card, var(--canvas));
+}
+.panel-table-card-head {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.panel-table-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
+}
+.panel-table-card-cells,
+.panel-table-card-ref {
+  padding-left: 22px;
   overflow-wrap: anywhere;
 }
 .panel-table-wrap {
@@ -4368,30 +4624,28 @@ button.panel-file {
 }
 .panel-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
-  font-size: var(--panel-font-md);
+  font-size: 12.5px;
 }
-/* Table rows are 24 px like list rows. */
+.panel-table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: start;
+}
 .panel-table th,
 .panel-table td {
-  height: var(--panel-row-height);
-  padding: 0 var(--space-2);
-  line-height: 20px;
+  height: 28px;
+  padding: 0 8px;
+  line-height: 18px;
   border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.panel-timeline time {
-  color: var(--muted);
-  font-size: var(--panel-font-sm);
-  margin-right: var(--space-2);
-}
-.panel-timeline .level-error {
-  color: var(--error);
-}
-.panel-timeline .level-warning {
-  color: var(--warning);
-}
-.panel-timeline .level-success {
-  color: var(--success);
+.panel-table .panel-table-glyph {
+  width: 30px;
 }
 .panel-receipt {
   position: relative;
@@ -4485,7 +4739,7 @@ button.panel-file {
   width: 16px;
 }
 @media (prefers-reduced-motion: reduce) {
-  .panel-progress-block progress:indeterminate {
+  .panel-progress-bar.indeterminate > i {
     animation: none;
   }
 }
@@ -4528,6 +4782,9 @@ button.panel-file {
   opacity: 1;
 }
 @media (hover: none) {
+  .panel-steps li.panel-step:has(> .panel-action-menu) {
+    grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  }
   .panel-row .panel-action-menu,
   .panel-row .panel-row-action,
   .panel-table td .panel-action-menu {
@@ -4575,11 +4832,151 @@ button.panel-file {
 .panel-block-header .panel-action-menu {
   margin-left: auto;
 }
-.panel-form fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
-.panel-form-field { display: grid; gap: .35rem; margin-bottom: .75rem; }
-.panel-form-field label { display: flex; gap: .4rem; align-items: center; }
-.panel-form-field input[type=text], .panel-form-field textarea, .panel-form-field select { width: 100%; }
-.panel-form-actions, .interaction-receipt { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+/* A question (question.png): state chip, the question, option cards, then Skip and the primary Send answer. */
+.panel-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.panel-form-head {
+  display: flex;
+}
+.panel-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.panel-form-question {
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.panel-form-description {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.panel-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.panel-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 13px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.panel-option:hover:not(:has(input:disabled)) {
+  background: var(--panel-hover);
+}
+.panel-option[data-selected="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.panel-option:has(input:focus-visible) {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 1px;
+}
+.panel-option:has(input:disabled) {
+  cursor: default;
+}
+.panel-option-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.panel-option-other .panel-option-label {
+  color: var(--muted);
+}
+.panel-option input {
+  appearance: none;
+  flex: none;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+  background: transparent;
+  cursor: inherit;
+}
+.panel-option input:focus-visible {
+  outline: none;
+}
+.panel-option input[type="radio"]:checked {
+  border: 4px solid var(--accent);
+}
+.panel-option input[type="checkbox"] {
+  border-radius: 4px;
+}
+.panel-option input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 11px no-repeat;
+}
+.panel-input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 18px;
+}
+.panel-form-clear {
+  align-self: flex-start;
+}
+textarea.panel-input {
+  resize: vertical;
+}
+.panel-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.panel-button {
+  min-height: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.panel-button.primary {
+  padding: 6px 12px;
+  border-color: var(--text);
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--canvas);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.panel-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.interaction-receipt { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
 .interaction-receipt { margin: .5rem 0; }
 .interaction-receipt dl { flex-basis: 100%; margin: 0; }
 .interaction-receipt dd { white-space: pre-wrap; overflow-wrap: anywhere; }
