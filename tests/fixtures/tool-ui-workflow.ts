@@ -11,7 +11,7 @@ export const workflowCall = (id: string, name: string, args: unknown) => ({ fram
 export const workflowScenario = {
   agent: { request_timeout_ms: 60000, tools: { use: ["builtin/ask_user", "builtin/process", "builtin/apply_patch", "builtin/todo", "local/diagram"] } },
   responses: [
-    workflowCall("ask", "ask_user", { questions: [{ id: "choice", label: "Workflow answer", kind: "text" }] }),
+    workflowCall("ask", "ask_user", { question: "Workflow answer" }),
     workflowCall("todo-before", "todo", { todos: [{ id: "workflow", content: "Finish integrated workflow", status: "in_progress" }] }),
     workflowCall("start", "process", { action: "start", command: "printf 'workflow ready\\n'; sleep 60", label: "Workflow job" }),
     { frames: [openAiFrame({ content: "First turn complete." }, "stop"), openAiDone] },

@@ -40,7 +40,7 @@ import { createAcpClient } from "../src/acp/client.js";
 import { dashboardFixture } from "./fixtures/dashboard.js";
 import { openAiDone, openAiFrame } from "./fixtures/mock-provider.js";
 const askCall = { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "ask", type: "function", function: {
-  name: "ask_user", arguments: JSON.stringify({ questions: [{ id: "q", label: "Your answer", kind: "text" }] }),
+  name: "ask_user", arguments: JSON.stringify({ question: "Your answer" }),
 } }] }, "tool_calls"), openAiDone] };
 const done = { frames: [openAiFrame({ content: "received" }, "stop"), openAiDone] };
 for (const mode of ["answered", "unavailable", "malformed"] as const) test(`ACP Ask ${mode} uses negotiated interaction capability independently of permissions`, async () => {
@@ -51,7 +51,7 @@ for (const mode of ["answered", "unavailable", "malformed"] as const) test(`ACP 
     onPermission: () => { permissions++; return { outcome: { outcome: "selected", optionId: "allow" } }; },
     ...(mode === "unavailable" ? {} : { onInteraction: async (request: InteractionRequest) => {
       questions++; return { requestId: request.identity.requestId, expectedRevision: request.revision, idempotencyKey: randomUUID(),
-        response: "submit" as const, answers: mode === "malformed" ? { alien: "bad" } : { q: "雪\n\"answer\"" } };
+        response: "submit" as const, answers: mode === "malformed" ? { alien: "bad" } : { answer: "雪\n\"answer\"" } };
     } }),
   });
   try {
@@ -60,8 +60,8 @@ for (const mode of ["answered", "unavailable", "malformed"] as const) test(`ACP 
     assert.equal(permissions, 0); assert.equal(questions, mode === "unavailable" ? 0 : 1);
     const body = fixture.provider.requests[1]!.body as { messages: Array<{ role: string; content: string }> };
     const result = body.messages.find(message => message.role === "tool")!.content;
-    if (mode === "answered") assert.deepEqual(JSON.parse(result), { status: "answered", answers: { q: "雪\n\"answer\"" } });
-    else if (mode === "malformed") assert.deepEqual(JSON.parse(result), { status: "cancelled" });
+    if (mode === "answered") assert.equal(result, "User answered: 雪\n\"answer\"");
+    else if (mode === "malformed") assert.equal(result, "User skipped the question");
     else assert.match(result, /interaction_unavailable/);
   } finally { await parent.close(); await fixture.close(); }
 });
@@ -97,7 +97,7 @@ test("selected Ask works on dashboard while its operation remains busy", async (
     }
     assert.ok(pending);
     await fixture.json(`/sessions/${session.id}/interactions/${pending.identity.requestId}/responses`, "POST", {
-      requestId: pending.identity.requestId, expectedRevision: pending.revision, idempotencyKey: randomUUID(), response: "submit", answers: { q: "dashboard answer" },
+      requestId: pending.identity.requestId, expectedRevision: pending.revision, idempotencyKey: randomUUID(), response: "submit", answers: { answer: "dashboard answer" },
     });
     assert.equal((await fixture.wait(op.id)).state, "completed");
     assert.match(JSON.stringify(fixture.provider.requests[1]!.body), /dashboard answer/);
@@ -116,13 +116,13 @@ for (const mode of ["answered", "cancelled", "headless"] as const) test(`CLI sel
     if (mode !== "headless") {
       for (let i = 0; i < 500 && !output.includes("Maximum"); i++) await new Promise(resolve => setTimeout(resolve, 20));
       assert.match(output, /Maximum/);
-      child.stdin.write(mode === "cancelled" ? "/cancel\n" : "terminal answer\n");
+      child.stdin.write(mode === "cancelled" ? "/cancel\n" : "terminal answer\n.\n");
     } else child.stdin.end();
     assert.equal(await exited, 0, output);
     const body = fixture.provider.requests[1]!.body as { messages: Array<{ role: string; content: string }> };
     const result = body.messages.find(message => message.role === "tool")!.content;
-    if (mode === "answered") assert.deepEqual(JSON.parse(result), { status: "answered", answers: { q: "terminal answer" } });
-    else if (mode === "cancelled") assert.deepEqual(JSON.parse(result), { status: "cancelled" });
+    if (mode === "answered") assert.equal(result, "User answered: terminal answer");
+    else if (mode === "cancelled") assert.equal(result, "User skipped the question");
     else assert.match(result, /interaction_unavailable/);
   } finally { clearTimeout(timeout); child.kill("SIGTERM"); await exited; await fixture.close(); }
 });

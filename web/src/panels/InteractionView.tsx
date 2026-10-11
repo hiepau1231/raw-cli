@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
 import type { InteractionRequest, InteractionRequestView } from "../../../src/interactions/contract.js";
-import type { FormAnswers } from "../../../src/panels/contract.js";
+import type { FormAnswers, FormField } from "../../../src/panels/contract.js";
 import type { PanelStackItem } from "../../../src/panels/stack.js";
 import { api, errorText } from "../api.js";
 import { ToolView } from "./ToolView.js";
 import type { ActionHost } from "./actions.js";
 import type { InsertRef } from "./status.js";
+
+/** An answer as the user saw it: option labels for choices, the text otherwise. */
+function answerLabels(field: FormField, value: FormAnswers[string] | undefined): string {
+  const label = (id: string) => "options" in field ? field.options.find(option => option.id === id)?.label ?? id : id;
+  return Array.isArray(value) ? value.map(label).join(", ") : typeof value === "string" ? label(value) : "";
+}
 
 /** A durable question survives independently of its ordinary provisional tool view. */
 export function InteractionView({ sessionId, requestId, live, availabilityRevision, actions, onInsert, onOpenPanel }: {
@@ -30,7 +36,7 @@ export function InteractionView({ sessionId, requestId, live, availabilityRevisi
       <span>{request.declaration.title} · {request.state === "pending" ? "Waiting for your answer" : request.state}</span>
       <button type="button" onClick={() => onOpenPanel(panel)}>{request.state === "pending" ? "Open question" : "Open panel"}</button>
       {answers && <dl>{request.form.fields.filter(field => Object.hasOwn(answers, field.id)).map(field => <div key={field.id}>
-        <dt>{field.label}</dt><dd>{Array.isArray(answers[field.id]) ? (answers[field.id] as string[]).join(", ") : answers[field.id]}</dd>
+        <dt>{field.label}</dt><dd>{answerLabels(field, answers[field.id])}</dd>
       </div>)}</dl>}
     </div>;
   }

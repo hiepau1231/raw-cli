@@ -16,3 +16,6 @@ export function renameArgument(args: Record<string, unknown>, notes: string[], f
 export const integerArgument = (value: unknown): unknown => typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
 
 export const PATH_ALIASES = ["file_path", "filePath", "absolute_path"] as const;
+
+/** Bound of the ignored-argument note dispatch appends to a result; a tool that sizes its own output leaves this room. */
+export const MODEL_NOTE_BYTES = 256;

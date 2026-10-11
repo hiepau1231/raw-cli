@@ -21,13 +21,13 @@ test("persisted agents require a correctly bound interaction host before claimin
   const bound = new InteractionService({ store: same, adapter: async request => {
     callbacks++;
     assert.equal(store.getInteraction(session.id, request.identity.requestId)?.state, "pending");
-    return { requestId: request.identity.requestId, expectedRevision: request.revision, idempotencyKey: "once", response: "submit", answers: { q: "durable" } };
+    return { requestId: request.identity.requestId, expectedRevision: request.revision, idempotencyKey: "once", response: "submit", answers: { answer: "durable" } };
   } });
   const registry = new ToolRegistry();
   for (const tool of await loadBundledTools(["ask_user"])) registry.register(tool);
   let calls = 0;
   const provider = { modelConfig: { agentName: "fixture", provider: "ollama", method: "openai-chat-completions" as const, model: "fixture" }, generate: async () => ++calls === 1
-    ? { text: "", finishReason: "tool_calls" as const, toolCalls: [{ id: "ask", name: "ask_user", arguments: { questions: [{ id: "q", label: "Q", kind: "text" }] } }] }
+    ? { text: "", finishReason: "tool_calls" as const, toolCalls: [{ id: "ask", name: "ask_user", arguments: { question: "Q" } }] }
     : { text: "done", finishReason: "stop" as const, toolCalls: [] } };
   const options = { provider, registry, cwd: root, persistence: { store, sessionId: session.id, surface: "cli" as const } };
   let agent: ReturnType<typeof createAgent> | undefined;

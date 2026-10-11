@@ -252,10 +252,10 @@ test("copied standalone Ask can declare sidebar placement and use the generic in
   let calls = 0;
   const agent = createAgent({ registry, cwd: options.cwd,
     provider: { modelConfig: { agentName: "raw", provider: "ollama", method: "openai-chat-completions", model: "fixture" },
-      generate: async () => ++calls === 1 ? { text: "", finishReason: "tool_calls", toolCalls: [{ id: "fork", name: "forked_ask", arguments: { questions: [{ id: "q", label: "Q", kind: "text" }] } }] } : { text: "done", finishReason: "stop", toolCalls: [] } },
+      generate: async () => ++calls === 1 ? { text: "", finishReason: "tool_calls", toolCalls: [{ id: "fork", name: "forked_ask", arguments: { question: "Q" } }] } : { text: "done", finishReason: "stop", toolCalls: [] } },
     interactionAdapter: async request => {
       assert.equal(request.declaration.placement, "sidebar"); assert.equal(request.identity.owner, "agent/forked_ask");
-      return { requestId: request.identity.requestId, expectedRevision: request.revision, idempotencyKey: "fork-answer", response: "submit", answers: { q: "forked" } };
+      return { requestId: request.identity.requestId, expectedRevision: request.revision, idempotencyKey: "fork-answer", response: "submit", answers: { answer: "forked" } };
     },
   });
   try {

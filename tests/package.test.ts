@@ -106,13 +106,13 @@ if (tools.length !== 1 || tools[0].registration.name !== "read_file") throw new 
 import { loadToolPlugins, ToolRegistry, ProcessSupervisor } from "@tlelabs/raw";
 const registry = new ToolRegistry();
 for (const item of await loadToolPlugins({ selectedIds: ["builtin/ask_user"], configPath: "ignored.json" })) registry.register(item.registration);
-const result = await registry.dispatch("ask_user", { questions: [{id:"q",label:"Q",kind:"text"}] }, { cwd: process.cwd(), maxOutputBytes: 8192, interactions: { request: async input => {
-  if (input.panel !== "questions" || input.document.blocks[0].fields[0].id !== "q") throw new Error("bad packaged form");
-  return {status:"answered",answers:{q:"installed 雪"}};
+const result = await registry.dispatch("ask_user", { question: "Q" }, { cwd: process.cwd(), maxOutputBytes: 8192, interactions: { request: async input => {
+  if (input.panel !== "questions" || input.document.blocks[0].fields[0].id !== "answer") throw new Error("bad packaged form");
+  return {status:"answered",answers:{answer:"installed 雪"}};
 } } });
-if (result.isError || result.content[0].value.answers.q !== "installed 雪") throw new Error(JSON.stringify(result));
+if (result.isError || result.content[0].text !== "User answered: installed 雪") throw new Error(JSON.stringify(result));
 const standalone = await import("./node_modules/@tlelabs/raw/examples/tools/ask_user/index.mjs");
-const forked = await standalone.handler({questions:[{id:"fork",label:"Fork",kind:"text"}]}, {interactions:{request:async () => ({status:"cancelled"})}});
+const forked = await standalone.handler({question:"Fork"}, {interactions:{request:async () => ({status:"cancelled"})}});
 if (forked.code !== "interaction_cancelled") throw new Error("standalone fork failed");
 const processes = new ProcessSupervisor();
 try {

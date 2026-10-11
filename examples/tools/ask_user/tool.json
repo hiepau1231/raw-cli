@@ -3,66 +3,36 @@
   "id": "ask_user",
   "version": "1.0.0",
   "name": "ask_user",
-  "description": "Ask the user 1–3 structured questions and wait for validated text or stable option IDs. This gathers information and never grants tool permission. Questions support text, single/multiple selection, and an optional explicit extra free-text field. Returns exactly one JSON result with status and answers keyed by field ID. Effective byte limits reflect the actual output budget; accepted answers reach the model unchanged. Cancellation/expiry/interruption are failed terminal results. Hosts without an input adapter (including non-TTY CLI and unnegotiated ACP) fail promptly.",
+  "description": "Ask the user one question and wait for the answer. Example: {\"question\":\"Which database should the service use?\",\"options\":[\"Postgres\",\"SQLite\"]}. Without options the answer is free text; with options the user picks one (or several with multi_select) and, unless allow_other is false, may answer in their own words instead. The result is the answer as text, e.g. User answered: Postgres, or User skipped the question. To ask up to 3 related questions in one form, send questions: [{question, header, options, multiSelect}]. This gathers information and never grants tool permission. Hosts without an input adapter (non-TTY CLI, ACP without the extension) fail promptly.",
   "entry": "./index.mjs",
   "input_schema": {
     "type": "object",
     "properties": {
-      "questions": {
+      "question": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "description": "The question, in plain words."
+      },
+      "header": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "description": "Optional short label shown above the question."
+      },
+      "options": {
         "type": "array",
-        "minItems": 1,
-        "maxItems": 3,
+        "maxItems": 32,
         "items": {
-          "oneOf": [
+          "anyOf": [
             {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_.-]{1,64}$",
-                  "description": "Stable answer field ID; unique across questions and optional free-text fields."
-                },
-                "label": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 200
-                },
-                "description": {
-                  "type": "string",
-                  "maxLength": 500
-                },
-                "required": {
-                  "type": "boolean",
-                  "default": true
-                },
-                "kind": {
-                  "const": "text"
-                },
-                "multiline": {
-                  "type": "boolean"
-                },
-                "max_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 65536,
-                  "description": "Declared UTF-8 ceiling; the host publishes a smaller effective limit when needed."
-                }
-              },
-              "required": [
-                "id",
-                "label",
-                "kind"
-              ],
-              "additionalProperties": false
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
             },
             {
               "type": "object",
               "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_.-]{1,64}$",
-                  "description": "Stable answer field ID; unique across questions and optional free-text fields."
-                },
                 "label": {
                   "type": "string",
                   "minLength": 1,
@@ -71,202 +41,97 @@
                 "description": {
                   "type": "string",
                   "maxLength": 500
-                },
-                "required": {
-                  "type": "boolean",
-                  "default": true
-                },
-                "kind": {
-                  "const": "single_select"
-                },
-                "options": {
-                  "type": "array",
-                  "minItems": 1,
-                  "maxItems": 32,
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9_.-]{1,64}$",
-                        "description": "Stable option ID; unique within this question."
-                      },
-                      "label": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 200
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "label"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "free_text": {
-                  "type": "object",
-                  "description": "Optional extra text answer with its own explicit unique field ID.",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "pattern": "^[A-Za-z0-9_.-]{1,64}$",
-                      "description": "Stable answer field ID; unique across questions and optional free-text fields."
-                    },
-                    "label": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 200
-                    },
-                    "description": {
-                      "type": "string",
-                      "maxLength": 500
-                    },
-                    "multiline": {
-                      "type": "boolean"
-                    },
-                    "max_bytes": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 65536,
-                      "description": "Declared UTF-8 ceiling; the host publishes a smaller effective limit when needed."
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "label"
-                  ],
-                  "additionalProperties": false
                 }
               },
               "required": [
-                "id",
-                "label",
-                "kind",
-                "options"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_.-]{1,64}$",
-                  "description": "Stable answer field ID; unique across questions and optional free-text fields."
-                },
-                "label": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 200
-                },
-                "description": {
-                  "type": "string",
-                  "maxLength": 500
-                },
-                "required": {
-                  "type": "boolean",
-                  "default": true
-                },
-                "kind": {
-                  "const": "multi_select"
-                },
-                "options": {
-                  "type": "array",
-                  "minItems": 1,
-                  "maxItems": 32,
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9_.-]{1,64}$",
-                        "description": "Stable option ID; unique within this question."
-                      },
-                      "label": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 200
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "label"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "free_text": {
-                  "type": "object",
-                  "description": "Optional extra text answer with its own explicit unique field ID.",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "pattern": "^[A-Za-z0-9_.-]{1,64}$",
-                      "description": "Stable answer field ID; unique across questions and optional free-text fields."
-                    },
-                    "label": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 200
-                    },
-                    "description": {
-                      "type": "string",
-                      "maxLength": 500
-                    },
-                    "multiline": {
-                      "type": "boolean"
-                    },
-                    "max_bytes": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 65536,
-                      "description": "Declared UTF-8 ceiling; the host publishes a smaller effective limit when needed."
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "label"
-                  ],
-                  "additionalProperties": false
-                },
-                "min_selected": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 32
-                },
-                "max_selected": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 32
-                }
-              },
-              "required": [
-                "id",
-                "label",
-                "kind",
-                "options"
+                "label"
               ],
               "additionalProperties": false
             }
           ]
+        },
+        "description": "Choices as strings or {label, description}. Omit for a free-text answer."
+      },
+      "multi_select": {
+        "type": "boolean",
+        "default": false,
+        "description": "Let the user pick several options."
+      },
+      "allow_other": {
+        "type": "boolean",
+        "default": true,
+        "description": "With options: also let the user answer in their own words."
+      },
+      "questions": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 3,
+        "description": "Several questions in one form, instead of question.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "question": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "description": "The question, in plain words."
+            },
+            "header": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "Optional short label shown above the question."
+            },
+            "options": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "description": {
+                        "type": "string",
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "label"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "description": "Choices as strings or {label, description}. Omit for a free-text answer."
+            },
+            "multi_select": {
+              "type": "boolean",
+              "default": false,
+              "description": "Let the user pick several options."
+            },
+            "allow_other": {
+              "type": "boolean",
+              "default": true,
+              "description": "With options: also let the user answer in their own words."
+            }
+          },
+          "required": [
+            "question"
+          ],
+          "additionalProperties": false
         }
-      },
-      "title": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 80
-      },
-      "timeout_ms": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 86400000,
-        "description": "Whole-request deadline, default 30 minutes."
       }
     },
-    "required": [
-      "questions"
-    ],
     "additionalProperties": false
   },
   "panels": [

@@ -57,10 +57,10 @@ async function tools(answers: string[] = []) {
     handler: async (args) => ({ isError: false, content: [{ type: "text", text: `${String(args.out ?? "")}${"r".repeat(Number(args.pad ?? 0))}` }] }) });
   for (const tool of await loadBundledTools(["ask_user"])) registry.register(tool);
   const interactionAdapter: InteractionAdapter = async (request) => ({ requestId: request.identity.requestId, expectedRevision: request.revision,
-    idempotencyKey: randomUUID(), response: "submit", answers: { q: answers.shift() ?? "" } });
+    idempotencyKey: randomUUID(), response: "submit", answers: { answer: answers.shift() ?? "" } });
   return { registry, interactionAdapter };
 }
-const ask = (id: string): [string, string, Record<string, unknown>] => [id, "ask_user", { questions: [{ id: "q", label: "Q", kind: "text" }] }];
+const ask = (id: string): [string, string, Record<string, unknown>] => [id, "ask_user", { question: "Q" }];
 
 function persisted(store: SessionStore, id: string, root: string, provider: ProviderAdapter, extra: Partial<AgentOptions> = {}) {
   return createAgent({ cwd: root, provider, system: "tiny", autoApprove: true, ...extra, persistence: { store, sessionId: id, surface: "cli" } });

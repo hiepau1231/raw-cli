@@ -3,12 +3,47 @@ import { derivedProgress, statusGlyph, truncateBytes } from "../../../panels/ren
 import type { ToolContext } from "../../primitives.js";
 import { errorResult } from "../../results.js";
 import type { ToolHandlerResult } from "../../types.js";
+import type { NormalizedArguments } from "../../registry.js";
+import { renameArgument } from "../../normalize.js";
 
 type Status = Extract<PanelItemStatus, "pending" | "in_progress" | "done" | "blocked" | "skipped">;
 interface Todo { id: string; content: string; status: Status; parent?: string; note?: string }
 interface Input { id?: string; content?: string; status?: Status; parent?: string; note?: string; remove?: true }
 
 const MAX_ITEMS = 100;
+
+const ITEM_KEYS = ["id", "content", "status", "parent", "note", "remove"];
+const STATUS_ALIASES: Record<string, Status> = { completed: "done", complete: "done", cancelled: "skipped", canceled: "skipped",
+  "in-progress": "in_progress", inprogress: "in_progress" };
+
+/**
+ * The item shapes other harnesses train (docs/tool-ux-design.md §4.2): statuses such as `completed`, item text as
+ * `description`, `title` or `step`, and numeric ids. Other item fields, such as TodoWrite's `activeForm`, are dropped.
+ */
+export function normalizeArguments(input: Record<string, unknown>): NormalizedArguments {
+  const notes = new Set<string>();
+  if (!Array.isArray(input.todos)) return { args: input };
+  const todos = input.todos.map((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const item = { ...(value as Record<string, unknown>) };
+    const local: string[] = [];
+    for (const alias of ["description", "title", "step"]) {
+      if (!Object.hasOwn(item, alias)) continue;
+      if (item.content === undefined) renameArgument(item, local, alias, "content");
+      else { delete item[alias]; local.push(`ignored ${alias}: content is set`); }
+    }
+    if (typeof item.status === "string" && Object.hasOwn(STATUS_ALIASES, item.status)) {
+      local.push(`read status ${item.status} as ${STATUS_ALIASES[item.status]}`);
+      item.status = STATUS_ALIASES[item.status];
+    }
+    for (const key of ["id", "parent"]) if (typeof item[key] === "number") { item[key] = String(item[key]); local.push(`read numeric ${key} as text`); }
+    // Fields such as TodoWrite's activeForm have no place here and are dropped instead of failing the call.
+    for (const key of Object.keys(item)) if (!ITEM_KEYS.includes(key)) { delete item[key]; local.push(`ignored ${key}`); }
+    for (const note of local) notes.add(note);
+    return item;
+  });
+  return { args: { ...input, todos }, notes: [...notes] };
+}
 const finished = (status: Status) => status === "done" || status === "skipped";
 const invalid = (message: string) => errorResult("invalid_todo", message);
 

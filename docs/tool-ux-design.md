@@ -2,7 +2,7 @@
 
 This design makes Raw's built-in tools easy for any model to call. It also makes every tool readable in the CLI and the dashboard, and brings the dashboard side panel up to the standard of common editor UIs.
 
-Status: proposed 2026-10-11. Phases 1 (normalization, host data, value-safe JSON capping), 2 (single-command `bash` with background delegation, flat `process`) and 3 (single-file `read_file`/`write_file`, `edit_file`, opt-in `apply_patch`, one shared files-changed panel) implemented; phases 4–9 not yet. No backward compatibility: the user decided (2026-10-11) that the old argument shapes, rule paths and panel owner are replaced, not kept. Update this file whenever a decision changes. User-facing behavior moves to `tools.md`, `dashboard.md`, `terminal-output.md` and `panels-design.md` as each phase lands.
+Status: proposed 2026-10-11. Phases 1 (normalization, host data, value-safe JSON capping), 2 (single-command `bash` with background delegation, flat `process`) and 3 (single-file `read_file`/`write_file`, `edit_file`, opt-in `apply_patch`, one shared files-changed panel) and 4 (single-question `ask_user` with the `questions[]` alias, `todo` aliases) implemented; phases 5–9 not yet. No backward compatibility: the user decided (2026-10-11) that the old argument shapes, rule paths and panel owner are replaced, not kept. Update this file whenever a decision changes. User-facing behavior moves to `tools.md`, `dashboard.md`, `terminal-output.md` and `panels-design.md` as each phase lands.
 
 ## Contents
 
@@ -234,7 +234,9 @@ No harness uses a batch array of commands or files. Models run several commands 
 ```
 
 - It asks one question per call.
-- `options` is optional. It accepts strings or `{label, description}` objects. Without options the question is free text.
+- `options` is optional. It accepts strings or `{label, description}` objects; a description is shown after its label. Without options the question is free text.
+- `allow_other` defaults to true: the form adds an optional "Other" text field and the choice becomes optional, so the user can answer in their own words or skip.
+- The schema lists `questions` next to `question`, because dispatch drops top-level keys the schema does not name.
 - The host builds the existing form document from these arguments. The panel, interaction and ledger paths stay unchanged.
 - **Result:** the answer as text, e.g. `User answered: Postgres`, or the free text, or `User skipped the question`.
 - **Aliases:**

@@ -70,8 +70,57 @@ function errorResult(code, message) {
   return { isError: true, code, content: [{ type: "text", text: message }] };
 }
 
+// src/tools/normalize.ts
+function renameArgument(args, notes, from, to, convert = (value) => value) {
+  if (!Object.hasOwn(args, from) || args[to] !== void 0) return;
+  args[to] = convert(args[from]);
+  delete args[from];
+  notes.push(`read ${from} as ${to}`);
+}
+
 // src/tools/bundled/todo/index.ts
 var MAX_ITEMS = 100;
+var ITEM_KEYS = ["id", "content", "status", "parent", "note", "remove"];
+var STATUS_ALIASES = {
+  completed: "done",
+  complete: "done",
+  cancelled: "skipped",
+  canceled: "skipped",
+  "in-progress": "in_progress",
+  inprogress: "in_progress"
+};
+function normalizeArguments(input) {
+  const notes = /* @__PURE__ */ new Set();
+  if (!Array.isArray(input.todos)) return { args: input };
+  const todos = input.todos.map((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const item = { ...value };
+    const local = [];
+    for (const alias of ["description", "title", "step"]) {
+      if (!Object.hasOwn(item, alias)) continue;
+      if (item.content === void 0) renameArgument(item, local, alias, "content");
+      else {
+        delete item[alias];
+        local.push(`ignored ${alias}: content is set`);
+      }
+    }
+    if (typeof item.status === "string" && Object.hasOwn(STATUS_ALIASES, item.status)) {
+      local.push(`read status ${item.status} as ${STATUS_ALIASES[item.status]}`);
+      item.status = STATUS_ALIASES[item.status];
+    }
+    for (const key of ["id", "parent"]) if (typeof item[key] === "number") {
+      item[key] = String(item[key]);
+      local.push(`read numeric ${key} as text`);
+    }
+    for (const key of Object.keys(item)) if (!ITEM_KEYS.includes(key)) {
+      delete item[key];
+      local.push(`ignored ${key}`);
+    }
+    for (const note of local) notes.add(note);
+    return item;
+  });
+  return { args: { ...input, todos }, notes: [...notes] };
+}
 var finished = (status) => status === "done" || status === "skipped";
 var invalid = (message) => errorResult("invalid_todo", message);
 function validateArgs(args) {
@@ -237,5 +286,6 @@ async function handler(args, context) {
 }
 export {
   handler,
+  normalizeArguments,
   validateArgs
 };

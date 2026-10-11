@@ -131,9 +131,9 @@ function block(value, path) {
       for (const [index, raw] of array(item.fields, [...path, "fields"], 8, 1).entries()) {
         const at = [...path, "fields", index];
         const field = object(raw, at);
-        const fieldId = id(field.id, ITEM_ID, [...at, "id"]);
-        if (ids.has(fieldId)) invalid([...at, "id"], "duplicate field id");
-        ids.add(fieldId);
+        const fieldId2 = id(field.id, ITEM_ID, [...at, "id"]);
+        if (ids.has(fieldId2)) invalid([...at, "id"], "duplicate field id");
+        ids.add(fieldId2);
         text(field.label, [...at, "label"], 200, 1);
         if (field.description !== void 0) text(field.description, [...at, "description"], 500);
         if (field.required !== void 0 && typeof field.required !== "boolean") invalid([...at, "required"], "must be boolean");
@@ -322,13 +322,13 @@ function validateDocument(value) {
     if (seen.has(checked.id)) invalid(["blocks", index, "id"], "duplicate block id");
     seen.add(checked.id);
   }
-  let size;
+  let size2;
   try {
-    size = Buffer.byteLength(JSON.stringify(doc));
+    size2 = Buffer.byteLength(JSON.stringify(doc));
   } catch {
     invalid([], "is not serializable");
   }
-  if (size > PANEL_LIMITS.documentBytes) throw new PanelError("panel_too_large", `document is ${size} bytes; the limit is ${PANEL_LIMITS.documentBytes}`);
+  if (size2 > PANEL_LIMITS.documentBytes) throw new PanelError("panel_too_large", `document is ${size2} bytes; the limit is ${PANEL_LIMITS.documentBytes}`);
   return doc;
 }
 
@@ -353,47 +353,199 @@ function errorResult(code, message) {
   return { isError: true, code, content: [{ type: "text", text: message }] };
 }
 
+// src/tools/normalize.ts
+var MODEL_NOTE_BYTES = 256;
+
 // src/tools/bundled/ask_user/index.ts
-function documentFor(args) {
-  const fields = [];
-  for (const question of args.questions) {
-    const { free_text, ...field } = question;
-    fields.push({ ...field, required: field.required ?? true });
-    if (free_text) {
-      if (field.kind === "text") throw new Error("free_text is only supported on choice questions");
-      fields.push({ ...free_text, kind: "text", required: false });
-    }
+var example = { question: "Which database should the service use?", options: ["Postgres", "SQLite"] };
+var OLD = 'ask_user asks a question in plain words: {"question":"Which database should the service use?","options":["Postgres","SQLite"]}; several questions use "questions":[{"question":"\u2026","header":"\u2026","options":[\u2026],"multiSelect":false}]';
+var QUESTION_KEYS = ["question", "header", "options", "multi_select", "allow_other"];
+var OPTION_KEYS = ["label", "description"];
+function alias(item, notes, from, to) {
+  if (!Object.hasOwn(item, from)) return;
+  if (item[to] === void 0) {
+    item[to] = item[from];
+    notes.push(`read ${from} as ${to}`);
+  } else notes.push(`ignored ${from}: ${to} is set`);
+  delete item[from];
+}
+function normalizeQuestion(question, notes, keep) {
+  const next = { ...question };
+  alias(next, notes, "multiSelect", "multi_select");
+  alias(next, notes, "allowOther", "allow_other");
+  for (const key of Object.keys(next)) if (!keep.includes(key)) {
+    delete next[key];
+    notes.push(`ignored ${key}`);
   }
-  return { ...args.title !== void 0 ? { title: args.title } : {}, blocks: [{ id: "form", kind: "form", fields }] };
+  if (Array.isArray(next.options)) next.options = next.options.map((option) => {
+    if (!option || typeof option !== "object" || Array.isArray(option)) return option;
+    const kept = Object.fromEntries(Object.entries(option).filter(([key]) => OPTION_KEYS.includes(key)));
+    for (const key of Object.keys(option)) if (!OPTION_KEYS.includes(key)) notes.push(`ignored option ${key}`);
+    return kept;
+  });
+  return next;
+}
+function normalizeArguments(input) {
+  const notes = [];
+  const questions = input.questions;
+  if (Array.isArray(questions) && questions.some((item) => item && typeof item === "object" && ("kind" in item || "label" in item && !("question" in item)))) {
+    return { args: input, rejected: OLD };
+  }
+  const args = normalizeQuestion(input, notes, [...QUESTION_KEYS, ...Object.keys(input).filter((key) => !["multiSelect", "allowOther"].includes(key))]);
+  if (Array.isArray(questions)) {
+    args.questions = questions.map((item) => item && typeof item === "object" && !Array.isArray(item) ? normalizeQuestion(item, notes, QUESTION_KEYS) : item);
+  }
+  return { args, notes: [...new Set(notes)] };
+}
+var optionLabel = (option) => typeof option === "string" ? option : option.label;
+function questionsOf(args) {
+  return args.questions ?? [{
+    question: args.question,
+    ...args.header !== void 0 ? { header: args.header } : {},
+    ...args.options !== void 0 ? { options: args.options } : {},
+    ...args.multi_select !== void 0 ? { multi_select: args.multi_select } : {},
+    ...args.allow_other !== void 0 ? { allow_other: args.allow_other } : {}
+  }];
+}
+var fieldId = (index, count2) => count2 === 1 ? "answer" : `q${index + 1}`;
+var cut = (text2, chars) => [...text2].length <= chars ? text2 : `${[...text2].slice(0, chars - 1).join("")}\u2026`;
+function shownLabel(option) {
+  if (typeof option === "string" || !option.description) return optionLabel(option);
+  const room = 200 - [...option.label].length - 3;
+  return room >= 2 ? `${option.label} \u2014 ${cut(option.description, room)}` : option.label;
+}
+var size = (text2) => Buffer.byteLength(text2, "utf8");
+var SEPARATOR = 2;
+function limits(questions, budget) {
+  const single = questions.length === 1;
+  if (budget < size("User skipped the question")) return void 0;
+  let room = budget - (single ? size("User answered: ") : size("User answered:") + questions.reduce((sum, question) => sum + size(`
+- ${question.question}: (skipped)`), 0));
+  const labels = questions.map((question) => (question.options ?? []).map((option) => size(optionLabel(option))).sort((a, b) => b - a));
+  const selected = questions.map((question, index) => question.options?.length && question.multi_select ? labels[index].length : void 0);
+  const cost = (index) => {
+    const question = questions[index];
+    if (!question.options?.length) return 0;
+    const count2 = question.multi_select ? selected[index] : 1;
+    return labels[index].slice(0, count2).reduce((sum, bytes) => sum + bytes + SEPARATOR, 0);
+  };
+  const texts = questions.reduce((count2, question) => count2 + (!question.options?.length || (question.allow_other ?? true) ? 1 : 0), 0);
+  const total = () => questions.reduce((sum, _question, index) => sum + cost(index), 0) + texts * (1 + SEPARATOR);
+  while (total() > room) {
+    const widest = selected.reduce((best, count2, index) => count2 !== void 0 && count2 > 1 && (best === void 0 || cost(index) > cost(best)) ? index : best, void 0);
+    if (widest === void 0) return void 0;
+    selected[widest]--;
+  }
+  room -= total() - texts * 1;
+  return { selected, text: texts ? Math.min(MAX_TEXT_ANSWER_BYTES, Math.floor(room / texts)) : MAX_TEXT_ANSWER_BYTES };
+}
+function documentFor(args, budget = Infinity) {
+  const questions = questionsOf(args);
+  const bounded = Number.isFinite(budget) ? limits(questions, budget) : void 0;
+  if (Number.isFinite(budget) && !bounded) throw Object.assign(new Error("the questions and their answers cannot fit the output budget"), { code: "interaction_budget_too_small" });
+  const text2 = bounded ? { max_bytes: bounded.text } : {};
+  const fields = [];
+  questions.forEach((question, index) => {
+    const id2 = fieldId(index, questions.length);
+    const label = cut(question.header ?? question.question, 200);
+    const description = question.header !== void 0 || label !== question.question ? { description: cut(question.question, 500) } : {};
+    if (!question.options?.length) {
+      fields.push({ id: id2, label, ...description, kind: "text", multiline: true, required: false, ...text2 });
+      return;
+    }
+    const other = question.allow_other ?? true;
+    const options = question.options.map((option, at) => ({ id: `o${at + 1}`, label: shownLabel(option) }));
+    const selected = bounded?.selected[index];
+    fields.push(question.multi_select ? {
+      id: id2,
+      label,
+      ...description,
+      kind: "multi_select",
+      options,
+      required: !other,
+      ...selected !== void 0 && selected < options.length ? { max_selected: selected } : {}
+    } : { id: id2, label, ...description, kind: "single_select", options, required: !other });
+    if (other) fields.push({ id: `${id2}_other`, label: "Other", kind: "text", required: false, ...text2 });
+  });
+  return { title: cut(questions.length === 1 ? questions[0].header ?? "Question" : "Questions", 80), blocks: [{ id: "form", kind: "form", fields }] };
+}
+function answerText(question, id2, answers) {
+  const value = answers[id2];
+  const parts = [];
+  if (typeof value === "string" && value) parts.push(question.options?.length ? optionLabel(question.options[Number(value.slice(1)) - 1]) : value);
+  if (Array.isArray(value)) for (const choice of value) parts.push(optionLabel(question.options[Number(String(choice).slice(1)) - 1]));
+  const other = answers[`${id2}_other`];
+  if (typeof other === "string" && other) parts.push(other);
+  return parts.length ? parts.join(", ") : void 0;
+}
+function resultText(args, answers) {
+  const questions = questionsOf(args);
+  if (questions.length === 1) {
+    const answer = answerText(questions[0], fieldId(0, 1), answers);
+    return answer === void 0 ? "User skipped the question" : `User answered: ${answer}`;
+  }
+  return ["User answered:", ...questions.map((question, index) => `- ${question.question}: ${answerText(question, fieldId(index, questions.length), answers) ?? "(skipped)"}`)].join("\n");
+}
+function validOption(option) {
+  if (typeof option === "string") return option.length > 0;
+  if (!option || typeof option !== "object" || Array.isArray(option)) return false;
+  const { label, description, ...rest } = option;
+  return typeof label === "string" && label.length > 0 && (description === void 0 || typeof description === "string") && !Object.keys(rest).length;
+}
+function questionError(value, at) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${at} must be an object`;
+  const question = value;
+  const unknown = Object.keys(question).find((key) => !QUESTION_KEYS.includes(key));
+  if (unknown) return `${at}: unknown field ${unknown}`;
+  if (typeof question.question !== "string" || !question.question.trim()) return `${at}: question must be a nonempty string`;
+  if (question.header !== void 0 && (typeof question.header !== "string" || !question.header.trim())) return `${at}: header must be a nonempty string`;
+  for (const key of ["multi_select", "allow_other"]) if (question[key] !== void 0 && typeof question[key] !== "boolean") return `${at}: ${key} must be a boolean`;
+  if (question.options !== void 0) {
+    if (!Array.isArray(question.options) || question.options.length > 32) return `${at}: options must be a list of at most 32 entries`;
+    if (!question.options.every(validOption)) return `${at}: each option is a nonempty string or {"label": "\u2026", "description": "\u2026"}`;
+  }
+  return void 0;
 }
 function validateArgs(raw) {
   try {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "arguments must be an object";
-    if (Object.keys(raw).some((key) => !["questions", "title", "timeout_ms"].includes(key))) return "unknown argument";
     const args = raw;
-    if (!Array.isArray(args.questions) || args.questions.length < 1 || args.questions.length > 3) return "questions must contain 1\u20133 entries";
-    if (args.timeout_ms !== void 0 && (!Number.isSafeInteger(args.timeout_ms) || args.timeout_ms < 1 || args.timeout_ms > 864e5)) return "timeout_ms must be positive and at most 24 hours";
+    if (args.questions !== void 0) {
+      if (QUESTION_KEYS.some((key) => args[key] !== void 0)) return "use question or questions, not both";
+      if (!Array.isArray(args.questions) || args.questions.length < 1 || args.questions.length > 3) return "questions must contain 1\u20133 entries";
+      for (const [index, question] of args.questions.entries()) {
+        const error = questionError(question, `questions[${index}]`);
+        if (error) return error;
+      }
+    } else {
+      const error = questionError(Object.fromEntries(QUESTION_KEYS.filter((key) => args[key] !== void 0).map((key) => [key, args[key]])), "arguments");
+      if (error) return error;
+    }
     validateDocument(documentFor(args));
     return void 0;
   } catch (error) {
     return error.message;
   }
 }
+var UNANSWERED = {
+  cancelled: "User skipped the question",
+  expired: "The question expired without an answer",
+  interrupted: "The question was interrupted before an answer"
+};
 async function handler(raw, context) {
   const invalid2 = validateArgs(raw);
   if (invalid2) return errorResult("invalid_arguments", invalid2);
   if (!context.interactions) return errorResult("interaction_unavailable", "This host has no response adapter");
   const args = raw;
+  const host = { summary: cut(questionsOf(args)[0].question.split("\n", 1)[0], 200) };
   try {
-    const result = await context.interactions.request({
-      panel: "questions",
-      document: documentFor(args),
-      ...args.timeout_ms !== void 0 ? { timeout_ms: args.timeout_ms } : {}
-    });
+    const result = await context.interactions.request({ panel: "questions", document: documentFor(args, context.maxOutputBytes - MODEL_NOTE_BYTES - 1) });
+    if (result.status === "answered") return { isError: false, content: [{ type: "text", text: resultText(args, result.answers) }], host: { ...host, status: "ok" } };
     return {
-      isError: result.status !== "answered",
-      ...result.status !== "answered" ? { code: `interaction_${result.status}` } : {},
-      content: [{ type: "json", value: result }]
+      isError: true,
+      code: `interaction_${result.status}`,
+      content: [{ type: "text", text: UNANSWERED[result.status] ?? `The question ended: ${result.status}` }],
+      host: { ...host, status: "error" }
     };
   } catch (error) {
     const failure = error;
@@ -401,6 +553,8 @@ async function handler(raw, context) {
   }
 }
 export {
+  example,
   handler,
+  normalizeArguments,
   validateArgs
 };

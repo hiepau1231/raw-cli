@@ -2,7 +2,8 @@ import type { ToolContext } from "./primitives.js";
 import readManifest from "./bundled/read_file/tool.json" with { type: "json" };
 import writeManifest from "./bundled/write_file/tool.json" with { type: "json" };
 import bashManifest from "./bundled/bash/tool.json" with { type: "json" };
-import { capResult, errorResult } from "./results.js";
+import { capResult, errorResult, utf8Prefix } from "./results.js";
+import { MODEL_NOTE_BYTES } from "./normalize.js";
 import type { ToolContentPanel, ToolHandlerResult, ToolResult } from "./types.js";
 import type { PanelDeclaration } from "../panels/contract.js";
 import { bindWhenToSchema, compileWhen, matchesWhen, type CompiledWhen, type ToolPolicyWhen } from "./policy.js";
@@ -301,7 +302,10 @@ export class ToolRegistry {
     // Only ignored-argument and fallback notes reach the model; the other normalization notes are host data (§4.3). The
     // output is capped first with room left for the notes, so a full-sized result still tells the model about them.
     if (modelNotes.length) {
-      const note = modelNotes.join("\n");
+      // Bounded, so a tool that leaves MODEL_NOTE_BYTES of room (ask_user) never loses output to the note.
+      const joined = modelNotes.join("\n");
+      const note = Buffer.byteLength(joined) <= MODEL_NOTE_BYTES ? joined
+        : `${utf8Prefix(joined, MODEL_NOTE_BYTES - 40).text.replace(/\n[^\n]*$/, "")}\n[${modelNotes.length} notes in all; rest omitted]`;
       const capped = capResult(result, Math.max(0, maxOutputBytes - Buffer.byteLength(note) - 1));
       result = { ...capped, content: [...capped.content, { type: "text", text: note }] };
     }

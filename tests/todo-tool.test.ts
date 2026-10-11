@@ -61,6 +61,29 @@ test("merge updates, adds, removes with subtasks, and reuses freed ids only in r
   assert.deepEqual(ids(removed.stored), ["o", "n"], "removing a parent removes its subtasks");
 });
 
+test("trained status and item-text aliases are stored as canonical todo items", async () => {
+  const { run } = await setup();
+  const first = await run({ todos: [
+    { content: "Write the plan", status: "completed", activeForm: "Writing the plan" },
+    { description: "Ship the docs", status: "in-progress" },
+    { title: "Old idea", status: "cancelled" },
+    { step: "Tell the team", status: "pending" },
+  ] });
+  assert.equal(first.result.isError, false, first.text);
+  const items = (first.stored!.document.blocks[0] as { items: Array<{ label: string; status: string }> }).items;
+  assert.deepEqual(items.map((entry) => [entry.label, entry.status]),
+    [["Write the plan", "done"], ["Ship the docs", "in_progress"], ["Old idea", "skipped"], ["Tell the team", "pending"]]);
+  // Merge items accept the aliases too, and numeric ids read as text.
+  const merged = await run({ mode: "merge", todos: [{ id: "t2", status: "completed" }, { id: 7, title: "Numbered", status: "pending" }] });
+  assert.equal(merged.result.isError, false, merged.text);
+  assert.match(merged.text, /\[x\] t2 Ship the docs/);
+  assert.match(merged.text, /\[ \] 7 Numbered/);
+  // A redundant alias next to content and an unknown item field are dropped instead of failing the call.
+  const extra = await run({ todos: [{ content: "Keep", description: "Keep", status: "pending", priority: "high" }] });
+  assert.equal(extra.result.isError, false, extra.text);
+  assert.match(extra.text, /\[ \] t1 Keep/);
+});
+
 test("model-visible text matches the reference layout, and the panel carries progress, status and summary", async () => {
   const { run } = await setup();
   const { text, stored, settled } = await run({ title: "Ship it", todos: [
@@ -99,7 +122,7 @@ test("argument validation rejects each §18 rule before any state exists", async
   await invalid({ todos: [item("a", "pending", { id: "a" }), item("b", "pending", { id: "b", parent: "a" }), item("c", "pending", { id: "c", parent: "b" })] }, /nesting is limited/);
   await invalid({ todos: [item("a", "pending", { id: "Bad Id" })] }, /pattern|id/);
   await invalid({ todos: Array.from({ length: 101 }, (_, n) => item(`i${n}`)) }, /100|items/);
-  await invalid({ todos: [{ ...item("a"), extra: 1 }] }, /additional|extra/);
+  // An unknown item field is dropped with a note rather than rejected (see the alias test).
   assert.equal(registry.panelDeclarations("todo")?.declarations.length, 1);
 });
 

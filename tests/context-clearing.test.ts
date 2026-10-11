@@ -45,7 +45,7 @@ async function tools(answers: string[] = []) {
     handler: async () => ({ isError: false, content: [{ type: "text", text: `skill body ${"s".repeat(6000)}` }] }) });
   for (const tool of await loadBundledTools(["ask_user"])) registry.register(tool);
   const interactionAdapter: InteractionAdapter = async (request) => ({ requestId: request.identity.requestId, expectedRevision: request.revision,
-    idempotencyKey: randomUUID(), response: "submit", answers: { q: answers.shift() ?? "" } });
+    idempotencyKey: randomUUID(), response: "submit", answers: { answer: answers.shift() ?? "" } });
   return { registry, interactionAdapter };
 }
 
@@ -76,7 +76,7 @@ async function clearingRun(options: { model?: Partial<ResolvedModelConfig>; prob
   const answer = `answer-${noise(3000)}`;
   const { registry, interactionAdapter } = await tools([answer]);
   const script: ProviderTurn[] = [
-    { text: "", toolCalls: [{ id: "ask-1", name: "ask_user", arguments: { questions: [{ id: "q", label: "Q", kind: "text" }] } }], finishReason: "tool_calls" },
+    { text: "", toolCalls: [{ id: "ask-1", name: "ask_user", arguments: { question: "Q" } }], finishReason: "tool_calls" },
     { text: "", toolCalls: [{ id: "skill-1", name: "load_skill", arguments: {} }], finishReason: "tool_calls" },
     probe("small", 1000),
     ...Array.from({ length: options.probes }, (_, index) => probe(`p${index}`, options.pad)),

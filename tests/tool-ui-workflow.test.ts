@@ -29,7 +29,7 @@ test("built tools coexist across turns, answer/turn/control retries and SSE reco
     const first = await turn("first", "ask and start");
     const pending = await until(() => f.json<{ interactions: InteractionRequest[] }>(`/sessions/${session.id}`), s => s.interactions.length === 1);
     const question = pending.interactions[0]!;
-    const response = { requestId: question.identity.requestId, expectedRevision: question.revision, idempotencyKey: "answer-once", response: "submit", answers: { choice: workflowAnswer } };
+    const response = { requestId: question.identity.requestId, expectedRevision: question.revision, idempotencyKey: "answer-once", response: "submit", answers: { answer: workflowAnswer } };
     const path = `/sessions/${session.id}/interactions/${question.identity.requestId}/responses`;
     const ack = await f.json(path, "POST", response);
     assert.deepEqual(await f.json(path, "POST", response), ack);
@@ -80,7 +80,7 @@ test("a killed built dashboard recovers process/question ownership without reviv
     workflowCall("start", "process", { action: "start", command: "sleep 2", timeout_ms: 5000 }),
     workflowCall("patch", "apply_patch", { patch: workflowPatch }),
     { frames: [openAiFrame({ content: "committed" }, "stop"), openAiDone] },
-    workflowCall("pending", "ask_user", { questions: [{ id: "q", label: "Crash question", kind: "text" }] }),
+    workflowCall("pending", "ask_user", { question: "Crash question" }),
   ] });
   installWorkflowDiagram(f.env);
   const child = fork(join(process.cwd(), "tests/fixtures/tool-ui-host-worker.mjs"), [f.root, f.configPath], { env: f.env, execArgv: [], stdio: ["ignore", "ignore", "pipe", "ipc"] });
@@ -120,7 +120,7 @@ test("a killed built dashboard recovers process/question ownership without reviv
     assert.equal(jobs.items.length, 1); assert.equal(jobs.items[0]!.state, "lost");
     assert.equal((await f.json<{ id: string }>(`/sessions/${session.id}/operations`, "POST", firstBody)).id, first.id);
     assert.equal((await f.json<{ id: string }>(`/sessions/${session.id}/operations`, "POST", secondBody)).id, second.id);
-    assert.equal((await f.api(`/sessions/${session.id}/interactions/${question.identity.requestId}/responses`, "POST", { requestId: question.identity.requestId, expectedRevision: question.revision, idempotencyKey: "late", response: "submit", answers: { q: "late" } })).status, 409);
+    assert.equal((await f.api(`/sessions/${session.id}/interactions/${question.identity.requestId}/responses`, "POST", { requestId: question.identity.requestId, expectedRevision: question.revision, idempotencyKey: "late", response: "submit", answers: { answer: "late" } })).status, 409);
     assert.equal(readFileSync(join(f.root, "workflow.txt"), "utf8"), "written exactly once 雪\n");
     assert.equal(f.provider.requests.length, 4);
     // A crashed host cannot reclaim OS children. This fixture's child exits by itself.
