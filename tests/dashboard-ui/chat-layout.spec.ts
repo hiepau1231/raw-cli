@@ -6,7 +6,7 @@ import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
 import { openPath, seedLibrary } from "./library-seed.js";
 import { openAiDone, openAiFrame } from "../fixtures/mock-provider.js";
-import { REQUEST, chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
+import { QUESTION, REQUEST, chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
 
 // The chat area and the frame around it with real-length data (docs/chat-design.md), at the supported widths, in both
 // themes. Values come from the approved mockups (kept local).
@@ -661,6 +661,9 @@ test.describe("work states", () => {
     await expect(second.locator(".work-time")).toHaveText("Working");
     await expect(second.locator(".work-spinner")).toBeVisible();
     await expect(second.locator(".work-toggle")).toHaveAttribute("aria-expanded", "false");
+    // The running group says Working; the status line does not repeat it, the live region does.
+    await expect(page.locator(".working-status")).toHaveCount(0);
+    await expect(page.locator("[role=status][aria-live=polite]").filter({ hasText: "Working" })).toHaveCount(1);
     await second.locator(".work-toggle").click();
     const slow = second.locator(".tool-row").filter({ hasText: "Chờ dịch vụ khởi động" });
     await expect(slow).toHaveAttribute("data-status", "running");
@@ -717,6 +720,224 @@ test.describe("work states", () => {
       await expect(group.locator(".work-toggle")).toHaveAttribute("aria-expanded", "true");
     for (const row of await page.locator(".tool-row").all())
       await expect(row.locator(".tool-toggle")).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+test.describe("approval", () => {
+  test.use({ scenario: chatScenario });
+  const WARNING_BORDER = { dark: "rgb(74, 58, 20)", light: "rgb(236, 217, 168)" } as const;
+
+  test("a pending approval is one card after its group, and the row and header say so", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await seedChat(page, raw, "approval");
+    const card = page.locator("section.approval");
+    await expect(card).toHaveCount(1);
+    await expect(page.locator(".work-group section.approval")).toHaveCount(0);
+    // Right after the group that holds the call.
+    expect(await card.evaluate((element) => element.previousElementSibling?.classList.contains("work-group"))).toBe(true);
+    const group = page.locator(".work-group").nth(1);
+    await expect(group.locator(".work-head .sp-chip")).toHaveText(["Needs approval"]);
+    await expect(group.locator(".work-toggle")).toHaveAttribute("aria-expanded", "false");
+    await group.locator(".work-toggle").click();
+    const row = group.locator(".tool-row");
+    await expect(row).toHaveAttribute("data-status", "approval");
+    await expect(row.locator(".tool-glyph")).toHaveAttribute("data-glyph", "shield");
+    await expect(row.locator(".tool-status")).toHaveText("Needs approval");
+    await expect(group.getByRole("button", { name: "Allow once" })).toHaveCount(0);
+    // Row 1: the chip, the tool and when it expires; row 2: the headline and the lines it adds; the preview; the actions.
+    await expect(card.locator(".approval-top .sp-chip")).toHaveText("Needs approval");
+    await expect(card.locator(".approval-meta")).toHaveText(/^write_file · expires \d{1,2}:\d{2}/);
+    await expect(card.locator(".approval-meta")).toHaveAttribute("title", /\d/);
+    await expect(card.locator(".approval-title")).toHaveText("Write");
+    await expect(card.locator(".approval-summary")).toHaveText("reports/links.md");
+    await expect(card.locator(".approval-lines")).toHaveText("+3");
+    await expect(card.locator(".approval-preview")).toHaveText("# Link report\n\n41 ok, 3 broken");
+    await expect(card.locator(".approval-actions button")).toHaveText(["Arguments", "Deny", "Allow once"]);
+    const allow = card.getByRole("button", { name: "Allow once", exact: true });
+    await expect(allow).toHaveClass(/primary/);
+    await expect(allow).toHaveAttribute("title", "Allow this call once? This does not change your rules.");
+    await expect(card).not.toContainText("Permission needed");
+    // The card does not take the focus.
+    expect(await card.evaluate((element) => element.contains(document.activeElement))).toBe(false);
+    // Neither the visible status line nor a waiting body repeats it; the live region still announces it.
+    await expect(page.locator(".working-status")).toHaveCount(0);
+    await expect(page.locator("[role=status][aria-live=polite]").filter({ hasText: "Waiting for approval" })).toHaveCount(1);
+    const args = card.getByRole("button", { name: "Arguments", exact: true });
+    await expect(args).toHaveAttribute("aria-expanded", "false");
+    await args.click();
+    await expect(args).toHaveAttribute("aria-expanded", "true");
+    await expect(card.locator(".approval-arguments")).toContainText('"path": "reports/links.md"');
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      await expect(card).toHaveCSS("border-top-color", WARNING_BORDER[theme]);
+      await expect(card).toHaveCSS("border-top-left-radius", "12px");
+      await expect(card).toHaveCSS("padding-top", "12px");
+      await expect(card).toHaveCSS("padding-left", "14px");
+      await expect(card.locator(".approval-title")).toHaveCSS("font-size", "14px");
+      await expect(card.locator(".approval-preview")).toHaveCSS("font-size", "12px");
+      await axe(page);
+    }
+    // After a reload the card is still one card after its group.
+    await page.reload();
+    await expect(page.locator("section.approval")).toHaveCount(1);
+    expect(await page.locator("section.approval").evaluate((element) => element.previousElementSibling?.classList.contains("work-group"))).toBe(true);
+    // Deny: the card goes and the row says Denied.
+    await page.locator("section.approval").getByRole("button", { name: "Deny", exact: true }).click();
+    await expect(page.locator("section.approval")).toHaveCount(0);
+    const denied = page.locator(".work-group").nth(1);
+    if ((await denied.locator(".work-toggle").getAttribute("aria-expanded")) === "false") await denied.locator(".work-toggle").click();
+    await expect(denied.locator(".tool-row .tool-status")).toHaveText("Denied");
+    await expect(denied.locator(".tool-row .tool-glyph")).toHaveAttribute("data-glyph", "ban");
+  });
+
+  test("at 390 px the card keeps its rows inside the column", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await seedChat(page, raw, "approval");
+    const card = page.locator("section.approval");
+    const conversation = (await page.locator(".conversation").boundingBox())!;
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      const box = (await card.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(conversation.x + conversation.width + 0.5);
+      for (const part of [".approval-top", ".approval-headline", ".approval-actions"])
+        expect((await card.locator(part).boundingBox())!.height, part).toBeLessThanOrEqual(34);
+      expect(await page.locator(".conversation-scroll").evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+      await axe(page);
+    }
+  });
+});
+
+test.describe("approval without a preview", () => {
+  // A command has no multi-line argument: no preview block, and no line count.
+  test.use({ scenario: { agent: { tools: { use: ["builtin/bash"], rules: [{ match: "builtin/bash", effect: "ask" }] } }, responses: [
+    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "b", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "npm test", description: "Chạy bộ kiểm thử" }) } }] }, "tool_calls"), openAiDone] },
+    { frames: [openAiFrame({ content: "Đã chạy" }, "stop"), openAiDone] },
+  ] } });
+  test("a command shows its headline only, and Allow once runs it", async ({ page, raw }) => {
+    await page.goto(raw.server.launchUrl);
+    await page.getByRole("button", { name: "New chat", exact: true }).first().click();
+    await page.getByRole("textbox", { name: "Message" }).fill("chạy test");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const card = page.locator("section.approval");
+    await expect(card).toHaveCount(1);
+    await expect(card.locator(".approval-title")).toHaveText("Chạy bộ kiểm thử");
+    await expect(card.locator(".approval-summary")).toHaveText("$ npm test");
+    await expect(card.locator(".approval-preview")).toHaveCount(0);
+    await expect(card.locator(".approval-lines")).toHaveCount(0);
+    await card.getByRole("button", { name: "Allow once", exact: true }).click();
+    await expect(page.getByTestId("assistant-message")).toContainText("Đã chạy", { timeout: 30000 });
+    await expect(card).toHaveCount(0);
+  });
+});
+
+test.describe("approval line counts and long previews", () => {
+  // The count is the lines the call adds, not the preview's: an edit adds its new text, a write its content.
+  const tool = (id: string, name: string, args: unknown) => ({ frames: [openAiFrame({ tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }] }, "tool_calls"), openAiDone] });
+  const LONG = Array.from({ length: 8 }, (_, index) => `dòng ${index + 1}`).join("\n") + "\n";
+  test.use({ scenario: { agent: { tools: { use: ["builtin/edit_file", "builtin/write_file"], rules: [
+    { match: "builtin/edit_file", effect: "ask" }, { match: "builtin/write_file", effect: "ask" }] } }, responses: [
+    tool("e", "edit_file", { path: "notes.txt", old_string: "một\nhai\nba\nbốn", new_string: "năm\nsáu" }),
+    tool("w", "write_file", { path: "long.txt", content: LONG }),
+    tool("o", "write_file", { path: "one.txt", content: "một dòng" }),
+    { frames: [openAiFrame({ content: "Xong" }, "stop"), openAiDone] },
+  ] } });
+  test("an edit counts its new text, a long preview is six lines, a one-line write has a count and no preview", async ({ page, raw }) => {
+    writeFileSync(join(raw.root, "notes.txt"), "một\nhai\nba\nbốn\n");
+    await page.goto(raw.server.launchUrl);
+    await page.getByRole("button", { name: "New chat", exact: true }).first().click();
+    await page.getByRole("textbox", { name: "Message" }).fill("sửa và ghi");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const card = page.locator("section.approval");
+    const allow = async () => {
+      const id = await card.locator(".approval-summary").textContent();
+      await card.getByRole("button", { name: "Allow once", exact: true }).click();
+      await expect(card.locator(".approval-summary")).not.toHaveText(id ?? "");
+    };
+    await expect(card.locator(".approval-summary")).toHaveText("notes.txt");
+    await expect(card.locator(".approval-lines")).toHaveText("+2");
+    await expect(card.locator(".approval-preview")).toHaveText("một\nhai\nba\nbốn");
+    await allow();
+    await expect(card.locator(".approval-summary")).toHaveText("long.txt");
+    await expect(card.locator(".approval-lines")).toHaveText("+8");
+    await expect(card.locator(".approval-preview")).toHaveText("dòng 1\ndòng 2\ndòng 3\ndòng 4\ndòng 5\n…");
+    await allow();
+    await expect(card.locator(".approval-summary")).toHaveText("one.txt");
+    await expect(card.locator(".approval-lines")).toHaveText("+1");
+    await expect(card.locator(".approval-preview")).toHaveCount(0);
+    await card.getByRole("button", { name: "Allow once", exact: true }).click();
+    await expect(page.getByTestId("assistant-message")).toContainText("Xong", { timeout: 30000 });
+  });
+});
+
+test.describe("question that failed", () => {
+  // An ask_user call rejected before it asked has no question card: its row keeps the error.
+  test.use({ scenario: { agent: { tools: { use: ["builtin/ask_user"] } }, responses: [
+    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "q", type: "function", function: { name: "ask_user", arguments: JSON.stringify({ question: "Một?", questions: [{ question: "Hai?" }] }) } }] }, "tool_calls"), openAiDone] },
+    { frames: [openAiFrame({ content: "ok" }, "stop"), openAiDone] },
+  ] } });
+  test("its row shows the failure message", async ({ page, raw }) => {
+    await page.goto(raw.server.launchUrl);
+    await page.getByRole("button", { name: "New chat", exact: true }).first().click();
+    await page.getByRole("textbox", { name: "Message" }).fill("hỏi tôi");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByTestId("assistant-message")).toContainText("ok", { timeout: 30000 });
+    const group = page.locator(".work-group").last();
+    await group.locator(".work-toggle").click();
+    const row = group.locator(".tool-row");
+    await expect(row.locator(".tool-glyph")).toHaveAttribute("data-glyph", "x");
+    await expect(row.locator(".tool-card")).toBeVisible();
+    await expect(row.locator(".tool-card .tool-text")).toContainText("use question or questions, not both");
+  });
+});
+
+test.describe("question", () => {
+  test.use({ scenario: chatScenario });
+
+  test("the question appears once; its row waits for you and shows only its arguments", async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await seedChat(page, raw, "question");
+    const chat = page.locator(".chat-main");
+    // Visible text only: the collapsed group's row also names the question.
+    await expect(chat.getByText(QUESTION, { exact: true }).filter({ visible: true })).toHaveCount(1);
+    await expect(chat.getByText(/Waiting for the result/)).toHaveCount(0);
+    await expect(page.locator(".working-status")).toHaveCount(0);
+    await expect(page.locator("[role=status][aria-live=polite]").filter({ hasText: "Waiting for your answer" })).toHaveCount(1);
+    const group = page.locator(".work-group").last();
+    await expect(group.locator(".work-time")).toHaveText("Working");
+    await group.locator(".work-toggle").click();
+    const row = group.locator(".tool-row");
+    await expect(row.locator(".tool-status")).toHaveText("Waiting for you");
+    await expect(row.locator(".tool-status")).toHaveClass(/tone-accent/);
+    await row.locator(".tool-toggle").click();
+    const card = row.locator(".tool-card");
+    const onlyArguments = async () => {
+      await expect(card.locator(".tool-terminal, .tool-text, .json-tree, .tool-markdown, .tool-waiting")).toHaveCount(0);
+      await expect(card.locator(".tool-card-foot button")).toHaveText(["Arguments"]);
+      await card.getByRole("button", { name: "Arguments", exact: true }).click();
+      await expect(card.locator(".tool-arguments")).toContainText(QUESTION);
+    };
+    await onlyArguments();
+    await expect(chat.getByText(QUESTION, { exact: true }).filter({ visible: true })).toHaveCount(2);
+    for (const theme of ["dark", "light"] as const) {
+      await setTheme(page, theme);
+      await axe(page);
+    }
+    // Answered: the row is OK and still shows only its arguments.
+    await page.getByRole("radio", { name: "Sửa tất cả" }).check();
+    await page.getByRole("button", { name: "Send answer", exact: true }).click();
+    await expect(page.getByTestId("assistant-message").last()).toContainText("ok", { timeout: 30000 });
+    await page.reload();
+    const answered = page.locator(".work-group").last();
+    await answered.locator(".work-toggle").click();
+    await expect(answered.locator(".tool-row")).toHaveAttribute("data-status", "ok");
+    await answered.locator(".tool-toggle").click();
+    const after = answered.locator(".tool-card");
+    await expect(after.locator(".tool-terminal, .tool-text, .json-tree, .tool-markdown")).toHaveCount(0);
+    await after.getByRole("button", { name: "Arguments", exact: true }).click();
+    await expect(after.locator(".tool-arguments")).toContainText(QUESTION);
   });
 });
 

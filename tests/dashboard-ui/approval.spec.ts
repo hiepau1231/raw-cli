@@ -123,12 +123,12 @@ test.describe("approval headline", () => {
       const headline = card.locator(".approval-headline");
       await expect(headline.locator(".approval-title")).toHaveText("Run command");
       await expect(headline.locator(".approval-summary")).toHaveText("$ npm test");
-      // The arguments stay available below the headline, under a closed disclosure.
-      const details = card.locator("details.approval-arguments");
-      await expect(details.locator("summary")).toHaveText("Arguments");
-      await expect(details).not.toHaveAttribute("open", "");
-      await details.locator("summary").click();
-      await expect(details).toContainText('"command": "npm test"');
+      // The arguments stay available from the card's Arguments toggle, closed at first.
+      const args = card.getByRole("button", { name: "Arguments", exact: true });
+      await expect(args).toHaveAttribute("aria-expanded", "false");
+      await expect(card.locator(".approval-arguments")).toHaveCount(0);
+      await args.click();
+      await expect(card.locator(".approval-arguments")).toContainText('"command": "npm test"');
       await card.getByRole("button", { name: "Deny", exact: true }).click();
       // The denial reaches the model before the next call (or the answer) is requested.
       await expect.poll(() => raw.provider.requests.length).toBe(index + 2);

@@ -29,6 +29,7 @@
   --danger-bg: #fdecef;
   --danger-text: #a8213b;
   --danger-border: #f3c4ce;
+  --warning-border: #ecd9a8;
   --danger-hover: #fadde3;
   --space-1: 4px;
   --space-2: 8px;
@@ -94,6 +95,7 @@ samp {
   --danger-bg: #2a0f1a;
   --danger-text: #ffa3b4;
   --danger-border: #4d1a2c;
+  --warning-border: #4a3a14;
   --danger-hover: #3a1424;
   --backdrop: #07060b;
   --frame: #211b2d;
@@ -1761,11 +1763,6 @@ code.tool-summary {
 .tool-card-foot .copy-text {
   display: inline;
 }
-.tool-card > .approval {
-  margin: 0;
-  border-width: 1px 0 0;
-  border-radius: 0;
-}
 .json-tree summary {
   cursor: pointer;
 }
@@ -1934,43 +1931,97 @@ code.tool-summary {
   color: var(--accent-text);
   border-bottom: 2px solid var(--accent);
 }
+/* A call waiting for approval (docs/chat-design.md §7): a card after its work group. */
 .approval {
-  margin: 12px 0 0;
-  padding: 14px;
-  border: 1px solid var(--warning);
-  border-radius: 7px;
-  background: var(--canvas);
-}
-.approval > strong {
   display: flex;
-  gap: 7px;
-  align-items: center;
-  color: var(--warning);
-}
-.approval p {
-  font-size: 12px;
-}
-.approval .actions {
-  margin: 12px 0;
-}
-.approval .approval-headline {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: baseline;
-  margin: 8px 0 4px;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 22px;
+  padding: 12px 14px;
+  border: 1px solid var(--warning-border);
+  border-radius: 12px;
+  background: var(--sp-card);
   font-size: 13px;
 }
-.approval .approval-title {
-  font-weight: 600;
+.approval-top,
+.approval-headline,
+.approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
 }
-.approval .approval-summary {
+.approval-top .sp-chip {
+  flex: none;
+}
+.approval-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+.approval-title {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 550;
+}
+.approval-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
   font-family: var(--font-mono);
-  overflow-wrap: anywhere;
-}
-.approval .approval-arguments summary {
-  cursor: pointer;
   font-size: 12px;
+  font-variant-ligatures: none;
+}
+.approval-lines {
+  flex: none;
+  color: var(--success);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.approval-preview {
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--code);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-ligatures: none;
+  line-height: 1.6;
+  white-space: pre;
+}
+.approval-arguments .code-block {
+  margin: 0;
+}
+.approval-effects {
+  margin: 8px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.approval-actions button {
+  flex: none;
+  min-height: 32px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.approval-actions .foot-button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+.approval-actions .foot-button:hover:not(:disabled) {
+  background: var(--panel-hover);
 }
 .compaction {
   border-top: 1px solid var(--border);
@@ -4065,7 +4116,9 @@ code.tool-summary {
 /* The side panel's tokens; an inline tool view in the chat uses the same chips and cards. */
 .inspector,
 .inline-tool-view,
-.work-group {
+.work-group,
+.approval,
+.interaction-receipt {
   --sp-card: var(--canvas);
   --sp-tint-accent: var(--accent-soft);
   --sp-tint-success: color-mix(in srgb, var(--success) 14%, transparent);
@@ -4085,7 +4138,9 @@ code.tool-summary {
   --sp-success-text: var(--success);
 }
 :root[data-theme="dark"] .inline-tool-view,
-:root[data-theme="dark"] .work-group {
+:root[data-theme="dark"] .work-group,
+:root[data-theme="dark"] .approval,
+:root[data-theme="dark"] .interaction-receipt {
   --sp-card: #141020;
   --sp-tint-success: #10261c;
   --sp-tint-warning: #2a2110;
@@ -5559,8 +5614,31 @@ textarea.panel-input {
   opacity: 0.5;
   cursor: default;
 }
-.interaction-receipt { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-.interaction-receipt { margin: .5rem 0; }
+/* A question that lives in the side panel: a card row in the chat (docs/chat-design.md §7). */
+.interaction-receipt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 22px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--sp-card);
+  font-size: 13px;
+}
+.interaction-receipt > span {
+  flex: 1;
+  min-width: 0;
+}
+.interaction-receipt > button {
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  font-size: 12.5px;
+}
 .interaction-receipt dl { flex-basis: 100%; margin: 0; }
 .interaction-receipt dd { white-space: pre-wrap; overflow-wrap: anywhere; }
 

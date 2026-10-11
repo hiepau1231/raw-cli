@@ -18,6 +18,9 @@ for (const placement of ["chat","sidebar"]) test(`${placement} form survives rel
   await page.getByRole("textbox",{name:"Message"}).fill("ask");await page.getByRole("button",{name:"Send",exact:true}).click();
   if(placement==="sidebar") await page.getByRole("button",{name:"Open question",exact:true}).click();
   await expect(page.getByRole("textbox",{name:"Your answer",exact:true})).toBeVisible();
+  // The status line says it only when the question is not in the chat.
+  if(placement==="sidebar") await expect(page.locator(".working-status")).toHaveText("Waiting for your answer");
+  else await expect(page.locator(".working-status")).toHaveCount(0);
   // The question's explanation: the tab's description and tooltip in the side panel, the body inline.
   if(placement==="sidebar") await expect(page.getByRole("tab",{name:"Input",exact:true})).toHaveAccessibleDescription(/^Answer to continue the task\./);
   else await expect(page.locator(".inline-tool-view").first()).toContainText("Answer to continue the task.");
@@ -221,6 +224,10 @@ test("a delayed first acknowledgement cannot disable or overwrite the next sideb
     release();await acknowledgement;
     await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
     await expect(page.getByRole("textbox",{name:"Next answer",exact:true})).toHaveValue("two");
+    // The first question is answered and the next one waits: the call's row still waits for you.
+    const group=page.locator(".work-group").last();
+    await group.locator(".work-toggle").click();
+    await expect(group.locator(".tool-row .tool-status")).toHaveText("Waiting for you");
     await expect(page.getByRole("button",{name:"Send answer",exact:true})).toBeEnabled();
     await page.getByRole("button",{name:"Send answer",exact:true}).click();
     await expect(page.getByTestId("assistant-message")).toContainText("received");

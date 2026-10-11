@@ -17,7 +17,6 @@ import { diffTotals } from "./diff-totals.js";
 const GLYPHS: Record<StatusGlyph, typeof CheckCircle2> = {
   check: CheckCircle2, x: CircleX, spinner: LoaderCircle, pending: CircleDashed, shield: ShieldAlert, ban: Ban, clock: Clock,
 };
-const TONES: Record<string, string> = { ok: "success", error: "error", warning: "warning", pending: "muted" };
 
 /** A panel this call updated, as a pill on its row: progress, its summary, or the rejection. */
 export interface RowReceipt { receipt: PanelReceipt; onOpen: () => void; panelTitle: string; icon: PanelIcon }
@@ -31,31 +30,34 @@ export function ToolRow({
   result,
   status,
   approval,
-  children,
   preferences,
   previewAbbreviated,
   sessionId,
   receipts,
   onOpenCommands,
+  waitingForYou = false,
+  argumentsOnly = false,
 }: {
   call?: VisibleToolCall | undefined;
   result?: VisibleToolResult | undefined;
   status?: string | undefined;
   approval: boolean;
-  /** The approval actions, inside the card while the call waits. */
-  children?: ReactNode;
   preferences: Preferences;
   previewAbbreviated?: boolean | undefined;
   sessionId: string;
   receipts: RowReceipt[];
   onOpenCommands: () => void;
+  /** The call's question waits for your answer. */
+  waitingForYou?: boolean;
+  /** The call asked you something: its question card shows the question and the answer, so the card has only Arguments. */
+  argumentsOnly?: boolean;
 }) {
   const badge = statusBadge({ result, lifecycle: status, approval, started: !!call?.started });
   const glyph = statusGlyph(badge);
   const Glyph = GLYPHS[glyph];
   const failed = badge.tone === "error";
   const [expanded, setExpanded] = useState<boolean>();
-  const open = expanded ?? (preferences.toolDetails || approval || failed);
+  const open = expanded ?? (preferences.toolDetails || failed);
   const [showArguments, setShowArguments] = useState(false);
   const card = useId();
   const name = call?.name ?? result?.name ?? "Historical tool";
@@ -66,7 +68,10 @@ export function ToolRow({
   const callId = call?.id ?? result?.id;
   const kind = result ? bodyKind(result, call?.result) : undefined;
   const stats = result ? diffTotals([result]) : undefined;
-  const chip = badge.tone === "error" ? badge.label : undefined;
+  // A chip only for states other than OK and running: the approval and a question waiting for you, then failures.
+  const chip = waitingForYou ? { label: "Waiting for you", tone: "accent" }
+    : badge.state === "approval" ? { label: badge.label, tone: "warning" }
+      : badge.tone === "error" ? { label: badge.label, tone: "error" } : undefined;
   const canLoad = !!result && !!callId && (!!result.host?.fullOutputPath || !!previewAbbreviated || result.truncated);
   const full = useFullOutput(sessionId, callId ?? "");
   const notes = result
@@ -80,7 +85,9 @@ export function ToolRow({
   let meta: string[] = [];
   let copy: ReactNode = null;
   let single = false;
-  if (result && kind === "terminal") {
+  if (argumentsOnly) {
+    // No body and no Copy: the question card is the place for the question and the answer.
+  } else if (result && kind === "terminal") {
     const preview = parseTerminalPreview(previewText(result));
     const output = preview.lines.filter((line) => !line.notice);
     // The channel only when the visible tail's is known.
@@ -129,7 +136,7 @@ export function ToolRow({
     if (label === "Copy code") meta = [result.host?.path ?? result.segments.find((segment) => segment.path)?.path ?? ""];
     if (value) copy = <CopyButton value={value} label={label} text="Copy" className="foot-button" />;
   }
-  else if (call?.result === "terminal" && !approval)
+  else if (call?.result === "terminal" && !approval && !argumentsOnly)
     body = (
       <p className="tool-waiting">
         Live output is in{" "}
@@ -193,8 +200,8 @@ export function ToolRow({
           </button>
         ))}
         {chip && (
-          <span className={`tool-status sp-chip tone-${TONES[badge.tone]}`} data-status={badge.state} aria-hidden="true">
-            {chip}
+          <span className={`tool-status sp-chip tone-${chip.tone}`} data-status={badge.state} aria-hidden={chip.tone !== "accent" || undefined}>
+            {chip.label}
           </span>
         )}
         {result?.durationMs !== undefined && <span className="tool-duration">{formatDuration(result.durationMs)}</span>}
@@ -241,7 +248,6 @@ export function ToolRow({
             Arguments
           </button>
         </div>
-        {children}
       </div>
     </div>
   );

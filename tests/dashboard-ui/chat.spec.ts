@@ -54,6 +54,8 @@ for (const outcome of ["failure", "cancelled", "not_smaller"] as const)
         .click();
       if (outcome === "cancelled") {
         await expect.poll(() => raw.provider.requests.length).toBe(3);
+        // The timeline does not show a running compaction yet, so the status line does.
+        await expect(page.locator(".working-status")).toHaveText("Compacting");
         await page.getByRole("button", { name: "Stop", exact: true }).click();
       }
       await expect(page.locator(".compaction")).toContainText(

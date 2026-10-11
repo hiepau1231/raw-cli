@@ -3,7 +3,7 @@ import { useId, useState, type ReactNode } from "react";
 import { InlineToolView } from "./panels/ToolView.js";
 import type { ActionHost } from "./panels/actions.js";
 import type { InsertRef } from "./panels/status.js";
-import { Brain, ChevronRight, LoaderCircle, ShieldQuestion } from "lucide-react";
+import { Brain, ChevronRight, LoaderCircle, ShieldAlert } from "lucide-react";
 import type { HistoryView } from "../../src/sessions/view.js";
 import type {
   VisibleToolCall,
@@ -24,15 +24,36 @@ import { receiptPanel } from "./panels/panel-state.js";
 import { COMMANDS_ID } from "./panels/commands-state.js";
 import { HistoryAttachments } from "./composer/HistoryAttachments.js";
 import { ToolRow } from "./tool-cards/ToolRow.js";
+import { ToolIcon } from "./tool-cards/ToolIcon.js";
 import { diffTotals } from "./tool-cards/diff-totals.js";
 import { statusBadge } from "./tool-cards/status.js";
 
 /** The owner of the files-changed panel the editing tools share (src/tools/write-changes.ts FILES_CHANGED_OWNER). */
 const FILES_CHANGED_OWNER = "host/files_changed";
 
-export function ApprovalActions({ approval }: { approval: Approval }) {
+/** The call's main text: the longest string argument with a line break (a file's content, a patch), else none. */
+function mainText(args: Record<string, unknown>): string | undefined {
+  const texts = Object.values(args).filter((value): value is string => typeof value === "string" && value.includes("\n"));
+  return texts.sort((a, b) => b.length - a.length)[0];
+}
+const PREVIEW_LINES = 6;
+/** The lines a write, an edit or a patch adds, from its normalized arguments; independent of the preview. */
+function addedLines(args: Record<string, unknown>): number | undefined {
+  const text = typeof args.content === "string" ? args.content : typeof args.new_string === "string" ? args.new_string : undefined;
+  if (text !== undefined) return text === "" ? 0 : text.replace(/\n$/, "").split("\n").length;
+  if (typeof args.patch === "string") return args.patch.split("\n").filter((line) => line.startsWith("+")).length;
+  return undefined;
+}
+
+/**
+ * A call waiting for approval (docs/chat-design.md §7): one card after its group. The chip, the tool and when the
+ * approval expires; the call's headline and the lines it writes; a preview of its main text; Arguments, Deny and Allow
+ * once. Allow once and Deny answer only this call.
+ */
+export function ApprovalCard({ approval, call }: { approval: Approval; call?: VisibleToolCall | undefined }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [showArguments, setShowArguments] = useState(false);
   const answer = async (allow: boolean) => {
     setBusy(true);
     setError("");
@@ -47,35 +68,55 @@ export function ApprovalActions({ approval }: { approval: Approval }) {
       setBusy(false);
     }
   };
+  const text = mainText(approval.arguments);
+  const lines = text?.replace(/\n$/, "").split("\n");
+  const added = call?.kind === "edit" ? addedLines(approval.arguments) : undefined;
+  const deadline = new Date(approval.deadline);
   return (
     <section className="approval" aria-label="Tool permission">
-      <strong>
-        <ShieldQuestion size={17} aria-hidden="true" /> Permission needed
-      </strong>
+      <div className="approval-top">
+        <span className="sp-chip tone-warning">
+          <ShieldAlert size={11} aria-hidden="true" />
+          Needs approval
+        </span>
+        <span className="tool-spacer" />
+        <span className="approval-meta" title={`Expires ${deadline.toLocaleString()}`}>
+          {approval.name} · expires {deadline.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </span>
+      </div>
       <p className="approval-headline">
+        <ToolIcon icon={call?.icon} identity={call?.identity} kind={call?.kind} />
         <span className="approval-title">{approval.title}</span>
         {approval.summary && <code className="approval-summary">{approval.summary}</code>}
+        <span className="tool-spacer" />
+        {/* The lines a write or an edit adds. */}
+        {added !== undefined && <span className="approval-lines">+{added}</span>}
       </p>
-      <p>Allow this call once? This does not change your rules.</p>
-      <details className="approval-arguments">
-        <summary>Arguments</summary>
-        <CodeBlock
-          code={JSON.stringify(approval.arguments, null, 2)}
-          language="json"
-        />
-      </details>
-      {approval.effects && <><p>Intended effects</p><CodeBlock code={JSON.stringify(approval.effects, null, 2)} language="json" /></>}
-      <div className="actions">
-        <button
-          className="primary"
-          disabled={busy}
-          onClick={() => {
-            void answer(true);
-          }}
-        >
-          Allow once
+      {lines && (
+        <pre className="approval-preview" tabIndex={0}>
+          {/* At most six lines, the ellipsis included. */}
+          {lines.length > PREVIEW_LINES ? [...lines.slice(0, PREVIEW_LINES - 1), "…"].join("\n") : lines.join("\n")}
+        </pre>
+      )}
+      {showArguments && (
+        <div className="approval-arguments">
+          <CodeBlock code={JSON.stringify(approval.arguments, null, 2)} language="json" />
+          {approval.effects && (
+            <>
+              <p className="approval-effects">Intended effects</p>
+              <CodeBlock code={JSON.stringify(approval.effects, null, 2)} language="json" />
+            </>
+          )}
+        </div>
+      )}
+      <div className="approval-actions">
+        <button type="button" className="foot-button" aria-expanded={showArguments} onClick={() => setShowArguments(!showArguments)}>
+          Arguments
         </button>
+        <span className="tool-spacer" />
         <button
+          type="button"
+          className="foot-button"
           disabled={busy}
           onClick={() => {
             void answer(false);
@@ -83,10 +124,18 @@ export function ApprovalActions({ approval }: { approval: Approval }) {
         >
           Deny
         </button>
+        <button
+          type="button"
+          className="primary"
+          disabled={busy}
+          title="Allow this call once? This does not change your rules."
+          onClick={() => {
+            void answer(true);
+          }}
+        >
+          Allow once
+        </button>
       </div>
-      <small className="muted">
-        Expires {new Date(approval.deadline).toLocaleString()}
-      </small>
       <ErrorMessage>{error}</ErrorMessage>
     </section>
   );
@@ -198,8 +247,8 @@ function ReasoningRow({ text, preferences }: { text: string; preferences: Prefer
 interface WorkPill { key: string; label: ReactNode; name: string; icon: PanelIcon; error: boolean; onOpen: () => void }
 /**
  * A turn's tool activity (docs/chat-design.md §6): a summary line (time, tool count, failed and approval chips, one pill
- * per panel updated) over the reasoning and tool rows. It opens on the user's toggle, by preference, or while a call in it
- * waits for approval.
+ * per panel updated) over the reasoning and tool rows. It opens on the user's toggle or by preference only; a pending
+ * approval is a card after it.
  */
 function WorkGroup({
   children,
@@ -221,8 +270,7 @@ function WorkGroup({
   pills: WorkPill[];
 }) {
   const [expanded, setExpanded] = useState<boolean>();
-  // A pending approval's actions are in its row's card, so its group opens while it waits.
-  const open = expanded ?? (approval || preferences.reasoning || preferences.toolDetails);
+  const open = expanded ?? (preferences.reasoning || preferences.toolDetails);
   const content = useId();
   return (
     <div className="work-group" data-state={active ? "running" : "done"}>
@@ -395,7 +443,7 @@ export function Timeline({
       const byCall = new Map<string, PanelReceipt[]>();
       for (const receipt of receipts) byCall.set(receipt.toolCallId, [...(byCall.get(receipt.toolCallId) ?? []), receipt]);
       let failed = 0;
-      let approvals = false;
+      const approvals: ReactNode[] = [];
       const results: VisibleToolResult[] = [];
       const rows = work.map((entry) => {
         if ("reasoning" in entry) return <ReasoningRow key={entry.id} text={entry.reasoning} preferences={preferences} />;
@@ -403,8 +451,12 @@ export function Timeline({
         const approval = state.approvals.find((pending) => pending.operationId === entry.operationId && pending.callId === entry.callId);
         const badge = statusBadge({ result: pair.result, lifecycle: pair.status, approval: !!approval, started: !!pair.call?.started });
         if (badge.tone === "error") failed++;
-        approvals ||= !!approval;
+        if (approval) approvals.push(<ApprovalCard key={approval.id} approval={approval} call={pair.call} />);
         if (pair.result) results.push(pair.result);
+        // A call that asked you something: its question cards are the only place the questions and answers show. A
+        // call may ask several in turn; it waits for you while any of them is pending.
+        const questions = (state.interactions ?? []).filter((request) => request.identity.toolCallId === entry.callId
+          && (!request.identity.operationId || request.identity.operationId === entry.operationId));
         return (
           <ToolRow
             key={entry.key}
@@ -419,9 +471,11 @@ export function Timeline({
             receipts={(byCall.get(entry.callId) ?? []).filter((receipt) => receipt.owner !== FILES_CHANGED_OWNER).map((receipt) => ({
               receipt, panelTitle: stackOf(receipt)?.title ?? receipt.title, icon: stackOf(receipt)?.icon ?? "panel", onOpen: () => onOpenPanel(receiptPanel(receipt)) }))}
             onOpenCommands={() => onOpenPanel(COMMANDS_ID)}
-          >
-            {approval && <ApprovalActions approval={approval} />}
-          </ToolRow>
+            waitingForYou={questions.some((request) => request.state === "pending")}
+            // History records carry no call id: an ask_user call is recognised by its identity, unless it failed before
+            // it asked, when its result is the only explanation.
+            argumentsOnly={questions.length > 0 || (pair.call?.identity === "builtin/ask_user" && !pair.result?.failed)}
+          />
         );
       });
       // One pill per panel, in the order the group first updated it, showing its latest receipt.
@@ -445,7 +499,7 @@ export function Timeline({
           key={`work:${workId}`}
           count={rows.length - work.filter((entry) => "reasoning" in entry).length}
           failed={failed}
-          approval={approvals}
+          approval={approvals.length > 0}
           active={workActive}
           preferences={preferences}
           elapsedMs={elapsedMs}
@@ -453,6 +507,8 @@ export function Timeline({
         >
           {rows}
         </WorkGroup>,
+        // A pending approval is a card of its own after the group that holds the call.
+        ...approvals,
       );
     }
     work = [];

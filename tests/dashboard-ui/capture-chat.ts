@@ -21,7 +21,7 @@ const shoot = async (page: Page, view: string, scheme: string, target?: string) 
   copyFileSync(join(out, file), join("docs/dashboard", file));
 };
 /** A fresh dashboard with the stress session run up to `stage`. */
-const session = async (stage: "answer" | "question", viewport: { width: number; height: number }) => {
+const session = async (stage: "answer" | "approval" | "question", viewport: { width: number; height: number }) => {
   // The workspace is in the temporary directory; as HOME it shows as ~/… in the header, as on a real machine.
   const raw = await dashboardFixture({ ...chatScenario, env: { HOME: realpathSync(tmpdir()) } });
   installChatWorkspace(raw);
@@ -32,8 +32,9 @@ const session = async (stage: "answer" | "question", viewport: { width: number; 
 };
 const shots: string[] = [];
 try {
-  // The desktop with the side panel open, the conversation from its first message (work), and the composer.
-  const desktop = await session("answer", { width: 1440, height: 900 });
+  // The desktop with the side panel open and the write waiting for approval, as in the mockup, then the conversation
+  // from its first message (work).
+  const desktop = await session("approval", { width: 1440, height: 900 });
   for (const scheme of ["dark", "light"] as const) {
     await desktop.page.emulateMedia({ colorScheme: scheme });
     await shoot(desktop.page, "desktop", scheme);
@@ -47,10 +48,17 @@ try {
     await shoot(desktop.page, "work", scheme, ".chat-main");
     await group.locator(".work-toggle").click();
     await desktop.page.locator(".conversation-scroll").evaluate((element) => { element.scrollTop = element.scrollHeight; });
-    await shoot(desktop.page, "composer", scheme, ".composer-area");
   }
-  shots.push("desktop", "work", "composer");
+  shots.push("desktop", "work");
   await desktop.raw.close();
+  // The composer of an idle conversation.
+  const idle = await session("answer", { width: 1440, height: 900 });
+  for (const scheme of ["dark", "light"] as const) {
+    await idle.page.emulateMedia({ colorScheme: scheme });
+    await shoot(idle.page, "composer", scheme, ".composer-area");
+  }
+  shots.push("composer");
+  await idle.raw.close();
   // The pending ask_user question.
   const question = await session("question", { width: 1440, height: 900 });
   for (const scheme of ["dark", "light"] as const) {

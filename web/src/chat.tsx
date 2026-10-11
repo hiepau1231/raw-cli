@@ -335,6 +335,11 @@ export function Chat({
           : state?.ownership === "elsewhere"
             ? "Active elsewhere"
             : "Ready";
+  // The visible status line names only what the timeline does not show (docs/chat-design.md §7): the running group says
+  // Working, the approval card Waiting for approval, an inline question card itself. The live region announces them all.
+  const visibleMilestone = milestone === "Preparing" || milestone === "Compacting"
+    || (milestone === "Waiting for your answer"
+      && !state?.interactions?.some((request) => request.state === "pending" && request.declaration.placement === "chat"));
   const compactDisabled = !state
     ? "Session is loading"
     : !agent
@@ -514,7 +519,7 @@ export function Chat({
                   </p>
                 </div>
               )}
-              {current && (
+              {current && visibleMilestone && (
                 <p className="working-status">
                   <span className="activity-dot" />
                   {milestone}
