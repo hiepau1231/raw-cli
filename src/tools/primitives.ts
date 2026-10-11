@@ -41,8 +41,11 @@ export interface ToolContext {
   approve?: (request: ToolApprovalRequest) => boolean | Promise<boolean>;
   toolCallId?: string;
   onStart?: (name: string, args: Record<string, unknown>) => void;
+  /** `raw` is the call as the model sent it, present only when normalization changed it. */
   onHook?: (event: HookEventName, identity: string, name: string, args: Record<string, unknown>,
-    result?: ToolResult, effects?: Record<string, unknown>) => Promise<HookDispatchResult>;
+    result?: ToolResult, effects?: Record<string, unknown>, raw?: Record<string, unknown>) => Promise<HookDispatchResult>;
+  /** Host-only: the normalized arguments of a call whose normalization changed them (docs/tool-ux-design.md §4.3). */
+  onNormalized?: (args: Record<string, unknown>, notes: readonly string[]) => void;
   whitelist?: readonly string[];
   signal?: AbortSignal;
   bashPath?: string;

@@ -81,6 +81,45 @@ export function indexedResult(results: readonly IndexedResult[], maxOutputBytes:
   return { isError, content: [{ type: "json", value: { results } }] };
 }
 
+/** Room kept for a reduced JSON value however small the budget: enough for `"… JSON value of N bytes omitted"`. */
+const MIN_JSON_BYTES = 64;
+
+const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value) ?? "null");
+
+function shrinkJson(value: unknown, items: number, chars: number, depth: number): unknown {
+  if (typeof value === "string") {
+    const scalars = [...value];
+    if (scalars.length <= chars) return value;
+    const half = Math.max(1, Math.floor(chars / 2));
+    return `${scalars.slice(0, half).join("")}… ${scalars.length - 2 * half} characters omitted …${scalars.slice(-half).join("")}`;
+  }
+  if (value === null || typeof value !== "object") return value;
+  if (depth >= 32) return "…";
+  if (Array.isArray(value)) {
+    const kept = value.slice(0, items).map((item) => shrinkJson(item, items, chars, depth + 1));
+    return value.length > items ? [...kept, `… ${value.length - items} more items`] : kept;
+  }
+  const entries = Object.entries(value);
+  const kept = Object.fromEntries(entries.slice(0, items).map(([key, item]) => [key, shrinkJson(item, items, chars, depth + 1)]));
+  return entries.length > items ? { ...kept, "…": `${entries.length - items} more keys` } : kept;
+}
+
+/**
+ * A valid JSON value of at most `limit` serialized bytes (docs/tool-ux-design.md §5.3 "Bounding at execution"):
+ * long arrays and objects keep their first entries and say how many more there were, long strings keep their start and end.
+ * Returns undefined when not even a placeholder fits.
+ */
+export function reduceJson(value: unknown, limit: number): unknown {
+  if (jsonBytes(value) <= limit) return value;
+  for (let items = 64, chars = 2048; ; items = Math.max(1, items >> 1), chars = Math.max(16, chars >> 1)) {
+    const reduced = shrinkJson(value, items, chars, 0);
+    if (jsonBytes(reduced) <= limit) return reduced;
+    if (items === 1 && chars === 16) break;
+  }
+  const placeholder = `… JSON value of ${jsonBytes(value)} bytes omitted`;
+  return jsonBytes(placeholder) <= limit ? placeholder : jsonBytes("…") <= limit ? "…" : undefined;
+}
+
 /** Panel blocks pass through untouched and uncounted: their own limits (panels-design §14) bound them, not the output budget. */
 export function capResult(result: ToolResult, maxOutputBytes: number): ToolResult;
 export function capResult(result: ToolHandlerResult, maxOutputBytes: number): ToolHandlerResult;
@@ -89,7 +128,9 @@ export function capResult(result: ToolHandlerResult, maxOutputBytes: number): To
     : block.type === "json" ? Buffer.byteLength(JSON.stringify(block.value) ?? "") : 0), 0);
   // An oversized result keeps room for a note telling the model it was cut and where the complete copy is.
   const overflow = textual > maxOutputBytes;
-  const noticeReserve = overflow ? Math.min(maxOutputBytes, 160 + SPILL_PATH_RESERVE) : 0;
+  // A JSON result keeps room for at least a minimal valid value; the notice is shortened instead (§5.3).
+  const jsonFloor = result.content.some((block) => block.type === "json") ? Math.min(maxOutputBytes, MIN_JSON_BYTES) : 0;
+  const noticeReserve = overflow ? Math.min(maxOutputBytes - jsonFloor, 160 + SPILL_PATH_RESERVE) : 0;
   let remaining = maxOutputBytes - noticeReserve;
   let truncated = false;
   const content: ToolHandlerContent[] = [];
@@ -109,10 +150,13 @@ export function capResult(result: ToolHandlerResult, maxOutputBytes: number): To
         remaining -= Buffer.byteLength(serialized);
         content.push(block);
       } else {
-        const preview = utf8Prefix(`[JSON preview] ${serialized}`, remaining);
-        remaining -= preview.bytes;
+        // Oversized JSON stays valid JSON for the model; the whole value is saved below.
+        const reduced = reduceJson(block.value, remaining);
         truncated = true;
-        content.push({ type: "text", text: preview.text });
+        if (reduced !== undefined) {
+          remaining -= jsonBytes(reduced);
+          content.push({ type: "json", value: reduced });
+        }
       }
     } else if (block.type === "panel") {
       content.push(block);
@@ -136,6 +180,8 @@ export function capResult(result: ToolHandlerResult, maxOutputBytes: number): To
     if (notice.text) { content.push({ type: "text", text: notice.text }); remaining -= notice.bytes; }
   }
   const retained = maxOutputBytes - remaining + content.reduce((sum, block) => sum + (block.type === "image" ? Buffer.byteLength(block.data) : 0), 0);
+  // The saved copy is also recorded in host data, the durable per-call record the full-output route reads (§5.3).
   return { ...result, content, truncated: result.truncated || truncated, retainedBytes: retained, observedBytes: result.observedBytes ?? observed,
-    ...(truncated && fullOutputPath ? { fullOutputPath, ...(fullOutputCapped ? { fullOutputCapped } : {}) } : {}) };
+    ...(truncated && fullOutputPath ? { fullOutputPath, ...(fullOutputCapped ? { fullOutputCapped } : {}),
+      host: { ...result.host, fullOutputPath, ...(fullOutputCapped ? { fullOutputCapped } : {}) } } : {}) };
 }

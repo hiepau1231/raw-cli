@@ -1,5 +1,5 @@
 import { parseFilePatch } from "../tools/file-patch.js";
-import type { ToolResult } from "../tools/types.js";
+import type { HostData, ToolResult } from "../tools/types.js";
 
 export interface VisibleToolCall {
   id?: string;
@@ -26,6 +26,8 @@ export interface VisibleToolResult {
   durationMs?: number;
   rows: VisibleBatchRow[];
   segments: PreviewSegment[];
+  /** The result's host data (docs/tool-ux-design.md §4.5), kept with the durable history record. */
+  host?: HostData;
 }
 
 const PREVIEW_CHARS = 2000;
@@ -126,7 +128,7 @@ export function projectToolResult(name: string, identity: string | undefined, re
     ...(result.code ? { code: result.code } : {}), ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
     truncated: result.truncated ?? false,
     ...(durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs: Math.round(durationMs) } : {}),
-    rows, segments: bounded(lines) };
+    rows, segments: bounded(lines), ...(result.host ? { host: structuredClone(result.host) } : {}) };
 }
 
 export function renderPlainToolResult(result: VisibleToolResult): string {

@@ -17,9 +17,11 @@ export function acpUpdate(event: RunEvent): SessionUpdate | undefined {
   if (event.type === "tool_call") return { sessionUpdate: "tool_call", toolCallId: event.id, title: event.name,
     name: event.name, kind: event.name === "read_file" ? "read" : event.name === "write_file" ? "edit" : "execute",
     status: "pending", rawInput: event.arguments };
-  if (event.type === "tool_start") return { sessionUpdate: "tool_call_update", toolCallId: event.id, status: "in_progress" };
+  // Start and result updates carry the arguments the tool actually received, which differ from the declared call
+  // when Raw normalized an alias (docs/tool-ux-design.md §4.3).
+  if (event.type === "tool_start") return { sessionUpdate: "tool_call_update", toolCallId: event.id, status: "in_progress", rawInput: event.arguments };
   if (event.type === "tool_result") return { sessionUpdate: "tool_call_update", toolCallId: event.id,
-    status: event.result.isError ? "failed" : "completed", rawOutput: event.result };
+    status: event.result.isError ? "failed" : "completed", ...(event.arguments ? { rawInput: event.arguments } : {}), rawOutput: event.result };
   if (event.type === "compact_start") return { sessionUpdate: "agent_thought_chunk",
     content: { type: "text", text: `Compacting context (${event.estimatedTokens} estimated input tokens).` } };
   if (event.type === "compact_end") return { sessionUpdate: "agent_thought_chunk",

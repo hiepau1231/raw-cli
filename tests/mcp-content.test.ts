@@ -29,7 +29,10 @@ test("T-06d: PNG/JPEG remain native image blocks; unsupported media/resource and
   assert.equal(mcpResultToToolResult({ content: [{ type: "text", text: "x".repeat(16 * 1024 * 1024 + 1) }] }, 8192).code, "result_too_large");
   const capped = mcpResultToToolResult({ structuredContent: { payload: "é".repeat(100) }, content: [] }, 20);
   assert.equal(capped.truncated, true);
-  assert.equal(capped.content[0]?.type, "text");
+  // Oversized structured content stays a valid JSON value, however small the budget (docs/tool-ux-design.md §5.3).
+  const block = capped.content[0];
+  assert.equal(block?.type, "json");
+  assert.equal(typeof JSON.parse(JSON.stringify(block?.type === "json" ? block.value : null)), "string");
   assert.ok((capped.retainedBytes ?? Infinity) <= 20);
 });
 

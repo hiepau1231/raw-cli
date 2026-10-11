@@ -27,7 +27,7 @@ export class HookDispatcher {
       if (!subscription.when) continue;
       if (matchesHookSubscription({ name: subscription.name,
           ...(subscription.match ? { match: subscription.match } : {}) }, subscription.name, identity)) {
-        bindWhenToSchema(compileWhen(subscription.when), definition);
+        bindWhenToSchema(compileWhen(subscription.when), definition, identity);
       }
     }
   }

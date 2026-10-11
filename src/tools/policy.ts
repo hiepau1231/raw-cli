@@ -83,11 +83,17 @@ function canReachString(node: unknown, path: readonly PathStep[], index: number,
   }
 }
 
-export function bindWhenToSchema(when: CompiledWhen, definition: ToolDefinition): void {
+export function bindWhenToSchema(when: CompiledWhen, definition: ToolDefinition, identity = definition.name): void {
   if (!(definition.conditionSources ?? ["arguments"]).includes(when.source)) throw new Error(`when.source ${when.source} is unavailable in ${definition.name}`);
   const root = schemaObject(when.source === "effects" ? definition.effectsSchema : definition.inputSchema);
   if (!root) throw new Error(`when.source ${when.source} has no schema in ${definition.name}`);
   if (!canReachString(root, when.path, 0, false, root, new WeakMap(), 0)) {
+    // Old paths are not translated (docs/tool-ux-design.md §4.4): a rule naming a replaced argument fails loudly, saying what replaced it.
+    const renamed = when.source === "arguments" ? definition.renamedArguments?.[when.path[0]!.key] : undefined;
+    if (renamed !== undefined) {
+      const path = when.path.map((step) => `${step.key}${step.each ? "[*]" : ""}`).join(".");
+      throw new Error(`rule path ${path} does not exist in ${identity}; the argument is now ${renamed}`);
+    }
     throw new Error(`when.any path does not resolve to a string in ${definition.name} schema`);
   }
 }

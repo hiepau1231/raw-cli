@@ -12,6 +12,8 @@ import { compileObjectSchema } from "./plugins/manifest.js";
 
 export interface ToolDefinition {
   readonly conditionSources?: readonly ConditionSource[];
+  /** Host-only: old top-level argument names and the argument that replaced each, for specific rule-binding errors. */
+  readonly renamedArguments?: Readonly<Record<string, string>>;
   readonly effectsSchema?: Readonly<Record<string, unknown>>;
   readonly name: string;
   readonly description: string;
@@ -24,8 +26,24 @@ export interface ToolDefinition {
   };
 }
 
+/** What a built-in's `normalizeArguments` returns (docs/tool-ux-design.md §4.3). */
+export interface NormalizedArguments {
+  args: Record<string, unknown>;
+  /** Host-only notes such as `read file_path as path`. */
+  notes?: string[];
+  /** A shape that is not an alias, such as an old batch shape: the call is rejected with this message. */
+  rejected?: string;
+}
+
 export interface ToolRegistration extends ToolDefinition {
   describeEffects?: (args: Record<string, unknown>, context: { cwd: string }) => unknown;
+  /**
+   * Bundled tools only: maps aliases to canonical arguments before validation. Pure and idempotent. Unknown top-level
+   * arguments of a normalized tool are then dropped with a note to the model.
+   */
+  normalizeArguments?: (args: Record<string, unknown>) => NormalizedArguments;
+  /** One canonical call, shown when arguments are rejected. */
+  example?: Readonly<Record<string, unknown>>;
   canonicalName?: string;
   handler: (args: Record<string, unknown>, context: ToolContext) => Promise<ToolHandlerResult>;
   validateArgs?: (args: unknown) => string | undefined;
@@ -98,7 +116,7 @@ export class ToolRegistry {
         if (tool.effectsSchema?.type !== "object" || typeof tool.describeEffects !== "function") throw new Error(`invalid effects contract for ${tool.name}`);
       }
       if (tool.conditionSources?.includes("effects") && !tool.effectsSchema) throw new Error(`missing effects schema for ${tool.name}`);
-      for (const rule of this.rules) if (rule.when && rule.match.matches(identity)) bindWhenToSchema(rule.when, tool);
+      for (const rule of this.rules) if (rule.when && rule.match.matches(identity)) bindWhenToSchema(rule.when, tool, identity);
     }
   }
 
@@ -138,6 +156,7 @@ export class ToolRegistry {
     const tool = this.tools.get(name);
     return tool ? { name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
       ...(tool.conditionSources ? { conditionSources: tool.conditionSources } : {}),
+      ...(tool.renamedArguments ? { renamedArguments: tool.renamedArguments } : {}),
       ...(tool.effectsSchema ? { effectsSchema: tool.effectsSchema } : {}) } : undefined;
   }
 
@@ -154,8 +173,30 @@ export class ToolRegistry {
     if (!tool || (context.whitelist !== undefined && !context.whitelist.includes(name))) return finish(errorResult("tool_not_exposed", `tool unavailable: ${name}`));
     const visibility = this.effect(tool);
     if (visibility === "deny") return finish(errorResult("tool_denied", `tool denied: ${tool.canonicalName ?? name}`));
+    // Normalization (docs/tool-ux-design.md §4.3): aliases become canonical arguments before validation, so policy,
+    // effects, hooks, approval and the handler all see one shape. The caller keeps the raw call for history and replay.
+    let raw: Record<string, unknown> | undefined;
+    const ignored: string[] = [];
+    let notes: readonly string[] = [];
+    if (tool.normalizeArguments && args !== null && typeof args === "object" && !Array.isArray(args)) {
+      let normalized: NormalizedArguments;
+      try { normalized = tool.normalizeArguments(structuredClone(args as Record<string, unknown>)); }
+      catch (error) { return finish(errorResult("invalid_arguments", `cannot read the arguments of ${name}: ${(error as Error).message}`)); }
+      if (normalized.rejected !== undefined) return finish(errorResult("invalid_arguments", normalized.rejected));
+      const next = { ...normalized.args };
+      const properties = tool.inputSchema.properties;
+      if (properties && tool.inputSchema.additionalProperties === false) {
+        for (const key of Object.keys(next)) if (!Object.hasOwn(properties, key)) { ignored.push(key); delete next[key]; }
+      }
+      notes = normalized.notes ?? [];
+      if (JSON.stringify(next) !== JSON.stringify(args)) { raw = args as Record<string, unknown>; args = next; }
+      // Reported before validation and gates, so a call they reject is still shown in its canonical form.
+      if (raw !== undefined || notes.length) {
+        try { context.onNormalized?.(structuredClone(args as Record<string, unknown>), notes); } catch { /* a host observer never changes the call */ }
+      }
+    }
     const invalid = tool.validateArgs?.(args) ?? this.inputValidators.get(name)?.(args);
-    if (invalid) return finish(errorResult("invalid_arguments", invalid));
+    if (invalid) return finish(errorResult("invalid_arguments", tool.example ? `${invalid}; example: ${JSON.stringify(tool.example)}` : invalid));
     if (context.signal?.aborted) return finish(errorResult("aborted", "tool call aborted"));
     args = deepFreeze(structuredClone(args));
     let effects: Record<string, unknown> | undefined;
@@ -179,7 +220,7 @@ export class ToolRegistry {
     const effect = this.effect(tool, args as Record<string, unknown>, effects);
     if (context.signal?.aborted) return finish(errorResult("aborted", "tool call aborted"));
     if (context.onHook) {
-      const hook = await context.onHook("PreToolUse", tool.canonicalName ?? name, name, args as Record<string, unknown>, undefined, effects);
+      const hook = await context.onHook("PreToolUse", tool.canonicalName ?? name, name, args as Record<string, unknown>, undefined, effects, raw);
       if (context.signal?.aborted) return finish(errorResult("aborted", "tool call aborted"));
       if (hook.blocked) return finish(errorResult(hook.blocked === "denied" ? "hook_denied" : "hook_error",
         hook.reason ?? `hook ${hook.blocked}`));
@@ -226,8 +267,16 @@ export class ToolRegistry {
       try { context.onPanelUpdates?.(panels); } catch { /* an observer never changes the tool outcome */ }
       result = { ...result, content: result.content.filter((block) => block.type !== "panel") };
     }
+    // Only ignored-argument notes reach the model; the other normalization notes are host data (§4.3). The output is
+    // capped first with room left for the note, so a full-sized result still tells the model what was ignored.
+    if (ignored.length) {
+      const note = ignored.map((key) => `[ignored unknown argument: ${key}]`).join("\n");
+      const capped = capResult(result, Math.max(0, maxOutputBytes - Buffer.byteLength(note) - 1));
+      result = { ...capped, content: [...capped.content, { type: "text", text: note }] };
+    }
+    if (notes.length) result = { ...result, host: { ...result.host, notes: [...(result.host?.notes ?? []), ...notes] } };
     if (invoked && context.onHook) await context.onHook(result.isError ? "PostToolUseFailure" : "PostToolUse",
-      tool.canonicalName ?? name, name, args as Record<string, unknown>, result as ToolResult, effects);
+      tool.canonicalName ?? name, name, args as Record<string, unknown>, result as ToolResult, effects, raw);
     return finish(result as ToolResult);
   }
 }

@@ -122,7 +122,7 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
   }
   const result: ToolPlugin[] = [];
   for (const item of prepared) {
-    let entry: { handler?: unknown; validateArgs?: unknown; describeEffects?: unknown };
+    let entry: { handler?: unknown; validateArgs?: unknown; describeEffects?: unknown; normalizeArguments?: unknown; example?: unknown; renamedArguments?: unknown };
     try { entry = await import(`${pathToFileURL(item.entryPath).href}?raw_source=${item.sourceDigest}`) as typeof entry; }
     catch { throw new Error(`selected tool entry failed to load: ${item.id}`); }
     if (typeof entry.handler !== "function" || (entry.validateArgs !== undefined && typeof entry.validateArgs !== "function")) {
@@ -130,6 +130,11 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
     }
     if (item.manifest.effects_schema && typeof entry.describeEffects !== "function") throw new Error(`missing effects descriptor: ${item.id}`);
     const semantic = entry.validateArgs as ((args: unknown) => unknown) | undefined;
+    // Only Raw's own built-ins are normalized (docs/tool-ux-design.md §4.3); local copies, package and MCP tools receive
+    // exactly what the model sent, even when their module exports the same hooks.
+    const bundled = !options.packageTools?.[item.id] && item.id.startsWith("builtin/");
+    const plainObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+    if (bundled && entry.normalizeArguments !== undefined && typeof entry.normalizeArguments !== "function") throw new Error(`invalid argument normalizer: ${item.id}`);
     const registration: ToolRegistration = {
       name: options.packageTools?.[item.id]?.as ?? item.manifest.name,
       canonicalName: options.packageTools?.[item.id]?.canonicalIdentity ?? item.id,
@@ -138,6 +143,10 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
       ...(item.manifest.effects_schema ? { effectsSchema: item.manifest.effects_schema,
         describeEffects: entry.describeEffects as NonNullable<ToolRegistration["describeEffects"]> } : {}),
       ...(item.manifest.panels?.length ? { panels: item.manifest.panels } : {}),
+      ...(bundled && typeof entry.normalizeArguments === "function"
+        ? { normalizeArguments: entry.normalizeArguments as NonNullable<ToolRegistration["normalizeArguments"]> } : {}),
+      ...(bundled && plainObject(entry.example) ? { example: entry.example } : {}),
+      ...(bundled && plainObject(entry.renamedArguments) ? { renamedArguments: entry.renamedArguments as Record<string, string> } : {}),
       ...(!options.packageTools?.[item.id] && hostContentTools.has(item.id) ? { outputLimit: HOST_CONTENT_BYTES } : {}),
       validateArgs(args) {
         let error: unknown;

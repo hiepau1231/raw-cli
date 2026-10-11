@@ -36,6 +36,36 @@ export interface ToolContentPanel {
 
 export type ToolHandlerContent = ToolContent | ToolContentPanel;
 
+/** One changed file in host data (docs/tool-ux-design.md §4.5). */
+export interface HostFileChange {
+  path: string;
+  action: "create" | "overwrite" | "edit" | "delete" | "rename";
+  added?: number;
+  removed?: number;
+  destination?: string;
+}
+
+/**
+ * Structured facts for the host (docs/tool-ux-design.md §4.5): persisted with the result in history and model context,
+ * given to hooks as `tool.result.host`, never sent to a provider and never counted by the output cap.
+ */
+export interface HostData {
+  summary?: string;
+  status?: "ok" | "error" | "timeout" | "cancelled";
+  durationMs?: number;
+  exitCode?: number | null;
+  signal?: string | null;
+  fullOutputPath?: string;
+  fullOutputCapped?: boolean;
+  page?: { cursor: number; next: number };
+  files?: HostFileChange[];
+  diff?: string;
+  diffOmitted?: boolean;
+  processId?: string;
+  /** Normalization notes such as `read file_path as path`; host-only. */
+  notes?: string[];
+}
+
 export interface ToolResult {
   isError: boolean;
   content: ToolContent[];
@@ -49,6 +79,7 @@ export interface ToolResult {
   /** Complete copy of output that was truncated before reaching the model, saved for later reading. */
   fullOutputPath?: string;
   fullOutputCapped?: boolean;
+  host?: HostData;
 }
 
 /** What a handler (or an MCP/ACP conversion) may return: a ToolResult that can also carry panel blocks. */

@@ -8,7 +8,7 @@ import { buildCheckpointMessage, CHECKPOINT_MARKER, checkpointWords, collectFact
   estimateRequestTokens, isCheckpointMessage, isReasoningRejection, LEDGER_CAP_TOKENS, ledgerPointer, ledgerText, LEGACY_LEDGER_NOTE,
   LEGACY_NOTE_SOURCE, mechanicalCheckpoint, MIN_CHECKPOINT_OUTPUT_TOKENS, NATIVE_CHECKPOINT_BODY, nativeInstructions, nativePortableText, renderLedger, renderWorkingState, resultText, SUMMARY_CUT_NOTICE, SUMMARY_MESSAGE_PREFIX,
   summarizeTranscript, textTokens, transcriptSteps, userTextBytes, WORKING_STATE_BYTES, writtenCheckpoint, type CompactionLedgerState, type CompactOptions, type CompactResult,
-  type CompactStrategy, type LedgerEntry, type RenderOptions } from "./compact.js";
+  type CompactStrategy, type LedgerEntry, type RenderOptions, withoutHostData } from "./compact.js";
 import { ANTHROPIC_COMPACTION_INSTRUCTIONS_LIMIT } from "./llm/anthropic.js";
 import { existsSync } from "node:fs";
 import { CLEAR_MIN_FREED_TOKENS, CLEAR_TARGET_RATIO, clearToolResults, namedByReminder } from "./context-clearing.js";
@@ -71,6 +71,8 @@ export type RunEvent = (
   | { type: "tool_call"; id: string; name: string; arguments: Record<string, unknown> }
   | { type: "tool_start"; id: string; name: string; arguments: Record<string, unknown>; display?: VisibleToolCall }
   | { type: "tool_result"; id: string; name: string; result: ToolResult; display?: VisibleToolResult;
+      /** The normalized arguments, when normalization changed the call (docs/tool-ux-design.md §4.3). */
+      arguments?: Record<string, unknown>;
       /** The panel receipts committed with this result, for surfaces that print them (docs/panels-design.md §13.2). */
       panelReceipts?: PanelReceipt[] }
   | { type: "usage"; raw: unknown }
@@ -349,7 +351,7 @@ export class AgentSession {
   /** What the provider actually receives: replay projection plus text placeholders for images the model cannot read or the API would reject. */
   private sendMessages(messages: readonly ModelMessage[] = this.requestMessages()): ModelMessage[] {
     const modelConfig = this.options.provider.modelConfig;
-    return projectImageLimits(projectVisionMessages(messages, modelConfig.vision === true), requestImageLimits(modelConfig.method),
+    return projectImageLimits(projectVisionMessages(withoutHostData(messages), modelConfig.vision === true), requestImageLimits(modelConfig.method),
       () => Buffer.byteLength(JSON.stringify(this.options.system), "utf8") + Buffer.byteLength(JSON.stringify(this.schemaView), "utf8"));
   }
 
@@ -1071,8 +1073,10 @@ export class AgentSession {
         ...(this.options.processes ? { processes: this.options.processes.forSession(this.persistence?.sessionId ?? this.processSessionId), commandActivity: this.options.processes.commands.forSession(this.persistence?.sessionId ?? this.processSessionId) } : {}),
         interactions: this.interactionContext(operationId, info.owner, panelCall, controller.signal),
         panels: panelCall.context, onPanelUpdates: (updates) => panelCall.collect(updates), onHandlerSettled: () => this.settleHandler(operationId, panelCall),
-        ...(this.options.hooks ? { onHook: (event: HookEventName, identity: string, name: string, args: Record<string, unknown>, result?: ToolResult, effects?: Record<string, unknown>) =>
-          this.options.hooks!.run(event, { ...hookRequest(), tool: { identity, name, source: "user_action", arguments: args, ...(effects ? { effects } : {}), ...(result ? { result } : {}) } },
+        ...(this.options.hooks ? { onHook: (event: HookEventName, identity: string, name: string, args: Record<string, unknown>, result?: ToolResult,
+          effects?: Record<string, unknown>, raw?: Record<string, unknown>) =>
+          this.options.hooks!.run(event, { ...hookRequest(), tool: { identity, name, source: "user_action", arguments: args,
+            ...(raw ? { raw_arguments: raw } : {}), ...(effects ? { effects } : {}), ...(result ? { result } : {}) } },
             // Observing hooks get their own timeout_ms; only an interrupted run hurries them (HOOK_TEARDOWN_MS).
             { ...(event === "PreToolUse" ? { signal: controller.signal } : { hurry: { signal: controller.signal, graceMs: HOOK_TEARDOWN_MS },
               ...(controller.signal.aborted ? { deadline: Date.now() + HOOK_TEARDOWN_MS } : {}) }),
@@ -1197,6 +1201,8 @@ export class AgentSession {
       : { status: "cancelled", steps };
     const cancelled = (call: ModelToolCall): ToolResult => capResult(errorResult("cancelled", `tool ${call.name} cancelled`), this.options.maxOutputBytes);
     const completedWriteCalls = new Set<string>();
+    // Normalized arguments of calls whose normalization changed them; the raw call stays in the assistant message (§4.3).
+    const normalizedCalls = new Map<string, Record<string, unknown>>();
     const appendResult = (call: ModelToolCall, dispatchedResult: ToolResult, panelCall?: PanelCall) => {
       let result = dispatchedResult;
       let panelWrites: PanelWrites | undefined;
@@ -1222,17 +1228,21 @@ export class AgentSession {
         ? { type: "text", text: `[${block.mimeType} image, ${block.byteSize ?? Buffer.from(block.data, "base64").length} bytes]` }
         : block) };
       const identity = this.toolIdentity(call.name);
+      const normalized = normalizedCalls.get(call.id);
       const projected = { ...projectToolResult(call.name, identity, publicResult,
         startedAt.has(call.id) ? performance.now() - startedAt.get(call.id)! : undefined), id: call.id };
-      const display = presentation.result({ type: "tool_result", id: call.id, name: call.name, result: publicResult },
-        identity, call.arguments, startedCalls.has(call.id), projected);
+      const display = presentation.result({ type: "tool_result", id: call.id, name: call.name, result: publicResult,
+        ...(normalized ? { arguments: normalized } : {}) },
+        identity, normalized ?? call.arguments, startedCalls.has(call.id), projected);
       try {
-        this.commitMessage({ role: "tool", callId: call.id, name: call.name, result: structuredClone(result) },
+        this.commitMessage({ role: "tool", callId: call.id, name: call.name, result: structuredClone(result),
+          ...(normalized ? { arguments: structuredClone(normalized) } : {}) },
           visibility ? { skillVisibility: visibility } : {}, [...display, ...panelRecords], false, panelWrites);
         panelCall?.commit();
       } catch (error) { panelCall?.rollback(); throw error; }
       if (visibility) this.skillVisibility = visibility;
       emit({ type: "tool_result", id: call.id, name: call.name, result: publicResult, display: projected,
+        ...(normalized ? { arguments: structuredClone(normalized) } : {}),
         ...(panelRecords.length ? { panelReceipts: panelRecords.map((record) => structuredClone(record.payload) as unknown as PanelReceipt) } : {}) });
     };
     const firstTask = this.originalTask === undefined;
@@ -1448,9 +1458,11 @@ export class AgentSession {
               interactions: this.interactionContext(call.id, panelInfo?.owner ?? call.name, panelCall, controller.signal),
               onHandlerSettled: () => this.settleHandler(call.id, panelCall),
               ...(panelCall ? { panels: panelCall.context, onPanelUpdates: (updates) => panelCall.collect(updates) } : {}),
+              onNormalized: (args) => { normalizedCalls.set(call.id, structuredClone(args)); },
               ...(this.options.hooks ? { onHook: (event: HookEventName, identity: string,
-                name: string, args: Record<string, unknown>, result?: ToolResult, effects?: Record<string, unknown>) => this.options.hooks!.run(event,
-                { ...hookRequest(), tool: { identity, name, source: "model", arguments: args, ...(effects ? { effects } : {}), ...(result ? { result } : {}) } },
+                name: string, args: Record<string, unknown>, result?: ToolResult, effects?: Record<string, unknown>, raw?: Record<string, unknown>) => this.options.hooks!.run(event,
+                { ...hookRequest(), tool: { identity, name, source: "model", arguments: args, ...(raw ? { raw_arguments: raw } : {}),
+                  ...(effects ? { effects } : {}), ...(result ? { result } : {}) } },
                 { ...(event === "PreToolUse" ? { signal: controller.signal } : { hurry: { signal: controller.signal, graceMs: HOOK_TEARDOWN_MS },
                   ...(controller.signal.aborted ? { deadline: terminalDeadline ??= Date.now() + HOOK_TEARDOWN_MS } : {}) }),
                   onReceipt: (receipt) => this.hookReceipt(receipt, emit) }) } : {}),

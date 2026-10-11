@@ -82,7 +82,8 @@ export function imagePlaceholderText(block: UserImageBlock): string {
 export type ModelMessage =
   | { role: "user"; content: UserInput }
   | { role: "assistant"; text: string; toolCalls: ModelToolCall[]; opaque?: unknown }
-  | { role: "tool"; callId: string; name: string; result: ToolResult };
+  /** `arguments`: the normalized arguments, when normalization changed the call (host-only; the raw call stays on the assistant message). */
+  | { role: "tool"; callId: string; name: string; result: ToolResult; arguments?: Record<string, unknown> };
 
 export interface ProviderRequest {
   system: string;

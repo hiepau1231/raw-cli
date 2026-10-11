@@ -129,9 +129,18 @@ The immediate next action, concrete enough to execute without thinking (command,
 /** Conservative token cost of one user image; base64 is never counted as text. */
 export const USER_IMAGE_TOKEN_ESTIMATE = 1600;
 
+/** Messages as a provider may see them: host data and normalized arguments stay host-side (docs/tool-ux-design.md §4.5). */
+export function withoutHostData(messages: readonly ModelMessage[]): ModelMessage[] {
+  return messages.map((message) => {
+    if (message.role !== "tool" || (message.result.host === undefined && message.arguments === undefined)) return message;
+    const { host: _host, ...result } = message.result;
+    return { role: "tool", callId: message.callId, name: message.name, result };
+  });
+}
+
 export function estimateRequestTokens(system: string, messages: readonly ModelMessage[], tools: readonly ToolDefinition[]): number {
   let images = 0;
-  const light = messages.map((message): ModelMessage => {
+  const light = withoutHostData(messages).map((message): ModelMessage => {
     // A native compaction item travels as its opaque items; its portable text is sent only once projected (design §6.9.1).
     if (message.role === "assistant" && isNativeCompaction(message)) return { ...message, text: "" };
     if (message.role !== "user" || typeof message.content === "string" || !message.content.some((block) => block.type === "image")) return message;

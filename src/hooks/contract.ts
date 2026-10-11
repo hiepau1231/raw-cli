@@ -26,7 +26,9 @@ export interface HookRequest {
   source?: "create" | "resume";
   input?: unknown;
   /** `source` is `user_action` when the user ran a panel action (docs/panels-design.md §11); a missing value means `model`. */
-  tool?: { identity: string; name: string; source?: "model" | "user_action"; arguments: Record<string, unknown>; effects?: Record<string, unknown>; result?: unknown };
+  /** `arguments` are normalized (docs/tool-ux-design.md §4.4); `raw_arguments` is the call as sent, present only when they differ. */
+  tool?: { identity: string; name: string; source?: "model" | "user_action"; arguments: Record<string, unknown>; raw_arguments?: Record<string, unknown>;
+    effects?: Record<string, unknown>; result?: unknown };
   run?: unknown;
 }
 export interface HookExecution { decision: "continue" | "deny"; reason?: string; message?: string; durationMs: number }

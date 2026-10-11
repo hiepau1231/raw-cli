@@ -29,6 +29,43 @@ broad. Results, abort behavior, and byte caps remain host-controlled.
 
 Agents load these tools only when their IDs appear in `tools.use`.
 
+### Argument normalization
+
+A bundled entry may also export `normalizeArguments(args)`, `example` and
+`renamedArguments`. Raw uses them only for its own `builtin/<name>` tools: a
+local copy, a package tool or an MCP tool receives exactly what the model sent,
+even when its module exports the same names.
+
+- `normalizeArguments` runs before validation. It maps the names other
+  harnesses use (for example `file_path`) to the canonical ones and returns
+  `{ args, notes }`, or `{ rejected: "<message>" }` for a shape that is not an
+  alias. It is pure and idempotent.
+- Policy rules, effects, hooks, approval, the handler and the display all see
+  the normalized arguments. History and model context keep the call as the
+  model sent it, so replay stays byte-identical; the normalized arguments are
+  stored next to the result.
+- Unknown top-level arguments of a normalized tool whose schema sets
+  `additionalProperties: false` are dropped, and the result ends with
+  `[ignored unknown argument: <name>]`. Other notes are host data only.
+- A call missing a required argument is rejected with the validation error
+  followed by `; example: <example>`.
+- `renamedArguments` maps old argument names to the ones that replaced them.
+  A rule or hook condition on an old path fails to load with
+  `rule path <path> does not exist in <tool>; the argument is now <name>`.
+
+### Host data
+
+A result may carry `host`: structured facts for Raw (a summary, status,
+duration, exit code, saved-output path, changed files, diff, process ID,
+notes). Raw stores it with the result in history and model context, gives it to
+hooks as `tool.result.host`, and never sends it to a model provider or counts it
+against `max_output_bytes`. When Raw cuts an oversized result, it saves the
+complete output to a temporary file and records the path in
+`host.fullOutputPath`. An oversized JSON result stays valid JSON: long arrays
+and objects keep their first entries followed by `"… N more items"` (or a
+`"…"` key counting the omitted keys), and long strings keep their start and
+end.
+
 ## Selected plugin folders
 
 The loader accepts exact IDs from three roots: `builtin/<folder>` in the
