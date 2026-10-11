@@ -227,7 +227,7 @@ For todos, plans and spec acceptance criteria.
 
 - **Item fields.** `id` and `label` (≤ 200 characters) are required. Optional: `status` (default `pending`), `priority` (`high` | `medium` | `low`), `note` (≤ 500 characters), `ref`, and `children`.
 - **Limits.** Nesting is at most 3 levels deep. A block holds at most 200 items including children.
-- **Dashboard.** An indented tree with a status glyph per item. Items with children can be collapsed. The block header has a "Hide completed" toggle, and that choice is stored per browser. A declared `primary` item action turns the glyph into a checkbox button (§11).
+- **Dashboard.** An indented tree with a status glyph per item; children are indented 16 px with their glyphs aligned, and done items are muted and struck through. Items with children can be collapsed. **Hide completed** is a checkbox item in the section's `⋯` menu (in an inline chat view, a checkbox above the list), and that choice is stored per browser. A note is a muted second line only under the `in_progress` item; other items carry it in their tooltip. Item `⋯` menus show on row hover or keyboard focus. A declared `primary` item action turns the glyph into a checkbox button (§11).
 - **Text rendering.** One line per item, `  `-indented per level: `[x] Write the failing test`.
 
 ### 7.2 `steps`
@@ -320,9 +320,9 @@ For artifacts and files touched.
 ```
 
 - **Fields.** `status` is `added` | `modified` | `deleted` | `referenced`. Optional `added` and `removed` are line counts (integers ≥ 0); optional `diff` is a unified diff of the entry's latest change, bounded by the document limit. At most 200 entries.
-- **Dashboard.** A list of shortened paths with a status letter (A, M, D, R). Clicking an entry inserts `@path` (§6).
+- **Dashboard.** One row per entry, like a source-control list: a file icon, the file name with its directory muted after it (`parser.ts  src/`), `+N −M` in success and error colors when the counts are known, and the status letter (A, M, D, R) at the right. A `label` replaces the name and directory. An absolute `path` (outside the session cwd) is shown whole and muted. An entry with a `diff` is a button that expands its unified diff below the row (monospace, at most 400 px, scrolling). The `@` row action, shown on hover or keyboard focus, inserts `@path` (§6).
 
-Diffs are shown as a `markdown` block with a fenced `diff` code block. There is no separate diff widget in `raw.panel/2`.
+An entry's latest diff is its `diff` field; longer diffs, or diffs of several changes, can still be a `markdown` block with a fenced `diff` code block. There is no separate diff block in `raw.panel/2`.
 
 ## 8. Publishing updates
 

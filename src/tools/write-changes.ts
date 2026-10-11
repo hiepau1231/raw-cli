@@ -1,6 +1,6 @@
-import { isAbsolute, relative } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, relative, sep } from "node:path";
 import { PANEL_LIMITS, type FileEntry, type PanelDocument } from "../panels/contract.js";
-import { utf8Prefix } from "./results.js";
 import { lineCounts, unifiedDiff } from "./line-diff.js";
 import type { CompletedPatchChange } from "./file-patch.js";
 import type { ToolContext } from "./primitives.js";
@@ -20,7 +20,6 @@ export type CompletedWriteChange = CompletedPatchChange & { beforeUnavailable?: 
   /** The before snapshot holds only a prefix of the file, enough to know it is too large to diff. */ beforePartial?: boolean;
   /** write_file: whether the file existed before. */ overwritten?: boolean };
 const omittedKey = "Omitted history entries";
-const DIFF_PREVIEW_BYTES = 6144;
 /** Larger files are reported by size; the write snapshot reads one byte more to detect them. */
 export const MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
 
@@ -37,15 +36,6 @@ function undiffable(change: CompletedWriteChange): string | undefined {
 
 const sides = (change: CompletedWriteChange) => [clean(change.before?.toString("utf8") ?? ""), clean(change.after?.toString("utf8") ?? "")] as const;
 
-/** The changed regions of one write with surrounding context, not the start of the file. */
-function diffPreview(change: CompletedWriteChange): string {
-  const reason = undiffable(change);
-  if (reason) return `${reason}\n`;
-  // Indented code avoids treating any file bytes (including Markdown fences) as active markup.
-  const diff = unifiedDiff(...sides(change), DIFF_PREVIEW_BYTES, "    ");
-  return `${diff.text}\n${diff.truncated ? "\n[diff truncated]" : ""}`;
-}
-
 /**
  * Complete line counts of a change: from the whole, unsanitized before and after content, never from a bounded preview,
  * so a file too large to preview still has counts. Unknown when a side is unavailable, partial or binary.
@@ -56,10 +46,13 @@ function counts(change: CompletedWriteChange): { added: number; removed: number 
   return lineCounts(change.before?.toString("utf8") ?? "", change.after?.toString("utf8") ?? "");
 }
 
+/** Whether `inside`, a path relative to some root, stays under it; a name such as `..config` does. */
+const within = (inside: string) => !!inside && inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside);
+
 /** A path as the session sees it: relative inside the cwd, absolute outside it. */
 export function displayPath(path: string, cwd: string): string {
   const inside = relative(cwd, path);
-  return inside && !inside.startsWith("..") && !isAbsolute(inside) ? inside : path;
+  return within(inside) ? inside : path;
 }
 
 /** The host data of completed changes (docs/tool-ux-design.md §4.5): one entry per file and, if asked, a bounded diff. */
@@ -82,8 +75,19 @@ export function changeHostData(changes: readonly CompletedWriteChange[], cwd: st
   return Buffer.byteLength(diff) <= HOST_DIFF_BYTES ? { files, diff } : { files, diffOmitted: true };
 }
 
-/** Bounded, persisted history of tool writes; it deliberately does not inspect Git or the workspace. */
-export function buildWriteChanges(previous: PanelDocument | undefined, changes: readonly CompletedWriteChange[]): PanelDocument {
+/** A path outside the cwd as people read it: `~/…` under the home directory; undefined when the path is shown as is. */
+function homeLabel(path: string): string | undefined {
+  const home = homedir();
+  const inside = home ? relative(home, path) : "";
+  return isAbsolute(path) && within(inside) ? `~/${inside.split(sep).join("/")}` : undefined;
+}
+
+/**
+ * Bounded, persisted history of tool writes; it deliberately does not inspect Git or the workspace. Entry paths are relative
+ * to the session cwd, the form an `@` reference inserts; a path outside it stays absolute, labeled `~/…` under the home
+ * directory (docs/tool-ux-design.md §6.3).
+ */
+export function buildWriteChanges(previous: PanelDocument | undefined, changes: readonly CompletedWriteChange[], cwd: string): PanelDocument {
   const files = previous?.blocks.find(b => b.id === "files" && b.kind === "files") as { entries: FileEntry[] } | undefined;
   const retention = previous?.blocks.find(b => b.id === "retention" && b.kind === "key_value") as { entries: Array<{key: string; value: string}> } | undefined;
   let omitted = Number(retention?.entries.find(e => e.key === omittedKey)?.value ?? 0) || 0;
@@ -96,31 +100,38 @@ export function buildWriteChanges(previous: PanelDocument | undefined, changes: 
     // lines. Once one write's counts are unknown, the total is unknown and stays omitted.
     const latest = change ? counts(change) : { added: 0, removed: 0 };
     const known = latest && (!old || old.added !== undefined);
-    const diff = change && !undiffable(change) ? unifiedDiff(...sides(change), ENTRY_DIFF_BYTES) : undefined;
+    // The latest diff, or why there is none, so that every row of a change expands to something.
+    const reason = change && undiffable(change);
+    const diff = change && !reason ? unifiedDiff(...sides(change), ENTRY_DIFF_BYTES) : undefined;
+    const shownLabel = label ?? homeLabel(path);
     byPath.set(path, { path, status: status === "modified" && old?.status === "added" ? "added" : status!,
-      ...(label ? { label: [...clean(label)].slice(0, 200).join("") } : {}),
+      ...(shownLabel ? { label: [...clean(shownLabel)].slice(0, 200).join("") } : {}),
       ...(known ? { added: (old?.added ?? 0) + latest.added, removed: (old?.removed ?? 0) + latest.removed } : {}),
-      ...(diff?.text ? { diff: diff.text + (diff.truncated ? "\n[diff truncated]" : "") } : {}) });
+      ...(reason ? { diff: reason } : diff?.text ? { diff: diff.text + (diff.truncated ? "\n[diff truncated]" : "") } : {}) });
   };
-  const previews: string[] = [];
   for (const change of changes) {
+    const to = displayPath(change.path, cwd);
     if (change.kind === "renamed" && change.oldPath) {
-      put(change.oldPath, "deleted", `${change.oldPath} → ${change.path}`);
-      put(change.path, "added", `${change.oldPath} → ${change.path}`, change);
-    } else put(change.path, change.kind === "deleted" ? "deleted" : change.kind === "added" ? "added" : "modified", undefined, change);
-    previews.push(`Recent diff: ${clean(change.oldPath ? `${change.oldPath} → ${change.path}` : change.path)}\n\n${diffPreview(change)}`);
+      const from = displayPath(change.oldPath, cwd);
+      const label = `${homeLabel(from) ?? from} → ${homeLabel(to) ?? to}`;
+      put(from, "deleted", label);
+      put(to, "added", label, change);
+    } else put(to, change.kind === "deleted" ? "deleted" : change.kind === "added" ? "added" : "modified", undefined, change);
   }
   while (byPath.size > 200) { byPath.delete(byPath.keys().next().value!); omitted++; }
-  const oldPreview = previous?.blocks.find(b => b.id === "recent_diff" && b.kind === "markdown") as { text: string } | undefined;
-  const allPreview = [...previews.reverse(), ...(oldPreview ? [oldPreview.text] : [])].join("\n\n");
-  const preview = utf8Prefix(allPreview, 12000);
-  const doc = (): PanelDocument => ({ title: "Files changed", status: "done",
-    subtitle: "Successful tool writes in this session; not Git status or Bash edits.",
-    summary: `${byPath.size} paths shown; ${omitted} history entries omitted`,
-    context_summary: `${byPath.size} successful tool-write paths retained; ${omitted} history entries omitted.`,
-    blocks: [{ id: "files", kind: "files", entries: [...byPath.values()] },
-      { id: "retention", kind: "key_value", entries: [{ key: omittedKey, value: String(omitted) }] },
-      { id: "recent_diff", kind: "markdown", title: "Recent diff", text: preview.text + (preview.truncated ? "\n\n[diff truncated]" : "") }] });
+  const fileCount = (count: number) => `${count} ${count === 1 ? "file" : "files"}`;
+  const doc = (): PanelDocument => {
+    const shown = [...byPath.values()];
+    // The header total is only honest when every file's counts are known.
+    const totals = shown.length && shown.every(entry => entry.added !== undefined && entry.removed !== undefined)
+      ? ` · +${shown.reduce((sum, entry) => sum + entry.added!, 0)} −${shown.reduce((sum, entry) => sum + entry.removed!, 0)}` : "";
+    return { title: "Files changed",
+      subtitle: "Successful tool writes in this session; not Git status or Bash edits.",
+      summary: `${fileCount(shown.length)}${totals}`,
+      context_summary: `${byPath.size} successful tool-write paths retained; ${omitted} history entries omitted.`,
+      blocks: [{ id: "files", kind: "files", entries: shown },
+        ...(omitted ? [{ id: "retention", kind: "key_value" as const, entries: [{ key: omittedKey, value: String(omitted) }] }] : [])] };
+  };
   let document = doc();
   // Older entries lose their diff before any entry is dropped.
   for (const entry of byPath.values()) {
@@ -140,6 +151,6 @@ export async function publishWriteChanges(context: ToolContext, changes: readonl
   if (!context.panels) return;
   try {
     const previous = context.panels.get("files_changed")?.document;
-    await context.panels.update("files_changed", { op: "replace", document: buildWriteChanges(previous, changes) });
+    await context.panels.update("files_changed", { op: "replace", document: buildWriteChanges(previous, changes, context.cwd) });
   } catch { /* a full/closed panel does not undo filesystem changes */ }
 }

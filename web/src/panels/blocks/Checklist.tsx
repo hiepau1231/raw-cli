@@ -14,6 +14,8 @@ function Items({ block, items, onInsert, hideCompleted }: { block: string; items
       {shown.map((item) => {
         const nested = !!item.children?.length;
         const closed = collapsed.has(item.id);
+        // Only the item in progress shows its note as a line; the others keep it in the label's tooltip (§6.2).
+        const noteLine = item.status === "in_progress" && item.note;
         return (
           <li key={item.id}>
             <div className="panel-row">
@@ -29,12 +31,14 @@ function Items({ block, items, onInsert, hideCompleted }: { block: string; items
                 </button>
               ) : <span className="panel-disclosure-space" aria-hidden="true" />}
               <StatusControl block={block} item={item} name={item.label}><StatusGlyph status={item.status} /></StatusControl>
-              <span className={item.status === "done" || item.status === "skipped" ? "panel-done" : undefined}>{item.label}</span>
+              <span className={item.status === "done" || item.status === "skipped" ? "panel-done" : undefined} title={!noteLine && item.note ? item.note : undefined}>
+                {item.label}
+              </span>
               {item.priority && <small className="panel-tag">{item.priority}</small>}
               {item.ref && <Ref value={item.ref} onInsert={onInsert} />}
               <ItemActions block={block} item={item} name={item.label} />
             </div>
-            {item.note && <p className="panel-note">{item.note}</p>}
+            {noteLine && <p className="panel-note">{item.note}</p>}
             {nested && !closed ? <Items block={block} items={item.children!} onInsert={onInsert} hideCompleted={hideCompleted} /> : null}
           </li>
         );

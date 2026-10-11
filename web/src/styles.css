@@ -3748,6 +3748,92 @@ code.tool-summary {
   overflow-wrap: anywhere;
   text-align: left;
 }
+/* Files: one 24 px row per file, like a source-control list (docs/tool-ux-design.md §6.3). */
+.panel-file-row {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0 calc(-1 * var(--space-1));
+  padding: 0 var(--space-1);
+  border-radius: 4px;
+}
+.panel-file-row:hover {
+  background: var(--panel-hover);
+}
+.panel-file {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--panel-font-md);
+  line-height: 20px;
+  text-align: left;
+}
+button.panel-file {
+  cursor: pointer;
+}
+.panel-file-icon {
+  flex: none;
+  color: var(--muted);
+}
+.panel-file-name,
+.panel-file-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel-file-name {
+  flex: 0 1 auto;
+}
+.panel-file-name.outside {
+  color: var(--muted);
+}
+.panel-file-dir {
+  flex: 0 1000 auto;
+  color: var(--muted);
+  font-size: var(--panel-font-sm);
+}
+.panel-file-stats {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  margin-left: auto;
+  font-size: var(--panel-font-sm);
+  font-variant-numeric: tabular-nums;
+}
+.panel-file-added,
+.panel-file-status.file-added {
+  color: var(--success);
+}
+.panel-file-removed,
+.panel-file-status.file-deleted {
+  color: var(--error);
+}
+.panel-file-status {
+  flex: none;
+  width: 14px;
+  font-size: var(--panel-font-sm);
+  font-weight: 600;
+  text-align: center;
+}
+.panel-file-status.file-modified {
+  color: var(--warning);
+}
+.panel-file-status.file-referenced {
+  color: var(--accent-text);
+}
+.panel-file-diff .code-block {
+  margin: 2px 0 var(--space-1);
+}
 .panel-progress-block {
   display: grid;
   gap: var(--space-1);
@@ -3950,6 +4036,7 @@ code.tool-summary {
 }
 /* Row actions (list and table rows) fit the 24 px row and show on hover or keyboard focus, and while their menu is open. */
 .panel-row .panel-action-menu,
+.panel-row .panel-row-action,
 .panel-table td .panel-action-menu {
   margin-left: auto;
   width: 20px;
@@ -3961,6 +4048,8 @@ code.tool-summary {
 }
 .panel-row:hover .panel-action-menu,
 .panel-row:focus-within .panel-action-menu,
+.panel-row:hover .panel-row-action,
+.panel-row:focus-within .panel-row-action,
 .panel-row .panel-action-menu[data-state="open"],
 .panel-table tr:hover .panel-action-menu,
 .panel-table tr:focus-within .panel-action-menu,
@@ -3969,6 +4058,7 @@ code.tool-summary {
 }
 @media (hover: none) {
   .panel-row .panel-action-menu,
+  .panel-row .panel-row-action,
   .panel-table td .panel-action-menu {
     opacity: 1;
   }

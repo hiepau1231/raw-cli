@@ -44,7 +44,8 @@ test("Ask, Commands, Todo, patches and Mermaid survive reload and retry while St
   await expect(page.getByTestId("assistant-message")).toHaveCount(2);
   const files = await showSection(page, "host/files_changed#files_changed");
   await expect(files.locator(".panel-files li")).toHaveCount(1);
-  await expect(files.locator(".panel-markdown")).toContainText("written exactly once 雪");
+  await files.locator(".panel-files li button[aria-expanded]").click();
+  await expect(files.locator(".diff-view")).toContainText("written exactly once 雪");
   const diagram = await showSection(page, "local/diagram#diagram");
   await expect(diagram.locator('svg[role="img"]')).toContainText("Patch");
   await expect(page.getByTestId("assistant-message").last().locator('svg[role="img"]')).toContainText("Answer");

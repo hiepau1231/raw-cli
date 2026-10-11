@@ -13,7 +13,8 @@ import type { InsertRef } from "./status.js";
  * summary and subtitle; an inline view (`inline`) shows them itself, minus the `heading` it was given.
  */
 export function ToolView({ item, onInsert, hideCompleted, onHideCompleted, actions, inline = false, heading, children }: {
-  item: PanelStackItem; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted: (value: boolean) => void;
+  /** Without `onHideCompleted` (a side-panel section, whose menu has the toggle) checklists show no checkbox. */
+  item: PanelStackItem; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted?: ((value: boolean) => void) | undefined;
   actions?: ActionHost | undefined; inline?: boolean; heading?: string | undefined; children?: ReactNode;
 }) {
   const displayed = sidebarPresentation(item, actions?.interactions ?? []);

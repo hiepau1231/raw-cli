@@ -423,14 +423,14 @@ test.describe("panel widgets", () => {
   const gadgetDocument = {
     title: "Gadget run", subtitle: "All widgets", status: "active", summary: "Halfway", progress: { done: 1, total: 2 },
     blocks: [
-      { id: "cl", kind: "checklist", title: "Checklist", items: [{ id: "i1", label: "Parent", status: "done", children: [{ id: "i2", label: "Child", status: "in_progress", note: "a note" }] }, { id: "i3", label: "Failing", status: "failed", ref: { path: "src/a.ts", line: 3 } }, { id: "i4", label: "Finished chore", status: "done" }] },
+      { id: "cl", kind: "checklist", title: "Checklist", items: [{ id: "i1", label: "Parent", status: "done", children: [{ id: "i2", label: "Child", status: "in_progress", note: "a note" }] }, { id: "i3", label: "Failing", status: "failed", note: "failing note", ref: { path: "src/a.ts", line: 3 } }, { id: "i4", label: "Finished chore", status: "done" }] },
       { id: "st", kind: "steps", title: "Steps", items: [{ id: "s1", label: "First", status: "done", started_at: 1759140000000, ended_at: 1759140600000 }, { id: "s2", label: "Second", status: "in_progress", detail: "working" }] },
       { id: "pr", kind: "progress", title: "Progress", label: "Build", value: 3, max: 10 },
       { id: "kv", kind: "key_value", title: "Facts", entries: [{ key: "Branch", value: "main" }, { key: "File", value: "x", ref: { path: "src/b.ts" } }] },
       { id: "tb", kind: "table", title: "Results", columns: [{ id: "n", label: "Name" }, { id: "v", label: "Value", align: "end" }], rows: [{ id: "r1", status: "done", cells: { n: "alpha", v: "1" } }] },
       { id: "md", kind: "markdown", title: "Notes", text: "Some **bold** text" },
       { id: "tl", kind: "timeline", title: "Log", events: [{ id: "e1", at: 1700000000000, level: "success", label: "Older event" }, { id: "e2", at: 1700000100000, level: "info", label: "Newer event" }] },
-      { id: "fl", kind: "files", title: "Files", entries: [{ path: "src/c.ts", status: "modified" }] },
+      { id: "fl", kind: "files", title: "Files", entries: [{ path: "src/c.ts", status: "modified", added: 12, removed: 3 }, { path: "/opt/shared/notes.md", status: "referenced" }, { path: "src/api.ts", line: 42, added: 3 }] },
       { id: "un", kind: "hologram", title: "Future", fallback: "Shown as plain text" },
     ],
   };
@@ -455,22 +455,50 @@ test.describe("panel widgets", () => {
     await expect(body.locator('[data-kind="timeline"] li').first()).toContainText("Newer event");
     await expect(body.locator('[data-kind="timeline"] li').last()).toContainText("Older event");
     await expect(body.locator('[data-kind="timeline"] time').first()).toHaveText(/ago$/);
-    await expect(body.locator('[data-kind="files"] .panel-tag')).toHaveText(/M/);
-    // Checklist: children collapse, and "Hide completed" is remembered by the browser.
+    // Files: name, muted directory, +/− and the status letter; a path outside the cwd is shown whole.
+    const files = body.locator('[data-kind="files"] li');
+    await expect(files.first().locator(".panel-file-name")).toHaveText("c.ts");
+    await expect(files.first().locator(".panel-file-dir")).toHaveText("src/");
+    await expect(files.first().locator(".panel-file-added")).toHaveText("+12");
+    await expect(files.first().locator(".panel-file-removed")).toHaveText("−3");
+    await expect(files.first().locator(".panel-file-status")).toHaveText("M");
+    await expect(files.nth(1).locator(".panel-file-name")).toHaveText("/opt/shared/notes.md");
+    await expect(files.nth(1).locator(".panel-file-dir, .panel-file-added")).toHaveCount(0);
+    await expect(files.nth(1).locator(".panel-file-status")).toHaveText("R");
+    // A count that is not given is not shown as zero, and the line number does not hide the file type.
+    await expect(files.last().locator(".panel-file-name")).toHaveText("api.ts:42");
+    await expect(files.last().locator(".panel-file-added")).toHaveText("+3");
+    await expect(files.last().locator(".panel-file-removed")).toHaveCount(0);
+    await expect(files.last().locator("svg.lucide-file-code")).toHaveCount(1);
+    await files.nth(1).getByRole("button", { name: "Insert @/opt/shared/notes.md into the message" }).click();
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("@/opt/shared/notes.md ");
+    await page.getByRole("textbox", { name: "Message" }).fill("");
+    // Only the item in progress shows its note; another item's note is in its tooltip.
+    await expect(body.getByText("a note", { exact: true })).toBeVisible();
+    await expect(body.getByText("failing note")).toHaveCount(0);
+    await expect(body.getByText("Failing", { exact: true })).toHaveAttribute("title", "failing note");
+    // Checklist: children collapse, and "Hide completed" in the section menu is remembered by the browser.
     await expect(body.getByText("Child", { exact: true })).toBeVisible();
     await body.getByRole("button", { name: "Collapse Parent" }).click();
     await expect(body.getByText("Child", { exact: true })).toHaveCount(0);
     await body.getByRole("button", { name: "Expand Parent" }).click();
     await expect(body.getByText("Child", { exact: true })).toBeVisible();
     await expect(body.getByText("Finished chore")).toBeVisible();
-    await body.getByLabel("Hide completed").check();
+    await expect(body.getByLabel("Hide completed")).toHaveCount(0);
+    const hideCompleted = async () => {
+      await page.getByRole("button", { name: "Gadget section menu" }).click();
+      return page.getByRole("menuitemcheckbox", { name: "Hide completed" });
+    };
+    await expect(await hideCompleted()).toHaveAttribute("aria-checked", "false");
+    await page.getByRole("menuitemcheckbox", { name: "Hide completed" }).click();
     await expect(body.getByText("Finished chore")).toHaveCount(0);
     await expect(body.getByText("Parent", { exact: true })).toBeVisible();
     await page.reload();
     await side(page).click();
-    await expect(section(page, "local/gadget#g").getByLabel("Hide completed")).toBeChecked();
     await expect(section(page, "local/gadget#g").getByText("Finished chore")).toHaveCount(0);
-    await section(page, "local/gadget#g").getByLabel("Hide completed").uncheck();
+    await expect(await hideCompleted()).toHaveAttribute("aria-checked", "true");
+    await page.getByRole("menuitemcheckbox", { name: "Hide completed" }).click();
+    await expect(section(page, "local/gadget#g").getByText("Finished chore")).toBeVisible();
     await body.getByRole("button", { name: "src/a.ts:3" }).click();
     await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue(/@src\/a\.ts /);
     expect(await body.locator(".panel-body").evaluate((element) => element.scrollHeight > 0)).toBe(true);

@@ -91,7 +91,7 @@ function diffKinds(lines: string[]): string[] {
   });
 }
 
-function Diff({ text }: { text: string }) {
+export function Diff({ text }: { text: string }) {
   const lines = text.replace(/\n$/, "").split("\n");
   const kinds = diffKinds(lines);
   return (

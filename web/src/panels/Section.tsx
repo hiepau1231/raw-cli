@@ -1,6 +1,6 @@
 import { useId, useRef, type PointerEvent, type ReactNode } from "react";
 import { DropdownMenu } from "radix-ui";
-import { Activity, ChevronRight, EyeOff, FileText, Flag, FolderTree, Gauge, ListChecks, ListOrdered, MoreHorizontal, MoveDown, MoveUp, PanelTop, Table } from "lucide-react";
+import { Activity, Check, ChevronRight, EyeOff, FileText, Flag, FolderTree, Gauge, ListChecks, ListOrdered, MoreHorizontal, MoveDown, MoveUp, PanelTop, Table } from "lucide-react";
 import type { PanelIcon } from "../../../src/panels/contract.js";
 import { derivedProgress, derivedSummary } from "../../../src/panels/render.js";
 import type { PanelStackItem } from "../../../src/panels/stack.js";
@@ -34,7 +34,9 @@ export interface SectionProps {
   onResize?: (height: number) => void;
   /** Header drag-to-reorder (§13.1): the parent owns the gesture, the header only reports pointer events. */
   drag?: { onPointerDown: (event: PointerEvent<HTMLDivElement>) => void; state?: "dragging" | "target" | undefined } | undefined;
-  menu?: { actions?: Array<{ id: string; label: string; disabled?: string | undefined; run: () => void }> | undefined; up?: (() => void) | undefined; down?: (() => void) | undefined; hide?: (() => void) | undefined } | undefined;
+  menu?: { actions?: Array<{ id: string; label: string; disabled?: string | undefined; run: () => void }> | undefined;
+    /** View options of the section's content, such as a checklist's "Hide completed". */
+    toggles?: Array<{ id: string; label: string; checked: boolean; onChange: (checked: boolean) => void }> | undefined; up?: (() => void) | undefined; down?: (() => void) | undefined; hide?: (() => void) | undefined } | undefined;
   children?: ReactNode;
 }
 /** One accordion section (WAI-ARIA accordion): a header button with `aria-expanded`, and a body of the given height that scrolls inside. */
@@ -79,6 +81,17 @@ export function Section(props: SectionProps) {
                     <DropdownMenu.Item key={entry.id} className="workspace-menu-item" disabled={!!entry.disabled} title={entry.disabled} onSelect={entry.run}>{entry.label}</DropdownMenu.Item>
                   ))}
                   {!!menu.actions?.length && <DropdownMenu.Separator className="workspace-menu-separator" />}
+                  {menu.toggles?.map((entry) => (
+                    <DropdownMenu.CheckboxItem key={entry.id} className="workspace-menu-item" checked={entry.checked} onCheckedChange={(checked) => entry.onChange(checked === true)}>
+                      <span className="agent-menu-check">
+                        <DropdownMenu.ItemIndicator>
+                          <Check size={14} aria-hidden="true" />
+                        </DropdownMenu.ItemIndicator>
+                      </span>
+                      {entry.label}
+                    </DropdownMenu.CheckboxItem>
+                  ))}
+                  {!!menu.toggles?.length && <DropdownMenu.Separator className="workspace-menu-separator" />}
                   <DropdownMenu.Item className="workspace-menu-item" disabled={!menu.up} onSelect={() => menu.up?.()}><MoveUp size={15} aria-hidden="true" />Move up</DropdownMenu.Item>
                   <DropdownMenu.Item className="workspace-menu-item" disabled={!menu.down} onSelect={() => menu.down?.()}><MoveDown size={15} aria-hidden="true" />Move down</DropdownMenu.Item>
                   <DropdownMenu.Item className="workspace-menu-item" disabled={!menu.hide} onSelect={() => menu.hide?.()}><EyeOff size={15} aria-hidden="true" />Hide section</DropdownMenu.Item>

@@ -187,7 +187,7 @@ test("6: write_file, edit_file and apply_patch publish to one host-owned panel w
   assert.deepEqual(panels.map((panel) => panel.panelId), ["host/files_changed#files_changed"]);
   const files = entries(panels[0]!.document);
   assert.deepEqual(files.map((file) => [file.path, file.status, file.added, file.removed]), [
-    [join(cwd, "new.txt"), "added", 2, 0], [join(cwd, "edit.txt"), "modified", 2, 1], [join(cwd, "patch.txt"), "modified", 1, 1]]);
+    ["new.txt", "added", 2, 0], ["edit.txt", "modified", 2, 1], ["patch.txt", "modified", 1, 1]]);
   assert.match(files[1]!.diff!, /-two\n\+2\n\+2b/);
   validateDocument(panels[0]!.document);
   host.close();
@@ -212,7 +212,7 @@ for (const [name, args, file] of [
       assert.equal(await readFile(join(cwd, file), "utf8"), "after\n");
       const saved = store.listSessionPanels(sessionId);
       assert.deepEqual(saved.map((panel) => panel.panelId), ["host/files_changed#files_changed"]);
-      assert.deepEqual(entries(saved[0]!.document).map((entry) => [entry.path, entry.added, entry.removed]), [[join(cwd, file), 1, 1]]);
+      assert.deepEqual(entries(saved[0]!.document).map((entry) => [entry.path, entry.added, entry.removed]), [[file, 1, 1]]);
     } finally { await agent.close(); store.close(); }
   });
 }

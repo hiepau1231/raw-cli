@@ -1,14 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileTool } from "../src/tools/primitives.js";
-import { buildWriteChanges } from "../src/tools/write-changes.js";
+import { buildWriteChanges as buildFor } from "../src/tools/write-changes.js";
 import { unifiedDiff } from "../src/tools/line-diff.js";
 import { validateDocument } from "../src/panels/validate.js";
 import type { PanelDocument, PanelContext, FileEntry } from "../src/panels/contract.js";
 
+// Changes under /p, the session cwd of these documents.
+const buildWriteChanges = (previous: PanelDocument | undefined, changes: Parameters<typeof buildFor>[1]) => buildFor(previous, changes, "/p");
 const entries = (doc: PanelDocument) => (doc.blocks.find(b => b.kind === "files") as {entries: FileEntry[]}).entries;
 
 test("successful writes accumulate normalized paths, preserve added status, count lines and omit failed writes", async () => {
@@ -21,14 +23,17 @@ test("successful writes accumulate normalized paths, preserve added status, coun
     assert.equal((await writeFileTool({ path: "a", content: "one\n" }, { cwd, panels, maxOutputBytes: 4096 })).isError, false);
     assert.equal((await writeFileTool({ path: "directory", content: "fails" }, { cwd, panels, maxOutputBytes: 4096 })).isError, true);
     await writeFileTool({ path: "b", content: "two" }, { cwd, panels, maxOutputBytes: 4096 });
-    assert.deepEqual(entries(document!).map(e => e.path), [join(cwd, "a"), join(cwd, "b")]);
+    // Paths are relative to the session cwd, which is what an @ reference inserts.
+    assert.deepEqual(entries(document!).map(e => e.path), ["a", "b"]);
     await writeFileTool({ path: "./a", content: "updated\nmore\n" }, { cwd, panels, maxOutputBytes: 4096 });
     assert.equal(entries(document!).length, 2);
-    const a = entries(document!).find(e => e.path === join(cwd, "a"));
+    const a = entries(document!).find(e => e.path === "a");
     assert.equal(a?.status, "added");
     // Counts accumulate over the session: +1 from the create, then +2 −1 from the overwrite; the diff is the latest one.
     assert.deepEqual([a?.added, a?.removed], [3, 1]);
     assert.match(a!.diff!, /-one\n\+updated\n\+more/);
+    // b was written with "two" (no newline) and never changed again: +1 −0.
+    assert.equal(document!.summary, "2 files · +4 −1");
     validateDocument(document);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
@@ -57,9 +62,11 @@ test("entry counts come from the whole change while the stored entry diff stays 
   assert.deepEqual([entries(mixed)[0]?.added, entries(mixed)[0]?.removed], [undefined, undefined]);
   validateDocument(mixed);
   const binary = buildWriteChanges(doc, [{ path: "/p/bin", kind: "added", after: Buffer.from([0, 1, 2]) }]);
-  const bin = entries(binary).find(e => e.path === "/p/bin");
+  const bin = entries(binary).find(e => e.path === "bin");
   assert.equal(bin?.added, undefined, "binary content has no line counts");
-  assert.equal(bin?.diff, undefined);
+  assert.equal(bin?.diff, "[binary content: 0 → 3 bytes]", "the row explains why it has no diff");
+  // One file without counts makes the session total unknown: the header shows only the file count.
+  assert.equal(binary.summary, "2 files");
   validateDocument(binary);
 });
 
@@ -85,9 +92,10 @@ test("Files changed is bounded after reload and rename records both paths", () =
   for (let i = 0; i < 210; i++) document = buildWriteChanges(document, [{ path: `/p/${i}`, kind: "added", after: Buffer.from("x".repeat(40000)) }]);
   document = buildWriteChanges(structuredClone(document), [{ path: "/p/new", oldPath: "/p/209", kind: "renamed", before: Buffer.from("x"), after: Buffer.from("y") }]);
   assert.ok(entries(document).length <= 200);
-  assert.match(document.summary!, /omitted/);
   assert.match(JSON.stringify(document), /209.*new/);
-  assert.match(JSON.stringify(document), /truncated|Recent diff/);
+  assert.deepEqual(entries(document).slice(-2).map(e => [e.path, e.status, e.label]), [["209", "deleted", "209 → new"], ["new", "added", "209 → new"]]);
+  assert.equal((document.blocks.find(b => b.id === "retention") as { entries: Array<{ value: string }> }).entries[0]?.value,
+    String(211 - entries(document).length), "the footer counts every dropped entry");
   assert.ok(Buffer.byteLength(JSON.stringify(document)) <= 65536);
   validateDocument(document);
 });
@@ -124,7 +132,7 @@ test("a cancelled turn keeps a completed write, skips the next call and survives
     await assert.rejects(readFile(join(cwd, "skipped")), { code: "ENOENT" });
     const saved = store.listSessionPanels(sessionId);
     assert.deepEqual(saved.map(panel => panel.panelId), ["host/files_changed#files_changed"]);
-    assert.deepEqual(entries(saved[0]!.document).map(e => e.path), [join(cwd, "completed")]);
+    assert.deepEqual(entries(saved[0]!.document).map(e => e.path), ["completed"]);
     const { PanelHost } = await import("../src/panels/host.js");
     const restored = new PanelHost({ initial: saved });
     assert.deepEqual(restored.snapshot(), saved);
@@ -154,13 +162,41 @@ test("invalid or oversized display paths are omitted honestly without failing do
   const doc = buildWriteChanges(undefined, [{ path: "/" + "a".repeat(600), kind: "added", after: Buffer.from("x") },
     { path: "/newline\nfile", kind: "added", after: Buffer.from("y") }]);
   assert.equal(entries(doc).length, 0);
-  assert.equal(doc.summary, "0 paths shown; 2 history entries omitted");
+  assert.equal(doc.summary, "0 files");
+  assert.deepEqual(doc.blocks.find(b => b.id === "retention"), { id: "retention", kind: "key_value", entries: [{ key: "Omitted history entries", value: "2" }] });
   validateDocument(doc);
 });
 
-const diffText = (doc: PanelDocument) => (doc.blocks.find(b => b.id === "recent_diff") as { text: string }).text;
+test("the document reads like a source-control list: relative or home paths, a counted header and no empty footer", () => {
+  const home = homedir();
+  const doc = buildFor(undefined, [
+    { path: "/work/app/src/parser.ts", kind: "modified", before: Buffer.from("a\nb\nc\n"), after: Buffer.from("a\nB\nc\nd\n") },
+    { path: join(home, "notes", "todo.md"), kind: "added", after: Buffer.from("one\ntwo\n") },
+    { path: "/srv/shared/config.json", kind: "deleted", before: Buffer.from("{}\n") },
+    { path: "/work/app/lib/new.ts", oldPath: "/work/app/lib/old.ts", kind: "renamed", before: Buffer.from("x\n"), after: Buffer.from("x\n") },
+    { path: "/work/app/..config/settings.ts", kind: "added", after: Buffer.from("s\n") },
+    { path: join(home, "..notes.md"), kind: "added", after: Buffer.from("n\n") },
+  ], "/work/app");
+  assert.deepEqual(entries(doc).map(e => [e.path, e.status, e.label, e.added, e.removed]), [
+    ["src/parser.ts", "modified", undefined, 2, 1],
+    [join(home, "notes", "todo.md"), "added", "~/notes/todo.md", 2, 0],
+    ["/srv/shared/config.json", "deleted", undefined, 0, 1],
+    ["lib/old.ts", "deleted", "lib/old.ts → lib/new.ts", 0, 0],
+    ["lib/new.ts", "added", "lib/old.ts → lib/new.ts", 0, 0],
+    ["..config/settings.ts", "added", undefined, 1, 0],
+    [join(home, "..notes.md"), "added", "~/..notes.md", 1, 0],
+  ]);
+  assert.equal(doc.summary, "7 files · +6 −2");
+  assert.equal(doc.status, undefined, "a list of files is never \"done\"");
+  assert.deepEqual(doc.blocks.map(b => b.id), ["files"], "no footer while nothing was omitted, and no separate recent-diff block");
+  assert.match(doc.subtitle!, /not Git status or Bash edits/);
+  assert.equal(buildFor(undefined, [{ path: "/work/one.ts", kind: "added", after: Buffer.from("x\n") }], "/work").summary, "1 file · +1 −0");
+  validateDocument(doc);
+});
 
-test("Recent diff shows each changed region with context instead of the start of the file", () => {
+const diffText = (doc: PanelDocument) => entries(doc)[0]!.diff!;
+
+test("an entry's diff shows each changed region with context instead of the start of the file", () => {
   const before = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`);
   const after = [...before];
   after[149] = "changed 150";
@@ -168,8 +204,8 @@ test("Recent diff shows each changed region with context instead of the start of
   const doc = buildWriteChanges(undefined, [{ path: "/p/big.ts", kind: "modified",
     before: Buffer.from(before.join("\n") + "\n"), after: Buffer.from(after.join("\n") + "\n") }]);
   const text = diffText(doc);
-  assert.match(text, /    @@ -147,7 \+147,7 @@\n     line 147\n     line 148\n     line 149\n    -line 150\n    \+changed 150\n     line 151/);
-  assert.match(text, /    @@ -278,6 \+278,7 @@\n(.*\n){3}    \+inserted after 280\n/);
+  assert.match(text, /^@@ -147,7 \+147,7 @@\n line 147\n line 148\n line 149\n-line 150\n\+changed 150\n line 151/);
+  assert.match(text, /\n@@ -278,6 \+278,7 @@\n(.*\n){3}\+inserted after 280\n/);
   assert.doesNotMatch(text, /line 1\n|line 100\n/);
   assert.doesNotMatch(text, /diff truncated/);
   validateDocument(doc);
@@ -185,7 +221,7 @@ test("unified diff covers added files, bounds its size and degrades binary conte
   assert.match(diffText(binary), /\[binary content: 3 → 3 bytes\]/);
 });
 
-test("an overwrite deep inside a large file shows that change in Recent diff", async () => {
+test("an overwrite deep inside a large file shows that change in its entry diff", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "raw-changes-"));
   let document: PanelDocument | undefined;
   const panels: PanelContext = { protocol: 2, get: () => document ? { revision: 1, document } : undefined,
@@ -195,7 +231,7 @@ test("an overwrite deep inside a large file shows that change in Recent diff", a
     await writeFileTool({ path: "big.txt", content: rows.join("\n") }, { cwd, panels, maxOutputBytes: 4096 });
     rows[3499] = "edited row 3500";
     await writeFileTool({ path: "big.txt", content: rows.join("\n") }, { cwd, panels, maxOutputBytes: 4096 });
-    assert.match(diffText(document!), /    @@ -3497,7 \+3497,7 @@[\s\S]*    -row 3500\n    \+edited row 3500/);
+    assert.match(diffText(document!), /^@@ -3497,7 \+3497,7 @@[\s\S]*\n-row 3500\n\+edited row 3500/);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 

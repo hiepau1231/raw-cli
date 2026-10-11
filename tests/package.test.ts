@@ -87,7 +87,7 @@ let document;
 const result = await module.handler({patch}, {cwd:process.cwd(), maxOutputBytes:8192,
  panels:{protocol:2,get:()=>document ? {revision:1,document}:undefined,update:async(_id,update)=>{document=update.document;return {revision:1};}}});
 if (result.isError || await readFile("installed-patch.txt","utf8") !== "installed patch\\n") throw new Error("installed patch execution failed");
-if (!document?.blocks.some(block=>block.kind === "files" && block.entries.some(entry=>entry.path === resolve("installed-patch.txt")))) throw new Error("installed Files changed missing");
+if (!document?.blocks.some(block=>block.kind === "files" && block.entries.some(entry=>entry.path === "installed-patch.txt"))) throw new Error("installed Files changed missing");
 
 const write = await import(builtin("write_file"));
 const old = write.validateArgs({ operations: [{ path: "sentinel", mode: "overwrite", content: "x" }] });

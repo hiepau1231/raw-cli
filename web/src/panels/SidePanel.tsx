@@ -175,7 +175,7 @@ export function SidePanelStack({ commands = [], sessionId, agent, items, prefs, 
     },
     state: drag?.panel === item.panel ? ("dragging" as const) : drag?.over === item.panel ? ("target" as const) : undefined,
   });
-  const menuFor = (item: PanelStackItem) => {
+  const menuFor = (item: PanelStackItem, document: PanelStackItem["document"]) => {
     const index = order.indexOf(item.panel);
     const shown = order.filter((id) => !hiddenIds.has(id));
     const at = shown.indexOf(item.panel);
@@ -183,6 +183,9 @@ export function SidePanelStack({ commands = [], sessionId, agent, items, prefs, 
     const own = actions && item.panel !== COMMANDS_ID ? offeredActions(item, actions, "panel").map((entry) => ({ id: entry.action.id, label: entry.action.label, disabled: entry.disabled, run: entry.run })) : [];
     return {
       actions: own,
+      toggles: document?.blocks.some((block) => block.kind === "checklist")
+        ? [{ id: "hide-completed", label: "Hide completed", checked: prefs.hideCompleted, onChange: (value: boolean) => setPrefs((old) => setHideCompleted(old, value)) }]
+        : [],
       up: index > 0 && at > 0 ? () => reorder("up") : undefined,
       down: at >= 0 && at < shown.length - 1 ? () => reorder("down") : undefined,
       hide: () => setPrefs((old) => setHidden(old, agent, item.panel, true)),
@@ -212,9 +215,9 @@ export function SidePanelStack({ commands = [], sessionId, agent, items, prefs, 
             onToggle={() => { if (!suppressClick.current) toggle(item.panel); }}
             onResize={resizeOf(item.panel)}
             drag={dragFor(item)}
-            menu={menuFor(item)}
+            menu={menuFor(item, shown.document)}
           >
-            {item.panel === COMMANDS_ID ? <Commands items={commands} sessionId={sessionId} /> : <ToolView item={item} actions={actions} onInsert={onInsert} hideCompleted={prefs.hideCompleted} onHideCompleted={(value) => setPrefs((old) => setHideCompleted(old, value))}>
+            {item.panel === COMMANDS_ID ? <Commands items={commands} sessionId={sessionId} /> : <ToolView item={item} actions={actions} onInsert={onInsert} hideCompleted={prefs.hideCompleted}>
             {rejected && <p className="panel-banner error" role="note">Update rejected: {rejected}</p>}
             </ToolView>}
           </Section>

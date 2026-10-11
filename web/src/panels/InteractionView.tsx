@@ -46,6 +46,6 @@ export function InteractionView({ sessionId, requestId, live, availabilityRevisi
     updatedAt: request.createdAt, closed: request.state !== "pending", stale: request === stored ? stored.presentation.stale : false,
     declaration: request === stored ? stored.presentation.declaration : request.declaration, document: request.document, interaction: request };
   return <section className="inline-tool-view" data-request={requestId} data-instance={request.identity.viewInstanceId} aria-label={item.title}>
-    <ToolView item={item} inline onInsert={onInsert} hideCompleted={false} onHideCompleted={() => {}} actions={actions} />
+    <ToolView item={item} inline onInsert={onInsert} hideCompleted={false} actions={actions} />
   </section>;
 }

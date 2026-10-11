@@ -29,17 +29,18 @@ function Block({ block, onInsert, hideCompleted }: { block: PanelBlock; onInsert
     default: return <p className="panel-fallback" data-testid="panel-fallback">{block.fallback ?? "This block type is not supported by this dashboard."}</p>;
   }
 }
-function BlockView({ block, repeats, onInsert, hideCompleted, onHideCompleted }: { block: PanelBlock; repeats: (text: string) => boolean; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted: (value: boolean) => void }) {
+function BlockView({ block, repeats, onInsert, hideCompleted, onHideCompleted }: { block: PanelBlock; repeats: (text: string) => boolean; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted?: ((value: boolean) => void) | undefined }) {
+  const toggle = block.kind === "checklist" && onHideCompleted;
   const hasActions = useOffered("block", block.id).length > 0;
   const title = block.title && !repeats(block.title) ? block.title : undefined;
   return (
     <section className="panel-block" data-kind={block.kind}>
-      {(title || block.kind === "checklist" || hasActions) && (
+      {(title || toggle || hasActions) && (
         <div className="panel-block-header">
           {title && <h4>{title}</h4>}
-          {block.kind === "checklist" && (
+          {toggle && (
             <label className="panel-hide-completed">
-              <input type="checkbox" checked={hideCompleted} onChange={(event) => onHideCompleted(event.target.checked)} />
+              <input type="checkbox" checked={hideCompleted} onChange={(event) => toggle(event.target.checked)} />
               Hide completed
             </label>
           )}
@@ -53,16 +54,17 @@ function BlockView({ block, repeats, onInsert, hideCompleted, onHideCompleted }:
 /**
  * A panel document's blocks. The body never repeats its chrome (docs/tool-ux-design.md §6.1): the document title and block
  * titles show only when they differ from the section title, and in a side-panel section the subtitle is in the header tooltip and the
- * summary in the header. An inline view, which has no such header, shows its subtitle and summary.
+ * summary in the header. An inline view, which has no such header, shows its subtitle and summary, and its checklists a
+ * "Hide completed" checkbox when given `onHideCompleted` (a section has it in its `⋯` menu instead).
  */
-export function Blocks({ document, title, inline = false, onInsert, hideCompleted, onHideCompleted }: { document: PanelDocument; title?: string | undefined; inline?: boolean; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted: (value: boolean) => void }) {
+export function Blocks({ document, title, inline = false, onInsert, hideCompleted, onHideCompleted }: { document: PanelDocument; title?: string | undefined; inline?: boolean; onInsert: InsertRef; hideCompleted: boolean; onHideCompleted?: ((value: boolean) => void) | undefined }) {
   const same = (text: string) => text.trim().toLocaleLowerCase() === title?.trim().toLocaleLowerCase();
   return (
     <>
       {document.title && !same(document.title) && <h4 className="panel-doc-title">{document.title}</h4>}
       {inline && document.subtitle && !same(document.subtitle) && <p className="muted small panel-subtitle">{document.subtitle}</p>}
       {inline && document.summary && <p className="panel-summary">{document.summary}</p>}
-      {document.blocks.map((block) => <BlockView key={block.id} block={block} repeats={same} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={onHideCompleted} />)}
+      {document.blocks.map((block) => <BlockView key={block.id} block={block} repeats={same} onInsert={onInsert} hideCompleted={hideCompleted} onHideCompleted={inline ? onHideCompleted : undefined} />)}
     </>
   );
 }
