@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 import { MessageSquarePlus, Plus } from "lucide-react";
-import type { ConfigView } from "../../../../src/dashboard/management.js";
+import type { AgentSummary, ConfigView } from "../../../../src/dashboard/management.js";
 import { api, errorText } from "../../api.js";
 import { Link, useRouter } from "../../router.js";
 import { Empty, ErrorMessage, Field, Modal } from "../../ui.js";
 import { AgentActionDialog, AgentActionsMenu, type AgentAction } from "./AgentActions.js";
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+/** What an agent selects, as the Agents list and the sidebar show it: `2 tools · 1 skill`. */
+export const agentSelectionText = (summary: AgentSummary) => `${plural(summary.tools, "tool")} · ${plural(summary.skills, "skill")}`;
+
+/** The sidebar's line under an agent's name: its model and what it selects, or the package it is bound to. */
+export const agentSubtitle = (summary: AgentSummary) =>
+  [summary.model, summary.from ? `Package ${summary.from}` : agentSelectionText(summary)].filter(Boolean).join(" · ");
 
 export function AgentsList({
   config,
@@ -53,7 +60,7 @@ export function AgentsList({
                     {summary?.from ? (
                       <code title={summary.from}>{summary.from}</code>
                     ) : summary ? (
-                      `${plural(summary.tools, "tool")} · ${plural(summary.skills, "skill")}`
+                      agentSelectionText(summary)
                     ) : null}
                   </span>
                   <div className="actions">

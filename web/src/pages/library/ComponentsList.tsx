@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
+import { mutate } from "swr";
 import type { ComponentInfo } from "../../../../src/management/components.js";
 import { api, errorText } from "../../api.js";
+import { keys } from "../../data/keys.js";
 import { Link, useRouter } from "../../router.js";
 import { Empty, ErrorMessage, Field, Modal } from "../../ui.js";
 
@@ -183,7 +185,9 @@ function CreateComponentDialog({
                   }
                 : { id: `local/${folder}`, cloneFrom: template },
             ).then(
-              () => {
+              async () => {
+                // The list and the sidebar's count read this catalog; the detail page does not refetch it.
+                await mutate(keys.components(kind));
                 onOpenChange(false);
                 navigate(`/library/${kind}/${encodeURIComponent(`local/${folder}`)}`);
               },

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { MessageSquarePlus } from "lucide-react";
 import type { PackageStageView } from "../../../src/dashboard/packages.js";
+import { mutate } from "swr";
 import { api, errorText } from "../api.js";
+import { keys } from "../data/keys.js";
 import { useConfig, usePackages, usePackageStages } from "../data/queries.js";
 import { usePageGate } from "../states.js";
 import { useRouter } from "../router.js";
@@ -27,9 +29,15 @@ export function PackagesPage({
   const [exporting, setExporting] = useState(false);
   const [status, setStatus] = useState<{ text: string; agent?: string }>();
   const [discard, setDiscard] = useState<{ busy?: string; error?: string }>({});
-  // `changed` revalidates bootstrap and the shared `/config`; packages are local to this page.
+  // `changed` revalidates bootstrap and the shared `/config`; a package can add or remove tools, skills and hooks, whose
+  // catalogs the sidebar counts.
   const refresh = async () => {
-    await Promise.all([mutatePackages(), mutateStages(), changed()]);
+    await Promise.all([
+      mutatePackages(),
+      mutateStages(),
+      changed(),
+      ...(["tools", "skills", "hooks"] as const).map((kind) => mutate(keys.components(kind))),
+    ]);
   };
   const staged = async (stage: PackageStageView, replacing?: string) => {
     setImporting(undefined);

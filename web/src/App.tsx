@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import {
   Activity,
   ArrowRight,
+  BookOpen,
   Bot,
   Check,
   ChevronDown,
@@ -11,7 +12,12 @@ import {
   MessageSquare,
   Plus,
   Search,
+  KeyRound,
+  Package,
+  Plug,
   Settings,
+  Webhook,
+  Wrench,
   X,
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
@@ -25,8 +31,13 @@ import {
   prefetchConfig,
   useActivity,
   useBootstrap,
+  useComponents,
+  useConfig,
+  usePackages,
   useSessions,
 } from "./data/queries.js";
+import { agentSubtitle } from "./pages/agents/AgentsList.js";
+import type { DashboardBootstrap } from "../../src/dashboard/contract.js";
 import { isTerminal } from "./session.js";
 import { usePreferences } from "./preferences.js";
 import { Link, useRouter } from "./router.js";
@@ -64,7 +75,76 @@ const categories = [
   "sessions",
   "diagnostics",
 ];
-const librarySections = ["tools", "skills", "hooks", "vars", "mcp", "packages"];
+const librarySections = [
+  { name: "tools", label: "Tools", Icon: Wrench },
+  { name: "skills", label: "Skills", Icon: BookOpen },
+  { name: "hooks", label: "Hooks", Icon: Webhook },
+  { name: "vars", label: "Vars", Icon: KeyRound },
+  { name: "mcp", label: "MCP", Icon: Plug },
+  { name: "packages", label: "Packages", Icon: Package },
+] as const;
+
+/**
+ * Library's rows in the sidebar, each with its icon and how many items its page lists (docs/chat-design.md §3). The
+ * counts read the pages' own caches, so they run nothing; one that is loading or failed is left out, never shown as 0.
+ */
+function LibraryNav({ current }: { current: string | undefined }) {
+  // SWR keeps the last data when a refresh fails; a failed list shows no count rather than a stale one.
+  const count = ({ data, error }: { data: { length: number } | undefined; error: unknown }) => (error ? undefined : data?.length);
+  const tools = useComponents("tools");
+  const skills = useComponents("skills");
+  const hooks = useComponents("hooks");
+  const packages = usePackages();
+  const config = useConfig();
+  const counts: Record<string, number | undefined> = {
+    tools: count(tools),
+    skills: count(skills),
+    hooks: count(hooks),
+    vars: count({ data: config.data?.vars, error: config.error }),
+    mcp: count({ data: config.data?.mcp, error: config.error }),
+    packages: count(packages),
+  };
+  return (
+    <nav aria-label="Library categories" className="context-nav">
+      <div className="group-label">Library</div>
+      {librarySections.map(({ name, label, Icon }) => (
+        <Link key={name} href={`/library/${name}`} aria-current={current === name ? "page" : undefined}>
+          <Icon size={16} className="nav-icon" aria-hidden="true" />
+          {label}
+          {counts[name] !== undefined && <span className="nav-count" aria-hidden="true">{counts[name]}</span>}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+/** The agents in the sidebar like chat sessions: an initial, the name, what it uses, and a dot on the default. */
+function AgentsNav({ bootstrap, current }: { bootstrap: DashboardBootstrap | undefined; current: string | undefined }) {
+  const { data: config } = useConfig();
+  const fallback = bootstrap?.config.defaultAgent;
+  const defaultAgent = config ? config.defaultAgent : fallback;
+  return (
+    <nav aria-label="Agents" className="context-nav">
+      <div className="group-label">Agents</div>
+      {bootstrap?.config.agents.map((name) => {
+        const summary = config?.agentSummaries?.[name];
+        return (
+          <Link key={name} href={`/agents/${encodeURIComponent(name)}`} aria-current={current === name ? "page" : undefined}>
+            <span className="nav-avatar" aria-hidden="true">{name[0]}</span>
+            <span className="nav-agent">
+              <strong>
+                <span>{name}</span>
+                {defaultAgent === name && <span className="nav-default" title="Default agent" aria-hidden="true" />}
+              </strong>
+              {summary && <small aria-hidden="true">{agentSubtitle(summary)}</small>}
+            </span>
+          </Link>
+        );
+      })}
+      {bootstrap && !bootstrap.config.agents.length && <p className="muted context-empty">No agents yet</p>}
+    </nav>
+  );
+}
 
 export function App() {
   const { path, navigate } = useRouter();
@@ -399,32 +479,9 @@ export function App() {
           ))}
         </nav>
       ) : page === "library" ? (
-        <nav aria-label="Library categories" className="context-nav">
-          <div className="group-label">Library</div>
-          {librarySections.map((name) => (
-            <Link
-              key={name}
-              href={`/library/${name}`}
-              aria-current={librarySection === name ? "page" : undefined}
-            >
-              {name === "mcp" ? "MCP" : name[0]!.toUpperCase() + name.slice(1)}
-            </Link>
-          ))}
-        </nav>
+        <LibraryNav current={librarySection} />
       ) : (
-        <nav aria-label="Agents" className="context-nav">
-          <div className="group-label">Agents</div>
-          {bootstrap?.config.agents.map((name) => (
-            <Link
-              key={name}
-              href={`/agents/${encodeURIComponent(name)}`}
-              aria-current={currentAgent === name ? "page" : undefined}
-            >
-              {name}
-            </Link>
-          ))}
-          {bootstrap && !bootstrap.config.agents.length && <p className="muted context-empty">No agents yet</p>}
-        </nav>
+        <AgentsNav bootstrap={bootstrap} current={currentAgent} />
       )}
       <div className="context-footer">
         <span className="local-indicator">● Local workspace</span>

@@ -101,6 +101,9 @@ screen-reader verdict. This is separate from the automated browser suite.
 
 Agents may select ordered hooks. Use the Hooks component view to create or edit `hook.json` and scripts, then add a hook ID in the agent editor. The catalog shows event filters and validation without executing the hook. Package exports can carry selected hooks to another installation; see [hooks](hooks.md) and [packages](packages.md).
 
+The sidebar lists every agent with its model and what it selects, with a dot on
+the default; on Library it lists each page with how many items it holds.
+
 The Agents list shows each agent's model, how many tools and skills it selects
 (or the package it is bound to) and which one is the default. Each row has New
 chat and a ⋯ menu with Set as default, Duplicate, Rename and Delete. Every action
