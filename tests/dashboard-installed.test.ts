@@ -16,8 +16,10 @@ async function command(bin: string, args: string[], cwd: string, env: NodeJS.Pro
   const child = spawn(...launch(bin, args), { cwd, env, stdio: ["ignore", "pipe", "pipe"], signal: AbortSignal.timeout(600_000) });
   let stdout = "", stderr = ""; child.stdout.on("data", part => { stdout += String(part); }); child.stderr.on("data", part => { stderr += String(part); });
   const started = Date.now();
+  let exited = "";
+  child.once("exit", (code, signal) => { exited = ` (the process exited ${code ?? signal} after ${Date.now() - started} ms; its pipes stayed open)`; });
   const code = await new Promise<number | null>((resolve, reject) => {
-    child.once("error", (error) => reject(new Error(`${bin} ${args[0]} failed after ${Date.now() - started} ms: ${error.message}\nstdout: ${stdout.slice(-2000)}\nstderr: ${stderr.slice(-2000)}`)));
+    child.once("error", (error) => reject(new Error(`${bin} ${args[0]} failed after ${Date.now() - started} ms${exited}: ${error.message}\nstdout: ${stdout.slice(-2000)}\nstderr: ${stderr.slice(-4000)}`)));
     child.once("close", resolve);
   });
   assert.equal(code, 0, `${bin} ${args[0]}: ${stderr}`); return { stdout, stderr };
@@ -49,7 +51,7 @@ test("packed dashboard configures, reconnects, updates a package, then installed
     const packed = await command("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", root], repo, env);
     const tarball = join(root, (JSON.parse(packed.stdout) as Array<{ filename: string }>)[0]!.filename);
     const artifactHash = createHash("sha256").update(await readFile(tarball)).digest("hex");
-    await command("npm", ["install", "--omit=dev", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund", tarball], consumer, env);
+    await command("npm", ["install", "--omit=dev", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=silly", tarball], consumer, env);
     const installed = join(consumer, "node_modules/@tlelabs/raw"), bin = join(consumer, "node_modules/.bin/raw");
     assert.equal(existsSync(join(consumer, "node_modules/vite")), false);
     for (const file of ["docs/dashboard.md", "docs/dashboard-api.md", "docs/cli.md", "docs/architecture.md", "docs/hooks.md", "examples/hooks/guard/hook.json", "dist/dashboard/index.html"]) {
