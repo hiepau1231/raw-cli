@@ -151,14 +151,15 @@ try {
   from = await now(page);
   await typeKeys(cdp, KEYS, 50);
   to = await now(page);
-  // CSS, not a role query: computing accessible names over the whole long chat would itself make a long frame.
-  const stop = page.locator(".composer-send.stop");
-  const overlap = growth > grownBefore && (await stop.count()) > 0;
+  // CSS, not a role query: computing accessible names over the whole long chat would itself make a long frame. While the
+  // turn runs the composer shows Stop when the box is empty and the send-options chevron when it holds text.
+  const working = page.locator(".composer-send.stop, .composer-send-more");
+  const overlap = growth > grownBefore && (await working.count()) > 0;
   const streaming = await samples(page, from, to, KEYS, calibrated);
   await page.evaluate(() => (window as unknown as { __commits: { start(): void } }).__commits.start());
   await sleep(1500);
   const streamingCommits = await page.evaluate(() => (window as unknown as { __commits: { stop(): unknown } }).__commits.stop());
-  await expect(stop).toHaveCount(0, { timeout: 60000 * cpu });
+  await expect(working).toHaveCount(0, { timeout: 60000 * cpu });
   // While typing during the stream: the measuring's own page queries and the probe's walk come after.
   const loafStreaming = await longFrames(page, from, to);
   const answers = await assistants.count();
