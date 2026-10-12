@@ -24,7 +24,10 @@ test("malformed, extra, invalid UTF-8, failed exit, output overflow and invalid 
 test("timeout and abort settle boundedly, including inherited pipes", async () => {
   for (const mode of ["hang", "descendant"]) {
     const started = Date.now();
-    await assert.rejects(runVariableProvider(spec(mode, 150), request), /var_provider_timeout/);
+    // On Windows the provider's job ends the descendant as soon as the provider exits, so its pipes close at once and
+    // the empty output is the failure; elsewhere the descendant holds them open until the deadline.
+    const expected = mode === "descendant" && process.platform === "win32" ? /var_provider_invalid_response/ : /var_provider_timeout/;
+    await assert.rejects(runVariableProvider(spec(mode, 150), request), expected);
     assert.ok(Date.now() - started < 3000);
   }
   await assert.rejects(runVariableProvider(spec("ok"), request, { signal: AbortSignal.abort() }), /aborted/);

@@ -185,7 +185,8 @@ test("a .cmd in a folder with a space receives its arguments unchanged through t
   const dir = mkdtempSync(join(tmpdir(), "raw cmd "));
   try {
     const script = join(dir, "echo args.js");
-    writeFileSync(script, `${echo}\n`);
+    // A script's own path is argv[1], so its arguments start at argv[2].
+    writeFileSync(script, "process.stdout.write(JSON.stringify(process.argv.slice(2)))\n");
     writeFileSync(join(dir, "show.cmd"), `@"${process.execPath}" "%~dp0echo args.js" %*\r\n`);
     const args = ["a b", "\"q\"", "a&b", "50%", "x^y"];
     const result = run(launch(join(dir, "show.cmd"), args, dir), { cwd: dir });
