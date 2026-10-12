@@ -67,7 +67,7 @@ function mergeEnv(base, overrides = {}, platform = process.platform) {
 // src/tools/bundled/process/index.ts
 var ACTIONS = ["start", "list", "status", "output", "stop"];
 var FIELDS = {
-  start: ["action", "command", "cwd", "label", "timeout", "env_refs"],
+  start: ["action", "command", "shell", "cwd", "label", "timeout", "env_refs"],
   list: ["action"],
   status: ["action", "id"],
   output: ["action", "id", "cursor", "max_bytes"],
@@ -112,6 +112,7 @@ function validateArgs(raw) {
   if (extra) return `${extra} is not used by action ${args.action}; example: ${EXAMPLES[args.action]}`;
   if (args.action === "start") {
     if (typeof args.command !== "string" || !args.command.trim() || args.command.length > 65536) return `start needs a nonempty command of at most 65536 characters; example: ${EXAMPLES.start}`;
+    if (args.shell !== void 0 && args.shell !== "bash" && args.shell !== "powershell") return "shell must be bash or powershell";
     if (args.cwd !== void 0 && (typeof args.cwd !== "string" || !args.cwd || isAbsolute2(args.cwd))) return "cwd must be relative to the session";
     if (args.label !== void 0 && (typeof args.label !== "string" || !args.label || [...args.label].length > 200)) return "label must be 1\u2013200 characters";
     if (args.timeout !== void 0 && (!Number.isSafeInteger(args.timeout) || args.timeout < 1 || args.timeout > 2147483647)) return "timeout must be a positive number of milliseconds";
@@ -145,6 +146,7 @@ async function handler(raw, context) {
         command: args.command,
         cwd: resolveToolPath(context.cwd, args.cwd ?? "."),
         workspace: context.cwd,
+        ...args.shell === "powershell" ? { shell: "powershell" } : {},
         ...args.label ? { label: args.label } : {},
         ...args.timeout !== void 0 ? { timeout_ms: args.timeout } : {},
         ...context.signal ? { signal: context.signal } : {},

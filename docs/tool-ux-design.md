@@ -155,6 +155,8 @@ No harness uses a batch array of commands or files. Models run several commands 
   - `timeout_s` and `timeout_seconds` are multiplied by 1000 into `timeout`;
   - `workdir`, `cwd`, `dir_path` and `directory` mean cd into that directory first. The value is resolved against the session cwd and must stay inside the workspace rules that already apply to `process.cwd`.
 
+**`powershell`** (added for native Windows, 2026-10-13) takes exactly `bash`'s shape, aliases and result, and runs the command in PowerShell; its background jobs start `process` with `shell: "powershell"`.
+
 **`read_file`**
 
 ```jsonc

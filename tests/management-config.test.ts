@@ -84,3 +84,17 @@ test("CLI/browser starter factory has the seven skills and initialization never 
     await assert.rejects(initializeConfig(options), /already exists/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("the starter selects the PowerShell tool only on Windows without Git Bash", () => {
+  const shellOf = (config: Record<string, unknown>) => (config.agents as Record<string, { tools: { use: string[] } }>).raw!.tools.use
+    .filter((id) => id === "builtin/bash" || id === "builtin/powershell");
+  const windows = createStarterConfig({ platform: "win32", bashAvailable: false });
+  assert.deepEqual(shellOf(windows), ["builtin/powershell"]);
+  // Only the shell differs, in the same slot.
+  const bash = createStarterConfig({ platform: "win32", bashAvailable: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(windows).replace("builtin/powershell", "builtin/bash")), bash);
+  for (const options of [{ platform: "darwin" as const, bashAvailable: false }, { platform: "linux" as const }, { platform: "win32" as const }]) {
+    assert.deepEqual(shellOf(createStarterConfig(options)), ["builtin/bash"], JSON.stringify(options));
+  }
+  if (process.platform !== "win32") assert.deepEqual(createStarterConfig(), bash);
+});

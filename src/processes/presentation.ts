@@ -5,7 +5,7 @@ import type { ToolResult } from "../tools/types.js";
 import { utf8Prefix } from "../tools/results.js";
 import { LIVE_PROCESS_STATES, ProcessError, type ProcessOutput, type ProcessRecord, type ProcessChunk } from "./contract.js";
 export interface CommandRecord {
-  id: string; sessionId: string; kind: "foreground" | "background"; owner: "builtin/bash" | "builtin/process";
+  id: string; sessionId: string; kind: "foreground" | "background"; owner: "builtin/bash" | "builtin/powershell" | "builtin/process";
   command: string; commandTruncated?: boolean; cwd: string; label?: string; state: ProcessRecord["state"]; createdAt: number; updatedAt: number;
   endedAt?: number; exitCode?: number | null; signal?: string | null; error?: string; cursor: number; droppedBytes: number;
   /** Foreground Bash: the model's call id, and the complete output the call saved (docs/tool-ux-design.md §6.4). */
@@ -20,7 +20,7 @@ export const COMMAND_ROWS = 132;
 export interface CommandListing { items: CommandRecord[]; omitted: number }
 export interface CommandActivity {
   /** `label` is the call's description. */
-  begin(command: string, cwd: string, call?: { label?: string; toolCallId?: string }): { output(channel: "stdout" | "stderr", text: string): void; finish(result: ToolResult): void };
+  begin(command: string, cwd: string, call?: { label?: string; toolCallId?: string; owner?: "builtin/bash" | "builtin/powershell" }): { output(channel: "stdout" | "stderr", text: string): void; finish(result: ToolResult): void };
 }
 export function terminalText(text: string): string {
   return stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
@@ -100,7 +100,7 @@ export class Commands {
   }
   forSession(sessionId:string):CommandActivity {
     return {begin:(command,cwd,call)=>{
-      const entry:Entry={record:{id:randomUUID(),sessionId,kind:"foreground",owner:"builtin/bash",command:terminalText(utf8Prefix(command,4096).text),...(Buffer.byteLength(command)>4096?{commandTruncated:true}:{}),cwd:terminalText(cwd),state:"running",createdAt:Date.now(),updatedAt:Date.now(),cursor:0,droppedBytes:0,
+      const entry:Entry={record:{id:randomUUID(),sessionId,kind:"foreground",owner:call?.owner??"builtin/bash",command:terminalText(utf8Prefix(command,4096).text),...(Buffer.byteLength(command)>4096?{commandTruncated:true}:{}),cwd:terminalText(cwd),state:"running",createdAt:Date.now(),updatedAt:Date.now(),cursor:0,droppedBytes:0,
         ...(call?.label?{label:terminalText(utf8Prefix(call.label,800).text)}:{}),...(call?.toolCallId?{toolCallId:call.toolCallId}:{})},chunks:[]};
       this.active.set(entry.record.id,entry);this.save(entry);
       let finished=false;

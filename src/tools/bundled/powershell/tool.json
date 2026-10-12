@@ -1,0 +1,61 @@
+{
+  "api_version": 2,
+  "id": "powershell",
+  "version": "1.0.0",
+  "name": "powershell",
+  "description": "Run one PowerShell command (pwsh 7 when installed, otherwise Windows PowerShell 5.1, where && and || do not exist: use ; and if ($?) { … }) in the session cwd. The result is its output, stdout and stderr in the order produced, then a status line such as [exit 0 · 1.2s]; a nonzero exit is reported, not an error. Example: {\"command\":\"npm test\",\"timeout\":300000,\"description\":\"Run the test suite\"}. timeout is in milliseconds (default 120000, maximum 600000). For several commands make several calls, or join them with ;. Set run_in_background for servers and watchers, then use the process tool to read output or stop them. Long output keeps its start and end and names a file holding all of it.",
+  "display": {
+    "title": "{description|Run command}",
+    "kind": "execute",
+    "summary": "$ {command}",
+    "result": "terminal"
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "minLength": 1,
+        "description": "The PowerShell command to run."
+      },
+      "timeout": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Deadline in milliseconds; default 120000, maximum 600000."
+      },
+      "description": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "A few words saying what the command does, shown as its title."
+      },
+      "workdir": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Directory to run in, relative to the session cwd."
+      },
+      "run_in_background": {
+        "type": "boolean",
+        "description": "Start the command as a background job and return its ID instead of waiting."
+      },
+      "env_refs": {
+        "type": "object",
+        "description": "Map child environment names to selected Raw variable names; values are references, not literal values.",
+        "propertyNames": {
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "required": [
+      "command"
+    ],
+    "additionalProperties": false
+  },
+  "entry": "./index.mjs",
+  "condition_sources": [
+    "arguments"
+  ]
+}

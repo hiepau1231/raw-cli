@@ -3,7 +3,7 @@
   "id": "process",
   "version": "1.0.0",
   "name": "process",
-  "description": "Manage background jobs of this session: servers, watchers and other long commands. One action per call. Start: {\"action\":\"start\",\"command\":\"npm run dev\",\"label\":\"Dev server\"} returns the job id. Then {\"action\":\"output\",\"id\":\"<id>\"} reads new output (pass the returned next cursor as cursor to continue), {\"action\":\"status\",\"id\":\"<id>\"} shows its state, {\"action\":\"stop\",\"id\":\"<id>\"} ends its process group, and {\"action\":\"list\"} lists jobs. Jobs keep running across turns; a started job is not yet known to be ready, so read its output. Limits: 8 live jobs per session, 1 MiB of recent output per job.",
+  "description": "Manage background jobs of this session: servers, watchers and other long commands. One action per call. Start: {\"action\":\"start\",\"command\":\"npm run dev\",\"label\":\"Dev server\"} returns the job id; add \"shell\":\"powershell\" to run it in PowerShell. Then {\"action\":\"output\",\"id\":\"<id>\"} reads new output (pass the returned next cursor as cursor to continue), {\"action\":\"status\",\"id\":\"<id>\"} shows its state, {\"action\":\"stop\",\"id\":\"<id>\"} ends its process group, and {\"action\":\"list\"} lists jobs. Jobs keep running across turns; a started job is not yet known to be ready, so read its output. Limits: 8 live jobs per session, 1 MiB of recent output per job.",
   "display": {
     "title": "Process",
     "kind": "execute",
@@ -29,7 +29,15 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 65536,
-        "description": "start: the Bash command to run."
+        "description": "start: the command to run, in Bash unless shell is powershell."
+      },
+      "shell": {
+        "type": "string",
+        "enum": [
+          "bash",
+          "powershell"
+        ],
+        "description": "start: the shell that runs the command; bash when omitted."
       },
       "id": {
         "type": "string",

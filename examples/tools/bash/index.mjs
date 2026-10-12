@@ -45,10 +45,10 @@ function sweep(root) {
     const cutoff = Date.now() - SPILL_RETENTION_MS;
     for (const name of readdirSync(root)) {
       if (!name.startsWith(PREFIX)) continue;
-      const path4 = join(root, name);
-      if (path4 === directory) continue;
+      const path5 = join(root, name);
+      if (path5 === directory) continue;
       try {
-        if (statSync(path4).mtimeMs < cutoff) rmSync(path4, { recursive: true, force: true });
+        if (statSync(path5).mtimeMs < cutoff) rmSync(path5, { recursive: true, force: true });
       } catch {
       }
     }
@@ -91,10 +91,10 @@ var OutputSpill = class {
     const buffer = typeof data === "string" ? Buffer.from(data) : data;
     try {
       if (this.fd === void 0) {
-        const path4 = join(spillDirectory(), `${this.label}-${randomUUID().slice(0, 8)}.log`);
-        this.fd = openSync(path4, "wx", 384);
-        this.path = path4;
-        this.entry = { path: path4, bytes: 0 };
+        const path5 = join(spillDirectory(), `${this.label}-${randomUUID().slice(0, 8)}.log`);
+        this.fd = openSync(path5, "wx", 384);
+        this.path = path5;
+        this.entry = { path: path5, bytes: 0 };
         saved.push(this.entry);
       }
       const room = SPILL_MAX_BYTES - this.bytes;
@@ -118,8 +118,8 @@ var OutputSpill = class {
     this.fd = void 0;
   }
 };
-function savedLabel(path4, capped = false) {
-  return path4 && capped ? `${path4} (first ${SPILL_MAX_BYTES} bytes only)` : path4;
+function savedLabel(path5, capped = false) {
+  return path5 && capped ? `${path5} (first ${SPILL_MAX_BYTES} bytes only)` : path5;
 }
 
 // src/tools/results.ts
@@ -201,6 +201,10 @@ import { dirname as dirname4 } from "path";
 import { spawn as spawn2 } from "child_process";
 import { StringDecoder } from "string_decoder";
 
+// src/tools/shells.ts
+import { constants as constants2, accessSync, statSync as statSync3 } from "fs";
+import path4 from "path";
+
 // src/platform/windows.ts
 import { spawn, spawnSync } from "child_process";
 import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
@@ -275,7 +279,7 @@ function resolveCommand(command, args, options) {
   const extension = win32.extname(file).toLowerCase();
   if ([".js", ".mjs", ".cjs"].includes(extension)) return { ok: true, file: options.node ?? process.execPath, args: [file, ...args] };
   if (extension === ".ps1") {
-    const powershell = (options.powershell ?? (() => findPowerShell(env, exists)))();
+    const powershell = (options.powershell ?? (() => findPowerShell(env, exists, options.cwd)))();
     if (!powershell) return { ok: false, code: "not_found", message: "PowerShell was not found" };
     return { ok: true, file: powershell, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file, ...args] };
   }
@@ -317,17 +321,21 @@ function quoteWindowsArgument(arg) {
   }
   return `"${out}"`;
 }
-function findPowerShell(env = process.env, exists = isRegularFile) {
+function findPowerShell(env = process.env, exists = isRegularFile, workspace) {
   const configured = envValue(env, "RAW_POWERSHELL_PATH");
   if (configured) return configured;
-  const onPath = resolveCommand("pwsh", [], { cwd: "C:\\", env, platform: "win32", exists });
-  if (onPath.ok) return onPath.file;
+  const outside = (candidate) => workspace === void 0 || !contained(workspace, candidate, win32);
+  for (const directory2 of (envValue(env, "PATH") ?? "").split(";")) {
+    const entry = directory2.replace(/^"(.*)"$/, "$1");
+    if (!entry || !win32.isAbsolute(entry) || !outside(entry)) continue;
+    if (exists(win32.join(entry, "pwsh.exe"))) return win32.join(entry, "pwsh.exe");
+  }
   const programFiles = envValue(env, "ProgramFiles");
   for (const candidate of [
     ...programFiles ? [win32.join(programFiles, "PowerShell", "7", "pwsh.exe")] : [],
     systemBinary(win32.join("WindowsPowerShell", "v1.0", "powershell.exe"), env)
   ]) {
-    if (exists(candidate)) return candidate;
+    if (outside(candidate) && exists(candidate)) return candidate;
   }
   return void 0;
 }
@@ -450,16 +458,69 @@ function terminateTree(child, options) {
 
 // src/tools/shells.ts
 var BASH_UNAVAILABLE = "Bash was not found. Install Git for Windows, set RAW_BASH_PATH to its bin\\bash.exe, or select builtin/powershell.";
+var POWERSHELL_UNAVAILABLE = "PowerShell was not found. Install PowerShell 7 (pwsh) or set RAW_POWERSHELL_PATH to pwsh or powershell.exe.";
 var found = /* @__PURE__ */ new Map();
+function cached(kind, options, names, search) {
+  const env = options.env ?? process.env;
+  const key = JSON.stringify([kind, options.workspace, ...names.map((name) => envValue(env, name) ?? null)]);
+  const hit = options.exists ? void 0 : found.get(key);
+  const result = hit ?? search();
+  if (result && !options.exists) found.set(key, result);
+  return result;
+}
 function resolveBash(options) {
   const env = options.env ?? process.env;
   if ((options.platform ?? process.platform) !== "win32") return { ok: true, path: env.RAW_BASH_PATH || "bash" };
-  const key = JSON.stringify([options.workspace, ...["RAW_BASH_PATH", "PATH", "ProgramFiles", "ProgramW6432", "LOCALAPPDATA", "SystemRoot", "windir"].map((name) => envValue(env, name) ?? null)]);
-  const cached = options.exists ? void 0 : found.get(key);
-  const path4 = cached ?? findGitBash(env, options.workspace, options.exists);
-  if (!path4) return { ok: false, code: "bash_unavailable", message: BASH_UNAVAILABLE };
-  if (!options.exists) found.set(key, path4);
-  return { ok: true, path: path4 };
+  const found2 = cached(
+    "bash",
+    options,
+    ["RAW_BASH_PATH", "PATH", "ProgramFiles", "ProgramW6432", "LOCALAPPDATA", "SystemRoot", "windir"],
+    () => findGitBash(env, options.workspace, options.exists)
+  );
+  return found2 ? { ok: true, path: found2 } : { ok: false, code: "bash_unavailable", message: BASH_UNAVAILABLE };
+}
+var executable = (file) => {
+  try {
+    return statSync3(file).isFile() && (accessSync(file, constants2.X_OK), true);
+  } catch {
+    return false;
+  }
+};
+function resolvePowerShell(options) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const search = platform === "win32" ? () => findPowerShell(env, options.exists, options.workspace) : () => {
+    if (env.RAW_POWERSHELL_PATH) return env.RAW_POWERSHELL_PATH;
+    const exists = options.exists ?? executable;
+    for (const entry of (env.PATH ?? "").split(path4.posix.delimiter)) {
+      if (!path4.posix.isAbsolute(entry) || contained(options.workspace, entry, path4.posix)) continue;
+      if (exists(path4.posix.join(entry, "pwsh"))) return path4.posix.join(entry, "pwsh");
+    }
+    return void 0;
+  };
+  const result = cached("powershell", options, ["RAW_POWERSHELL_PATH", "PATH", "ProgramFiles", "SystemRoot", "windir"], search);
+  return result ? { ok: true, path: result } : { ok: false, code: "powershell_unavailable", message: POWERSHELL_UNAVAILABLE };
+}
+var powerShellQuote = (value) => `'${value.replace(/['‘’‚‛]/g, "$&$&")}'`;
+function powerShellArgs(command) {
+  const script = [
+    "$ProgressPreference = 'SilentlyContinue'; if ($PSStyle) { $PSStyle.OutputRendering = 'PlainText' }",
+    "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; $OutputEncoding = [Console]::OutputEncoding",
+    `$__rawText = ${powerShellQuote(command)}`,
+    "try { $__rawAst = [ScriptBlock]::Create($__rawText).Ast } catch { [Console]::Error.WriteLine($_.Exception.GetBaseException().Message); exit 1 }",
+    "$__rawBlock = @($__rawAst.EndBlock, $__rawAst.ProcessBlock, $__rawAst.BeginBlock) | Where-Object { $_ } | Select-Object -First 1",
+    '$__rawRun = if (-not $__rawBlock) { $__rawText } elseif ($__rawBlock.Unnamed) { $__rawText + "`n`$global:__rawOk = `$?" } else { $__rawText.Insert($__rawBlock.Extent.EndOffset - 1, "`n`$global:__rawOk = `$?`n") }',
+    "$global:__rawOk = $true; $global:__rawNative = $false; $global:LASTEXITCODE = 0",
+    "$ExecutionContext.InvokeCommand.PostCommandLookupAction = { param($name, $lookup) $found = $lookup.Command; while ($found -is [System.Management.Automation.AliasInfo]) { $found = $found.ResolvedCommand }; $global:__rawNative = $found -is [System.Management.Automation.ApplicationInfo] }",
+    ". ([ScriptBlock]::Create($__rawRun))",
+    "$ExecutionContext.InvokeCommand.PostCommandLookupAction = $null; Set-StrictMode -Off; $ErrorActionPreference = 'Continue'",
+    "$__rawLast = if ($__rawBlock) { $__rawBlock.Statements | Select-Object -Last 1 }",
+    "$__rawPiped = $__rawLast -is [System.Management.Automation.Language.PipelineAst] -and ($__rawLast.PipelineElements | Select-Object -Last 1) -is [System.Management.Automation.Language.CommandAst]",
+    "if ($global:__rawNative -and ($__rawPiped -or -not $global:__rawOk)) { exit $global:LASTEXITCODE }",
+    "if ($global:__rawOk) { exit 0 }",
+    "exit 1"
+  ].join("\n");
+  return ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script];
 }
 
 // src/tools/process.ts
@@ -542,15 +603,18 @@ function merge(segments) {
   }
   return merged;
 }
+var SHELL_NAMES = { bash: "Bash", powershell: "PowerShell" };
 var jobbedShells = /* @__PURE__ */ new WeakSet();
 function spawnShell(options, platform = process.platform) {
-  const bash = options.bashPath ? { ok: true, path: options.bashPath } : resolveBash({ platform, workspace: options.workspace ?? options.cwd });
-  if (!bash.ok) throw Object.assign(new Error(bash.message), { code: bash.code });
-  let launch = { file: bash.path, args: ["-c", options.command] };
+  const workspace = options.workspace ?? options.cwd;
+  const powershell = options.shell === "powershell";
+  const shell = powershell ? resolvePowerShell({ platform, workspace }) : options.bashPath ? { ok: true, path: options.bashPath } : resolveBash({ platform, workspace });
+  if (!shell.ok) throw Object.assign(new Error(shell.message), { code: shell.code });
+  let launch = { file: shell.path, args: powershell ? powerShellArgs(options.command) : ["-c", options.command] };
   let jobbed = false;
   if (platform === "win32") {
-    const resolved = resolveCommand(bash.path, launch.args, { cwd: options.cwd, platform });
-    if (!resolved.ok) throw Object.assign(new Error(`spawn ${bash.path} ENOENT`), { code: "ENOENT", syscall: "spawn" });
+    const resolved = resolveCommand(shell.path, launch.args, { cwd: options.cwd, platform });
+    if (!resolved.ok) throw Object.assign(new Error(`spawn ${shell.path} ENOENT`), { code: "ENOENT", syscall: "spawn" });
     launch = resolved;
     const launcher = jobLauncher({ platform, stateDir: stateDirectory() });
     launch = wrapInJob(launch, launcher);
@@ -578,15 +642,16 @@ function signalShellGroup(child, signal, platform = process.platform, onError) {
   }
 }
 async function runBash(options) {
-  if (options.signal?.aborted) return errorResult("aborted", "bash aborted before execution");
+  const shell = options.shell ?? "bash";
+  if (options.signal?.aborted) return errorResult("aborted", `${shell} aborted before execution`);
   const timeoutMs = options.timeoutMs ?? 12e4;
   let child;
   try {
     child = spawnShell(options);
   } catch (error) {
     const code = error.code;
-    if (code === "bash_unavailable") return errorResult(code, error.message);
-    return errorResult("bash_spawn_error", `cannot start Bash: ${error.message}`);
+    if (code === "bash_unavailable" || code === "powershell_unavailable") return errorResult(code, error.message);
+    return errorResult(`${shell}_spawn_error`, `cannot start ${SHELL_NAMES[shell]}: ${error.message}`);
   }
   let observedBytes = 0;
   let timedOut = false;
@@ -651,7 +716,7 @@ async function runBash(options) {
     else {
       pending.push(chunk);
       if (observedBytes > max) {
-        spill = new OutputSpill("bash");
+        spill = new OutputSpill(shell);
         for (const buffered of pending) spill.write(buffered);
         pending = [];
       }
@@ -698,7 +763,7 @@ async function runBash(options) {
   }
   spill?.close();
   if (killTimer) clearTimeout(killTimer);
-  if (spawnError) return errorResult("bash_spawn_error", `cannot start Bash: ${spawnError.message}`);
+  if (spawnError) return errorResult(`${shell}_spawn_error`, `cannot start ${SHELL_NAMES[shell]}: ${spawnError.message}`);
   const { segments, truncated } = capture.render(max, savedLabel(spill?.path, spill?.capped));
   const content = segments.map((segment) => segment.channel ? { type: "text", channel: segment.channel, text: segment.text } : { type: "text", text: segment.text });
   if (stopFailure) content.push({ type: "text", text: `
@@ -725,7 +790,11 @@ var BACKGROUND_IGNORED = "[ignored run_in_background: background jobs need the p
 function seconds(ms) {
   return `${(ms / 1e3).toFixed(1)}s`;
 }
-async function bashTool(args, context) {
+function shellTool(kind) {
+  return (args, context) => runShellTool(kind, args, context);
+}
+var bashTool = shellTool("bash");
+async function runShellTool(kind, args, context) {
   const cwd = args.workdir === void 0 ? context.cwd : resolveToolPath(context.cwd, args.workdir);
   const requested = args.timeout ?? BASH_DEFAULT_TIMEOUT_MS;
   const timeout = Math.min(requested, BASH_MAX_TIMEOUT_MS);
@@ -744,13 +813,14 @@ async function bashTool(args, context) {
   }
   let activity;
   try {
-    activity = context.commandActivity?.begin(args.command, cwd, { ...args.description ? { label: args.description } : {}, ...context.toolCallId ? { toolCallId: context.toolCallId } : {} });
+    activity = context.commandActivity?.begin(args.command, cwd, { owner: `builtin/${kind}`, ...args.description ? { label: args.description } : {}, ...context.toolCallId ? { toolCallId: context.toolCallId } : {} });
   } catch {
   }
   const started = performance.now();
   let result;
   try {
     result = await runBash({
+      shell: kind,
       command: args.command,
       cwd,
       workspace: context.cwd,
@@ -759,17 +829,17 @@ async function bashTool(args, context) {
       ...activity ? { onOutput: activity.output } : {},
       ...bindings ? { env: mergeEnv(process.env, bindings) } : {},
       ...context.signal ? { signal: context.signal } : {},
-      ...context.bashPath ? { bashPath: context.bashPath } : {}
+      ...kind === "bash" && context.bashPath ? { bashPath: context.bashPath } : {}
     });
   } catch (error) {
-    result = errorResult("bash_error", error.message);
+    result = errorResult(`${kind}_error`, error.message);
   }
   try {
     activity?.finish(result);
   } catch {
   }
   const durationMs = Math.round(performance.now() - started);
-  if (result.code === "bash_spawn_error" || result.code === "bash_error" || result.code === "bash_unavailable") return { ...result, host: host("error", { durationMs }) };
+  if ([`${kind}_spawn_error`, `${kind}_error`, `${kind}_unavailable`].includes(result.code ?? "")) return { ...result, host: host("error", { durationMs }) };
   const aborted = result.code === "aborted" || context.signal?.aborted === true;
   const stopped = process.platform === "win32" ? "process tree stopped" : "process group stopped";
   const status = aborted ? `[aborted after ${seconds(durationMs)}; ${stopped}]` : result.timedOut ? `[timed out after ${timeout / 1e3}s; ${stopped}]` : result.exitCode === null || result.exitCode === void 0 ? `[killed by ${result.signal ?? "signal"} \xB7 ${seconds(durationMs)}]` : `[exit ${result.exitCode} \xB7 ${seconds(durationMs)}]`;
@@ -792,7 +862,7 @@ async function bashTool(args, context) {
 // src/tools/bundled/bash/index.ts
 var example = { command: "npm test", timeout: 3e5, description: "Run the test suite" };
 var renamedArguments = { commands: "command" };
-var BATCH = 'bash takes one command: {"command":"npm test"}; call bash once per command';
+var batch = (name) => `${name} takes one command: {"command":"npm test"}; call ${name} once per command`;
 function rename2(args, notes, from, to, convert = (value) => value) {
   if (!Object.hasOwn(args, from)) return;
   if (args[to] !== void 0) return;
@@ -805,20 +875,29 @@ var seconds2 = (value) => {
   const number = integer(value);
   return typeof number === "number" && Number.isFinite(number) ? Math.round(number * 1e3) : value;
 };
-function commandText(value) {
+function commandText(shell, value) {
   if (!Array.isArray(value) || !value.length || !value.every((item) => typeof item === "string")) return value;
   const words = value;
-  if (words.length === 3 && /^(?:\/(?:usr\/)?bin\/)?(?:ba)?sh$/.test(words[0]) && /^-l?c$/.test(words[1])) return words[2];
-  return words.map((word) => /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`).join(" ");
+  if (shell === "bash") {
+    if (words.length === 3 && /^(?:\/(?:usr\/)?bin\/)?(?:ba)?sh$/.test(words[0]) && /^-l?c$/.test(words[1])) return words[2];
+    return words.map((word) => /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`).join(" ");
+  }
+  if (words.length === 3 && /(?:^|[\\/])(?:pwsh|powershell)(?:\.exe)?$/i.test(words[0]) && /^-(?:c|command)$/i.test(words[1])) return words[2];
+  const quoted = words.map((word) => /^[\w+=:./\\-]+$/.test(word) ? word : powerShellQuote(word));
+  return `${quoted[0] === words[0] ? "" : "& "}${quoted.join(" ")}`;
 }
-function normalizeArguments(input) {
-  if (Object.hasOwn(input, "commands")) return { args: input, rejected: BATCH };
+var normalizeArguments = shellNormalizer("bash");
+function shellNormalizer(name) {
+  return (input) => normalizeShellArguments(name, input);
+}
+function normalizeShellArguments(name, input) {
+  if (Object.hasOwn(input, "commands")) return { args: input, rejected: batch(name) };
   const args = { ...input };
   const notes = [];
   rename2(args, notes, "cmd", "command");
   rename2(args, notes, "script", "command");
   if (Array.isArray(args.command)) {
-    args.command = commandText(args.command);
+    args.command = commandText(name, args.command);
     notes.push("read the command array as one shell command");
   }
   if (typeof args.timeout === "string") args.timeout = integer(args.timeout);
@@ -834,10 +913,14 @@ function normalizeArguments(input) {
   }
   return { args, notes };
 }
-function validateArgs(value) {
+var validateArgs = shellValidator("bash");
+function shellValidator(name) {
+  return (value) => validateShellArguments(name, value);
+}
+function validateShellArguments(name, value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "arguments must be an object";
   const args = value;
-  if (Object.hasOwn(args, "commands")) return BATCH;
+  if (Object.hasOwn(args, "commands")) return batch(name);
   if (typeof args.command !== "string" || !args.command.trim()) return "command must be a nonempty string";
   if (args.timeout !== void 0 && (!Number.isSafeInteger(args.timeout) || args.timeout < 1)) return "timeout must be a positive integer number of milliseconds";
   if (args.description !== void 0 && (typeof args.description !== "string" || [...args.description].length > 200)) return "description must be a string of at most 200 characters";
@@ -852,6 +935,9 @@ async function handler(args, context) {
   return bashTool(args, context);
 }
 function delegate(args, context, platform = process.platform) {
+  return delegateShell("bash", args, context, platform);
+}
+function delegateShell(shell, args, context, platform = process.platform) {
   if (args.run_in_background !== true) return void 0;
   const command = String(args.command);
   const target = typeof args.workdir === "string" ? resolveToolPath(context.cwd, args.workdir, platform) : context.cwd;
@@ -864,6 +950,7 @@ function delegate(args, context, platform = process.platform) {
     arguments: {
       action: "start",
       command,
+      ...shell === "bash" ? {} : { shell },
       ...workdir ? { cwd: workdir } : {},
       ...typeof args.description === "string" && args.description ? { label: args.description } : {},
       ...args.env_refs ? { env_refs: args.env_refs } : {},
@@ -886,9 +973,12 @@ Stop: process {"action":"stop","id":"${id}"}` + (clamped ? `
 }
 export {
   delegate,
+  delegateShell,
   example,
   handler,
   normalizeArguments,
   renamedArguments,
+  shellNormalizer,
+  shellValidator,
   validateArgs
 };

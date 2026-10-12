@@ -90,7 +90,7 @@ export function resolveCommand(command: string, args: readonly string[], options
   const extension = win32.extname(file).toLowerCase();
   if ([".js", ".mjs", ".cjs"].includes(extension)) return { ok: true, file: options.node ?? process.execPath, args: [file, ...args] };
   if (extension === ".ps1") {
-    const powershell = (options.powershell ?? (() => findPowerShell(env, exists)))();
+    const powershell = (options.powershell ?? (() => findPowerShell(env, exists, options.cwd)))();
     if (!powershell) return { ok: false, code: "not_found", message: "PowerShell was not found" };
     return { ok: true, file: powershell, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file, ...args] };
   }
@@ -141,16 +141,24 @@ export function quoteWindowsArgument(arg: string): string {
   return `"${out}"`;
 }
 
-/** PowerShell: RAW_POWERSHELL_PATH, then pwsh on PATH, then PowerShell 7, then the Windows PowerShell in System32. */
-export function findPowerShell(env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = isRegularFile): string | undefined {
+/**
+ * PowerShell: RAW_POWERSHELL_PATH, then pwsh.exe on PATH (absolute entries outside `workspace`), then PowerShell 7 in
+ * Program Files, then the Windows PowerShell in System32.
+ */
+export function findPowerShell(env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = isRegularFile,
+  workspace?: string): string | undefined {
   const configured = envValue(env, "RAW_POWERSHELL_PATH");
   if (configured) return configured;
-  const onPath = resolveCommand("pwsh", [], { cwd: "C:\\", env, platform: "win32", exists });
-  if (onPath.ok) return onPath.file;
+  const outside = (candidate: string) => workspace === undefined || !contained(workspace, candidate, win32);
+  for (const directory of (envValue(env, "PATH") ?? "").split(";")) {
+    const entry = directory.replace(/^"(.*)"$/, "$1");
+    if (!entry || !win32.isAbsolute(entry) || !outside(entry)) continue;
+    if (exists(win32.join(entry, "pwsh.exe"))) return win32.join(entry, "pwsh.exe");
+  }
   const programFiles = envValue(env, "ProgramFiles");
   for (const candidate of [...(programFiles ? [win32.join(programFiles, "PowerShell", "7", "pwsh.exe")] : []),
     systemBinary(win32.join("WindowsPowerShell", "v1.0", "powershell.exe"), env)]) {
-    if (exists(candidate)) return candidate;
+    if (outside(candidate) && exists(candidate)) return candidate;
   }
   return undefined;
 }

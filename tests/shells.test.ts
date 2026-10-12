@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { findGitBash } from "../src/platform/windows.js";
-import { BASH_UNAVAILABLE, resolveBash } from "../src/tools/shells.js";
+import { findGitBash, findPowerShell } from "../src/platform/windows.js";
+import { BASH_UNAVAILABLE, POWERSHELL_UNAVAILABLE, resolveBash, resolvePowerShell } from "../src/tools/shells.js";
 
 const base = { SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files", ProgramW6432: "C:\\Program Files",
   LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local" };
@@ -80,4 +80,41 @@ test("on Windows a cached Bash is looked up again when an excluding folder chang
     assert.deepEqual(at(join(dir, "elsewhere")), { ok: true, path: join(dir, "win", "tools", "bash.exe") });
     assert.equal(at(join(dir, "win")).ok, false, "the same PATH under the new Windows folder is excluded, not served from the cache");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("PowerShell is found in the documented order on Windows", () => {
+  const onPath = "D:\\tools\\pwsh\\pwsh.exe";
+  const seven = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
+  const five = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+  const all = [onPath, seven, five];
+  const look = (env: NodeJS.ProcessEnv, present: string[]) => findPowerShell({ ...base, ...env }, files(...present), "C:\\repo");
+  assert.equal(look({ RAW_POWERSHELL_PATH: "E:\\ps\\pwsh.exe", Path: "D:\\tools\\pwsh" }, all), "E:\\ps\\pwsh.exe");
+  assert.equal(look({ Path: "D:\\tools\\pwsh" }, all), onPath);
+  assert.equal(look({ PATH: "D:\\tools\\pwsh" }, all), onPath, "PATH under any spelling");
+  assert.equal(look({ Path: "D:\\tools\\pwsh" }, all.slice(1)), seven);
+  assert.equal(look({ Path: "" }, [five]), five, "Windows PowerShell 5.1 last");
+  assert.equal(look({ Path: "", SystemRoot: "", windir: "D:\\Win" }, ["D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"]),
+    "D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "the Windows folder from windir");
+  // Relative PATH entries and entries inside the workspace are skipped; a quoted entry is read without its quotes.
+  assert.equal(look({ Path: "tools;C:\\repo\\bin" }, ["tools\\pwsh.exe", "C:\\repo\\bin\\pwsh.exe", five]), five);
+  assert.equal(look({ Path: '"D:\\tools\\pwsh"' }, [onPath]), onPath);
+  assert.equal(look({ Path: "", ProgramFiles: "C:\\repo\\pf" }, ["C:\\repo\\pf\\PowerShell\\7\\pwsh.exe"]), undefined);
+});
+
+test("resolvePowerShell reports powershell_unavailable, and elsewhere looks for pwsh on PATH", () => {
+  assert.equal(POWERSHELL_UNAVAILABLE, "PowerShell was not found. Install PowerShell 7 (pwsh) or set RAW_POWERSHELL_PATH to pwsh or powershell.exe.");
+  const missing = { ok: false, code: "powershell_unavailable", message: POWERSHELL_UNAVAILABLE };
+  assert.deepEqual(resolvePowerShell({ env: { ...base, Path: "" }, platform: "win32", workspace: "C:\\repo", exists: files() }), missing);
+  for (const platform of ["darwin", "linux"] as const) {
+    const at = (env: NodeJS.ProcessEnv, present: string[]) => resolvePowerShell({ env, platform, workspace: "/repo", exists: files(...present) });
+    assert.deepEqual(at({ PATH: "/usr/bin:/opt/ps" }, ["/opt/ps/pwsh"]), { ok: true, path: "/opt/ps/pwsh" });
+    assert.deepEqual(at({ PATH: "bin:/repo/tools:/usr/bin" }, ["bin/pwsh", "/repo/tools/pwsh"]), missing, `${platform}: relative and workspace entries skipped`);
+    assert.deepEqual(at({ RAW_POWERSHELL_PATH: "/x/pwsh", PATH: "/opt/ps" }, ["/opt/ps/pwsh"]), { ok: true, path: "/x/pwsh" });
+  }
+});
+
+test("on Windows CI the powershell tool finds a PowerShell", { skip: process.platform === "win32" ? false : "needs Windows" }, () => {
+  const found = resolvePowerShell({ env: { ...process.env, RAW_POWERSHELL_PATH: "" }, platform: "win32", workspace: process.cwd() });
+  assert.ok(found.ok, JSON.stringify(found));
+  assert.match(found.path, /\\(pwsh|powershell)\.exe$/i);
 });

@@ -2,6 +2,7 @@ import { canonicalConfigPath, configFilePath, parseConfigSource, type LoadConfig
 import { withPackageWriteLock } from "../packages/lock.js";
 import { assertRevision, ManagementError, publishText, readText, type TextSnapshot } from "./files.js";
 import { createStarterConfig } from "./starter.js";
+import { resolveBash } from "../tools/shells.js";
 
 export interface ManagedConfig extends TextSnapshot {
   path: string;
@@ -47,7 +48,7 @@ export async function initializeConfig(options: LoadConfigOptions = {}): Promise
   return withPackageWriteLock(path, async () => {
     const current = await readText(path);
     if (current.exists) throw new ManagementError("conflict", "config already exists");
-    const data = createStarterConfig(); const source = JSON.stringify(data, null, 2) + "\n";
+    const data = createStarterConfig({ bashAvailable: resolveBash({ workspace: process.cwd() }).ok }); const source = JSON.stringify(data, null, 2) + "\n";
     parseConfigSource(source, { ...options, configPath: path });
     const saved = await publishText(path, source, current);
     return { ...saved, path, canonical: path === canonicalConfigPath(options), data };

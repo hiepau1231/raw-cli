@@ -17,7 +17,7 @@ import { readJsonText, stripBom } from "../../platform/fs.js";
 
 // Built-ins returning host-owned content (selected skills, configured vars) whole rather than within max_output_bytes.
 const hostContentTools = new Set(["builtin/list_skills", "builtin/load_skill", "builtin/list_vars", "builtin/read_var"]);
-const bundledNames = new Set(["read_file", "write_file", "edit_file", "apply_patch", "bash", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]);
+const bundledNames = new Set(["read_file", "write_file", "edit_file", "apply_patch", "bash", "powershell", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]);
 
 export interface LoadToolPluginsOptions {
   selectedIds: readonly string[];
@@ -171,7 +171,7 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
           ...(context.panels ? { panels: context.panels } : {}), // onPanelUpdates stays host-only
           ...(context.effects ? { effects: context.effects } : {}),
           ...(bundled && FILE_EDITING_TOOLS.has(item.id) && context.onWriteCompleted ? { onWriteCompleted: context.onWriteCompleted } : {}),
-          ...(item.id === "builtin/bash" && context.commandActivity ? { commandActivity: context.commandActivity } : {}),
+          ...((item.id === "builtin/bash" || item.id === "builtin/powershell") && context.commandActivity ? { commandActivity: context.commandActivity } : {}),
           ...(context.processes ? { processes: context.processes } : {}),
           ...(context.interactions ? { interactions: context.interactions } : {}),
           ...((item.id === "builtin/list_skills" || item.id === "builtin/load_skill") && options.skills

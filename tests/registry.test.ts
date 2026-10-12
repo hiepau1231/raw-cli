@@ -7,6 +7,15 @@ import { test } from "node:test";
 import { BUILTIN_TOOL_DEFINITIONS, createTestToolRegistry, ToolRegistry } from "./fixtures/registry.js";
 import { loadBundledTools } from "../src/tools/plugins/loader.js";
 
+test("the bundled powershell tool takes bash's arguments under its own name and description", async () => {
+  const [bash, powershell] = await loadBundledTools(["bash", "powershell"]);
+  assert.equal(powershell!.name, "powershell");
+  assert.match(powershell!.description, /^Run one PowerShell command \(pwsh 7 when installed, otherwise Windows PowerShell 5\.1, where && and \|\| do not exist: use ; and if \(\$\?\) \{ … \}\)/);
+  const schema = (tool: typeof bash) => JSON.stringify(tool!.inputSchema).replace(/"description":"[^"]*"/g, "");
+  assert.equal(schema(powershell), schema(bash));
+  assert.equal((powershell!.inputSchema.properties!.command as { description: string }).description, "The PowerShell command to run.");
+});
+
 test("packaged bundled plugins preserve exact definitions and semantic batch preflight", async () => {
   const names = ["read_file", "write_file", "bash", "view_image"];
   const plugins = await loadBundledTools(names);

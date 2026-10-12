@@ -135,7 +135,8 @@ export class ProcessSupervisor {
       if (record.state === "starting") { record.state = "failed"; record.error = error instanceof Error ? error.message : String(error); record.endedAt = this.now(); this.flush(job); }
       this.trim(sessionId);
       if (error instanceof ProcessError) throw error;
-      if ((error as NodeJS.ErrnoException).code === "bash_unavailable") throw new ProcessError("bash_unavailable", (error as Error).message);
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "bash_unavailable" || code === "powershell_unavailable") throw new ProcessError(code, (error as Error).message);
       throw new ProcessError("process_spawn_error", `cannot start process: ${record.error ?? String(error)}`);
     } finally { input.signal?.removeEventListener("abort", cancel); }
   }

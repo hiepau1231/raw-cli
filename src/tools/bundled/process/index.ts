@@ -7,12 +7,12 @@ import type { ProcessRecord } from "../../../processes/contract.js";
 import { resolveToolPath } from "../../../platform/paths.js";
 import { mergeEnv } from "../../../platform/windows.js";
 
-interface Input { action: "start" | "list" | "status" | "output" | "stop"; command?: string; cwd?: string; label?: string; timeout?: number;
+interface Input { action: "start" | "list" | "status" | "output" | "stop"; command?: string; shell?: "bash" | "powershell"; cwd?: string; label?: string; timeout?: number;
   env_refs?: Record<string, string>; id?: string; cursor?: number; max_bytes?: number }
 
 const ACTIONS = ["start", "list", "status", "output", "stop"];
 const FIELDS: Record<string, readonly string[]> = {
-  start: ["action", "command", "cwd", "label", "timeout", "env_refs"], list: ["action"],
+  start: ["action", "command", "shell", "cwd", "label", "timeout", "env_refs"], list: ["action"],
   status: ["action", "id"], output: ["action", "id", "cursor", "max_bytes"], stop: ["action", "id"],
 };
 const EXAMPLES: Record<string, string> = {
@@ -52,6 +52,7 @@ export function validateArgs(raw: unknown): string | undefined {
   if (extra) return `${extra} is not used by action ${args.action}; example: ${EXAMPLES[args.action]}`;
   if (args.action === "start") {
     if (typeof args.command !== "string" || !args.command.trim() || args.command.length > 65536) return `start needs a nonempty command of at most 65536 characters; example: ${EXAMPLES.start}`;
+    if (args.shell !== undefined && args.shell !== "bash" && args.shell !== "powershell") return "shell must be bash or powershell";
     if (args.cwd !== undefined && (typeof args.cwd !== "string" || !args.cwd || isAbsolute(args.cwd))) return "cwd must be relative to the session";
     if (args.label !== undefined && (typeof args.label !== "string" || !args.label || [...args.label].length > 200)) return "label must be 1–200 characters";
     if (args.timeout !== undefined && (!Number.isSafeInteger(args.timeout) || args.timeout < 1 || args.timeout > 2147483647)) return "timeout must be a positive number of milliseconds";
@@ -85,6 +86,7 @@ export async function handler(raw: unknown, context: ToolContext): Promise<ToolH
         context.vars.validateEnvRefs(args.env_refs); bindings = await context.vars.resolveEnv(args.env_refs, { ...(context.signal ? { signal: context.signal } : {}) });
       }
       const record = await context.processes.start({ command: args.command!, cwd: resolveToolPath(context.cwd, args.cwd ?? "."), workspace: context.cwd,
+        ...(args.shell === "powershell" ? { shell: "powershell" as const } : {}),
         ...(args.label ? { label: args.label } : {}), ...(args.timeout !== undefined ? { timeout_ms: args.timeout } : {}),
         ...(context.signal ? { signal: context.signal } : {}), ...(context.bashPath ? { bashPath: context.bashPath } : {}),
         ...(bindings ? { env: mergeEnv(process.env, bindings) } : {}) });

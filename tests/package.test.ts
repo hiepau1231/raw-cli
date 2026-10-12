@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
 import { parseSkillMarkdown } from "../src/skills/frontmatter.js";
+import { resolvePowerShell } from "../src/tools/shells.js";
 import { launch, posixOnly } from "./fixtures/platform.js";
 
 async function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, keepStdin = false) {
@@ -37,7 +38,7 @@ test("T-08d: packed consumer executes installed CLI task/MCP/ACP and imports lib
   assert.equal(install.status, 0, install.stderr);
   const bin = join(consumer, "node_modules", ".bin", "raw");
   await access(bin);
-  for (const name of ["read_file", "write_file", "edit_file", "apply_patch", "bash", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]) {
+  for (const name of ["read_file", "write_file", "edit_file", "apply_patch", "bash", "powershell", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]) {
     const example = join(consumer, "node_modules", "@tlelabs", "raw", "examples", "tools", name);
     await access(join(example, "tool.json"));
     await access(join(example, "index.mjs"));
@@ -66,7 +67,7 @@ test("T-08d: packed consumer executes installed CLI task/MCP/ACP and imports lib
     }
   }
   const skillBody = await readFile(join(packagedSkill, "SKILL.md"), "utf8");
-  for (const name of ["read_file", "write_file", "edit_file", "apply_patch", "bash", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]) {
+  for (const name of ["read_file", "write_file", "edit_file", "apply_patch", "bash", "powershell", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]) {
     const folder = join(consumer, "node_modules", "@tlelabs", "raw", "dist", "tools", "builtin", name);
     const manifest = JSON.parse(await readFile(join(folder, "tool.json"), "utf8")) as { id: string; entry: string; input_schema: { type: string } };
     assert.equal(manifest.id, name);
@@ -126,7 +127,14 @@ try {
   const stopped = await registry.dispatch("process", { action: "stop", id }, context);
   if (stopped.isError || !stopped.content[0].text.startsWith("Stopped " + id + " · stopped")) throw new Error(JSON.stringify(stopped));
 } finally { await processes.close(); }
-`], consumer, { ...process.env });
+const shells = await loadToolPlugins({ selectedIds: ["builtin/powershell"], configPath: "ignored.json" });
+if (shells.length !== 1 || shells[0].registration.name !== "powershell") throw new Error("installed powershell missing");
+registry.register(shells[0].registration);
+if (process.env.RAW_TEST_POWERSHELL) {
+  const ran = await registry.dispatch("powershell", { command: "Write-Output ok" }, { cwd: process.cwd(), maxOutputBytes: 8192, autoApprove: true });
+  if (ran.isError || !/^ok\\n\\n?\\[exit 0 · /.test(ran.content.map(block => block.text).join(""))) throw new Error(JSON.stringify(ran));
+}
+`], consumer, { ...process.env, ...(resolvePowerShell({ workspace: consumer }).ok ? { RAW_TEST_POWERSHELL: "1" } : {}) });
   assert.equal(installedAsk.code, 0, installedAsk.stderr);
   const installedDiagram = await run(process.execPath, ["--input-type=module", "--eval", `
 import { cp, mkdir, readFile } from "node:fs/promises";

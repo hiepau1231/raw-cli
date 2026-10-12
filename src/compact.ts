@@ -614,7 +614,7 @@ export function collectFacts(messages: readonly ModelMessage[], facts: WorkingFa
         const tool = identity(call.name);
         if (tool && FILE_EDITING_TOOLS.has(tool)) editing.add(call.id);
         else if (tool === "builtin/read_file") reads.set(call.id, call.arguments.path);
-        else if (tool === "builtin/bash") bash.set(call.id, call.arguments.command);
+        else if (tool === "builtin/bash" || tool === "builtin/powershell") bash.set(call.id, call.arguments.command);
       }
     } else if (message.role === "tool") {
       for (const path of savedOutputPaths(message.result)) add(next.outputs, path);

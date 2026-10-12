@@ -8,6 +8,7 @@ import type { VariableContext } from "../vars/contract.js";
 import { open, mkdir, writeFile, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { runBash } from "./process.js";
+import type { ShellKind } from "./shells.js";
 import { errorResult, utf8Prefix } from "./results.js";
 import type { ToolResult } from "./types.js";
 import type { PanelContext } from "../panels/contract.js";
@@ -356,10 +357,17 @@ export interface BashArgs { command: string; timeout?: number; description?: str
 function seconds(ms: number): string { return `${(ms / 1000).toFixed(1)}s`; }
 
 /**
- * One Bash command (docs/tool-ux-design.md §4.2): the output in production order, then one status line such as
- * `[exit 0 · 1.2s]`. A nonzero exit is not an error; a timeout or abort is, and stops the process group.
+ * One Bash or PowerShell command (docs/tool-ux-design.md §4.2): the output in production order, then one status line
+ * such as `[exit 0 · 1.2s]`. A nonzero exit is not an error; a timeout or abort is, and stops the process group.
  */
-export async function bashTool(args: BashArgs, context: ToolContext): Promise<ToolResult> {
+export function shellTool(kind: ShellKind): (args: BashArgs, context: ToolContext) => Promise<ToolResult> {
+  return (args, context) => runShellTool(kind, args, context);
+}
+
+/** One Bash command; see shellTool. */
+export const bashTool = shellTool("bash");
+
+async function runShellTool(kind: ShellKind, args: BashArgs, context: ToolContext): Promise<ToolResult> {
   const cwd = args.workdir === undefined ? context.cwd : resolveToolPath(context.cwd, args.workdir);
   const requested = args.timeout ?? BASH_DEFAULT_TIMEOUT_MS;
   const timeout = Math.min(requested, BASH_MAX_TIMEOUT_MS);
@@ -379,24 +387,24 @@ export async function bashTool(args: BashArgs, context: ToolContext): Promise<To
   }
   let activity: ReturnType<CommandActivity["begin"]> | undefined;
   try {
-    activity = context.commandActivity?.begin(args.command, cwd, { ...(args.description ? { label: args.description } : {}), ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}) });
+    activity = context.commandActivity?.begin(args.command, cwd, { owner: `builtin/${kind}`, ...(args.description ? { label: args.description } : {}), ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}) });
   } catch { /* UI persistence cannot change Bash execution. */ }
   const started = performance.now();
   let result: ToolResult;
   try {
-    result = await runBash({ command: args.command, cwd, workspace: context.cwd, maxOutputBytes: Math.max(0, context.maxOutputBytes - BASH_STATUS_RESERVE),
+    result = await runBash({ shell: kind, command: args.command, cwd, workspace: context.cwd, maxOutputBytes: Math.max(0, context.maxOutputBytes - BASH_STATUS_RESERVE),
       timeoutMs: timeout,
       ...(activity ? { onOutput: activity.output } : {}),
       ...(bindings ? { env: mergeEnv(process.env, bindings) } : {}),
       ...(context.signal ? { signal: context.signal } : {}),
-      ...(context.bashPath ? { bashPath: context.bashPath } : {}),
+      ...(kind === "bash" && context.bashPath ? { bashPath: context.bashPath } : {}),
     });
   } catch (error) {
-    result = errorResult("bash_error", (error as Error).message);
+    result = errorResult(`${kind}_error`, (error as Error).message);
   }
   try { activity?.finish(result); } catch { /* UI persistence cannot change the completed Bash outcome. */ }
   const durationMs = Math.round(performance.now() - started);
-  if (result.code === "bash_spawn_error" || result.code === "bash_error" || result.code === "bash_unavailable") return { ...result, host: host("error", { durationMs }) };
+  if ([`${kind}_spawn_error`, `${kind}_error`, `${kind}_unavailable`].includes(result.code ?? "")) return { ...result, host: host("error", { durationMs }) };
   const aborted = result.code === "aborted" || context.signal?.aborted === true;
   // Windows stops the command's whole job at once rather than signalling a process group.
   const stopped = process.platform === "win32" ? "process tree stopped" : "process group stopped";

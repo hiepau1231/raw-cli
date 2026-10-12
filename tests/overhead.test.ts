@@ -10,6 +10,10 @@ test("production prompt is minimal and built-in schema overhead is measurable", 
   assert.ok(report.promptTokens <= 50);
   assert.ok(Number.isSafeInteger(report.combinedTokens) && report.combinedTokens >= report.promptTokens);
   assert.equal(JSON.parse(report.canonical).tools.length, 3);
+  // Each definition's own tokens, including PowerShell's, which takes bash's place in the starter on Windows without Git Bash.
+  assert.deepEqual(Object.keys(report.definitionTokens), ["read_file", "write_file", "bash", "powershell"]);
+  assert.ok(Object.values(report.definitionTokens).every((tokens) => Number.isSafeInteger(tokens) && tokens > 0));
+  assert.ok(report.definitionTokens.powershell! > report.definitionTokens.bash!, "the PowerShell description adds the && note");
 });
 
 test("model-facing tool definitions explain the required workflows", async () => {

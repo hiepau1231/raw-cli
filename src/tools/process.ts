@@ -3,7 +3,7 @@ import { StringDecoder } from "node:string_decoder";
 import type { ToolResult } from "./types.js";
 import { errorResult, utf8Prefix, utf8Suffix } from "./results.js";
 import { OutputSpill, savedLabel } from "./spill.js";
-import { resolveBash } from "./shells.js";
+import { powerShellArgs, resolveBash, resolvePowerShell, type ShellKind } from "./shells.js";
 import { jobLauncher, resolveCommand, stateDirectory, terminateTree, wrapInJob, type ResolvedCommand } from "../platform/windows.js";
 
 type Channel = "stdout" | "stderr";
@@ -102,27 +102,34 @@ export interface BashOptions {
   bashPath?: string;
   /** The session's workspace, where a Windows Bash is never looked for; the cwd when absent. */
   workspace?: string;
+  /** The shell that runs the command; Bash when absent. */
+  shell?: ShellKind;
 }
+
+const SHELL_NAMES: Record<ShellKind, string> = { bash: "Bash", powershell: "PowerShell" };
 
 /** Shells started inside the Windows job launcher, whose kill stops the whole tree. */
 const jobbedShells = new WeakSet<ChildProcess>();
 
 /**
- * Shared shell spawn/group primitive; lifecycle and output policy belong to its caller. On Windows the shell is Git Bash
- * (see resolveBash) run inside the job launcher; when Bash is missing it throws an error whose code is bash_unavailable.
+ * Shared shell spawn/group primitive; lifecycle and output policy belong to its caller. The shell is Bash (on Windows Git
+ * Bash, see resolveBash) or PowerShell (see resolvePowerShell), on Windows run inside the job launcher; when it is missing
+ * this throws an error whose code is bash_unavailable or powershell_unavailable.
  */
-export function spawnShell(options: { command: string; cwd: string; env?: NodeJS.ProcessEnv; bashPath?: string; workspace?: string },
+export function spawnShell(options: { command: string; cwd: string; env?: NodeJS.ProcessEnv; bashPath?: string; workspace?: string; shell?: ShellKind },
   platform: NodeJS.Platform = process.platform) {
-  const bash = options.bashPath ? { ok: true as const, path: options.bashPath }
-    : resolveBash({ platform, workspace: options.workspace ?? options.cwd });
-  if (!bash.ok) throw Object.assign(new Error(bash.message), { code: bash.code });
-  let launch: ResolvedCommand = { file: bash.path, args: ["-c", options.command] };
+  const workspace = options.workspace ?? options.cwd;
+  const powershell = options.shell === "powershell";
+  const shell = powershell ? resolvePowerShell({ platform, workspace })
+    : options.bashPath ? { ok: true as const, path: options.bashPath } : resolveBash({ platform, workspace });
+  if (!shell.ok) throw Object.assign(new Error(shell.message), { code: shell.code });
+  let launch: ResolvedCommand = { file: shell.path, args: powershell ? powerShellArgs(options.command) : ["-c", options.command] };
   let jobbed = false;
   if (platform === "win32") {
-    // The launcher starts exactly the file it is given, so a bare or missing RAW_BASH_PATH is resolved here, on PATH
+    // The launcher starts exactly the file it is given, so a bare or missing configured shell is resolved here, on PATH
     // and never in the cwd, and a missing one fails like a spawn would.
-    const resolved = resolveCommand(bash.path, launch.args, { cwd: options.cwd, platform });
-    if (!resolved.ok) throw Object.assign(new Error(`spawn ${bash.path} ENOENT`), { code: "ENOENT", syscall: "spawn" });
+    const resolved = resolveCommand(shell.path, launch.args, { cwd: options.cwd, platform });
+    if (!resolved.ok) throw Object.assign(new Error(`spawn ${shell.path} ENOENT`), { code: "ENOENT", syscall: "spawn" });
     launch = resolved;
     const launcher = jobLauncher({ platform, stateDir: stateDirectory() });
     launch = wrapInJob(launch, launcher);
@@ -150,14 +157,15 @@ export function signalShellGroup(child: ChildProcess, signal: NodeJS.Signals, pl
  * with its channel; an oversized stream keeps its start and end around a marker naming the saved complete copy.
  */
 export async function runBash(options: BashOptions): Promise<ToolResult> {
-  if (options.signal?.aborted) return errorResult("aborted", "bash aborted before execution");
+  const shell = options.shell ?? "bash";
+  if (options.signal?.aborted) return errorResult("aborted", `${shell} aborted before execution`);
   const timeoutMs = options.timeoutMs ?? 120000;
   let child: ChildProcess;
   try { child = spawnShell(options); }
   catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "bash_unavailable") return errorResult(code, (error as Error).message);
-    return errorResult("bash_spawn_error", `cannot start Bash: ${(error as Error).message}`);
+    if (code === "bash_unavailable" || code === "powershell_unavailable") return errorResult(code, (error as Error).message);
+    return errorResult(`${shell}_spawn_error`, `cannot start ${SHELL_NAMES[shell]}: ${(error as Error).message}`);
   }
   let observedBytes = 0;
   let timedOut = false;
@@ -210,7 +218,7 @@ export async function runBash(options: BashOptions): Promise<ToolResult> {
     else {
       pending.push(chunk);
       if (observedBytes > max) {
-        spill = new OutputSpill("bash");
+        spill = new OutputSpill(shell);
         for (const buffered of pending) spill.write(buffered);
         pending = [];
       }
@@ -248,7 +256,7 @@ export async function runBash(options: BashOptions): Promise<ToolResult> {
   }
   spill?.close();
   if (killTimer) clearTimeout(killTimer);
-  if (spawnError) return errorResult("bash_spawn_error", `cannot start Bash: ${spawnError.message}`);
+  if (spawnError) return errorResult(`${shell}_spawn_error`, `cannot start ${SHELL_NAMES[shell]}: ${spawnError.message}`);
   const { segments, truncated } = capture.render(max, savedLabel(spill?.path, spill?.capped));
   const content: ToolResult["content"] = segments.map((segment) => segment.channel
     ? { type: "text", channel: segment.channel, text: segment.text } : { type: "text", text: segment.text });

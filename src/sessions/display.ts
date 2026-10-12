@@ -9,7 +9,7 @@ import type { ToolKind } from "../tools/display.js";
 
 export function toolArguments(name: string, args: Record<string, unknown>, full = false, identity?: string): string {
   const json = JSON.stringify(projectToolCall(name, identity, args, true).arguments);
-  return full || identity === "builtin/bash" || json.length <= 240 ? json : `${json.slice(0, 239)}…`;
+  return full || identity === "builtin/bash" || identity === "builtin/powershell" || json.length <= 240 ? json : `${json.slice(0, 239)}…`;
 }
 
 /** The ACP title and kind of a call: its display title and summary, and the hint's kind (docs/tool-ux-design.md §5.4). */

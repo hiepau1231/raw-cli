@@ -25,7 +25,7 @@ Required strings: `provider` (service name), `method`, exact upstream `model_id`
 
 ## Agent: `agents.<name>`
 
-Required `model`: existing alias; `tools.use`: ordered unique exact IDs (empty allowed): `builtin/<id>`, `local/<id>`, `agent/<id>`, `mcp/<server>/<original-name>`. No wildcards. builtin=package, local=global Raw folders, agent=config-adjacent folders.
+Required `model`: existing alias; `tools.use`: ordered unique exact IDs (empty allowed): `builtin/<id>`, `local/<id>`, `agent/<id>`, `mcp/<server>/<original-name>`. No wildcards. builtin=package, local=global Raw folders, agent=config-adjacent folders. Shell tools: `builtin/bash`, or `builtin/powershell` (same arguments) on Windows without Git Bash.
 
 Optional:
 - `system_prompt`: string, empty allowed, OR `system_prompt_file`: nonempty UTF-8 path relative to config or absolute. Never both.
