@@ -63,6 +63,13 @@ test("reports omit real credentials and opaque reasoning but retain synthetic le
   assert.equal(env.HOME, "/tmp/fixture");
   assert.equal(env.OPENAI_API_KEY, undefined);
   assert.equal(env.BASH_ENV, undefined);
+  const host = { SystemRoot: "D:\\Win", RAW_BASH_PATH: "D:\\Git\\bin\\bash.exe", OPENAI_API_KEY: "real-secret", Path: "D:\\Host" };
+  const windows = cleanEnvironment({ home: "D:\\fixture", bin: "D:\\fixture\\bin" }, "win32", host);
+  assert.equal(windows.RAW_BASH_PATH, "D:\\Git\\bin\\bash.exe");
+  assert.equal(windows.PATH!.split(";")[0], "D:\\fixture\\bin");
+  assert.doesNotMatch(windows.PATH!, /D:\\Host/);
+  assert.equal(windows.OPENAI_API_KEY, undefined);
+  assert.equal(windows.SystemRoot, "D:\\Win");
 });
 
 test("fixed attempt budget survives new invocations and does not authorize stale passes", () => {

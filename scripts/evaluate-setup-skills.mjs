@@ -1,7 +1,7 @@
 // Explicit developer evaluation; importing this module never calls a provider.
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -10,6 +10,7 @@ import { createProvider } from "../src/llm/client.js";
 import { createRuntimeTools } from "../src/tools/plugins/runtime.js";
 import { createAgent } from "../src/agent.js";
 import { parseSkillMarkdown } from "../src/skills/frontmatter.js";
+import { resolveBash } from "../src/tools/shells.js";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ids = ["configure_raw", "create_skill", "create_tool", "create_agent", "add_mcp"];
@@ -32,10 +33,18 @@ export function sanitizeReport(value, secrets = []) {
   const json = JSON.stringify(value, (key, item) => key === "opaque" || key === "reasoning" ? undefined : item);
   return JSON.parse(secrets.filter(Boolean).reduce((text, secret) => text.split(secret).join("[REDACTED]"), json));
 }
-export function cleanEnvironment({ home, bin }) {
-  return { HOME: home, XDG_CONFIG_HOME: join(home, ".config"), XDG_STATE_HOME: join(home, ".state"),
-    PATH: [bin, dirname(process.execPath), "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":"),
-    TMPDIR: join(home, "tmp"), LANG: "en_US.UTF-8", RAW_BASH_PATH: "/bin/bash" };
+/** The fixture's whole environment. On Windows the Bash is the host's Git Bash, found before the host env is dropped. */
+export function cleanEnvironment({ home, bin }, platform = process.platform, env = process.env) {
+  const base = { HOME: home, XDG_CONFIG_HOME: join(home, ".config"), XDG_STATE_HOME: join(home, ".state"), LANG: "en_US.UTF-8" };
+  if (platform !== "win32") {
+    return { ...base, PATH: [bin, dirname(process.execPath), "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":"),
+      TMPDIR: join(home, "tmp"), RAW_BASH_PATH: "/bin/bash" };
+  }
+  const systemRoot = env.SystemRoot ?? "C:\\Windows";
+  const bash = resolveBash({ env, platform, workspace: home });
+  return { ...base, USERPROFILE: home, SystemRoot: systemRoot, TEMP: join(home, "tmp"), TMP: join(home, "tmp"),
+    PATH: [bin, dirname(process.execPath), join(systemRoot, "System32"), systemRoot].join(";"),
+    ...(bash.ok ? { RAW_BASH_PATH: bash.path } : {}) };
 }
 export function reserveAttempt(output, variant, id) {
   if (!["baseline", "candidate"].includes(variant) || !/^[a-z][a-z0-9-]*$/.test(id)) throw new Error("invalid evaluation identity");
@@ -95,7 +104,8 @@ function snapshot(root, base = root) {
     if (item.isSymbolicLink() || item.name === ".state") continue;
     const file = join(root, item.name);
     if (item.isDirectory()) Object.assign(files, snapshot(file, base));
-    else if (item.isFile()) files[relative(base, file)] = hash(readFileSync(file));
+    // Keys use `/` on every platform, as the grading below does.
+    else if (item.isFile()) files[relative(base, file).split(sep).join("/")] = hash(readFileSync(file));
   }
   return files;
 }
@@ -103,7 +113,7 @@ function prepareCase(root, runtimePackage, skillsRoot) {
   const home = join(root, "home"), cwd = join(root, "work"), bin = join(root, "bin");
   for (const dir of [home, cwd, bin, join(home, "tmp"), join(cwd, "node_modules")]) mkdirSync(dir, { recursive: true });
   mkdirSync(join(cwd, "node_modules", "@tlelabs"), { recursive: true });
-  symlinkSync(runtimePackage, join(cwd, "node_modules", "@tlelabs", "raw"), "dir");
+  symlinkSync(runtimePackage, join(cwd, "node_modules", "@tlelabs", "raw"), process.platform === "win32" ? "junction" : "dir");
   const quote = s => "'" + s.replaceAll("'", "'\\''") + "'";
   writeFileSync(join(bin, "raw"), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(join(runtimePackage, "dist/raw.js"))} "$@"\n`, { mode: 0o700 });
   const env = cleanEnvironment({ home, bin }), configPath = join(env.XDG_CONFIG_HOME, "raw/config.json");
@@ -127,7 +137,8 @@ async function artifactsFor(spec, fixture) {
   try {
     const doc = readConfigDocument({ configPath, env }).data;
     check("config parses", true);
-    check("private config mode", (statSync(configPath).mode & 0o777) === 0o600);
+    // Windows does not keep POSIX permission bits.
+    if (process.platform !== "win32") check("private config mode", (statSync(configPath).mode & 0o777) === 0o600);
     const copy = structuredClone(doc), old = structuredClone(original);
     if (spec.id === "config-change") {
       check("requested model assignment", copy.agents.raw.model === "lab" && copy.models.lab?.provider === "lab"
@@ -245,7 +256,7 @@ async function main() {
       tools = await createRuntimeTools({ runtime, cwd: fixture.cwd });
       const started = Date.now();
       const result = await runTurn({ provider, registry: tools.registry, skills: tools.skills, system, cwd: fixture.cwd, input: spec.prompt });
-      const unchanged = preservedSnapshot(spec, fixture.before, snapshot(fixture.root), relative(fixture.root, fixture.configPath));
+      const unchanged = preservedSnapshot(spec, fixture.before, snapshot(fixture.root), relative(fixture.root, fixture.configPath).split(sep).join("/"));
       const artifacts = await artifactsFor(spec, fixture);
       const grade = gradeRun({ caseSpec: spec, transcript: result.transcript, status: result.result.status, artifacts, unchanged, sentinels: [sentinel, ...secrets] });
       const report = sanitizeReport({ case: spec.id, variant: flags.variant, attempt, identity: identities[spec.id], model,

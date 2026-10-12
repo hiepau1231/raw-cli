@@ -1,7 +1,7 @@
 import type { RunStatus } from "../agent.js";
 import type { UsageSummary } from "../llm/cache.js";
 import type { TerminalCapabilities, UiOptions } from "./options.js";
-import { icon, paint } from "./theme.js";
+import { decor, icon, paint } from "./theme.js";
 
 export interface TurnFooterInput {
   status: RunStatus;
@@ -66,7 +66,7 @@ export function formatTurnFooter(input: TurnFooterInput): string {
       + "-".repeat(Math.max(0, 10 - Math.min(10, Math.floor(contextTokens / contextWindow * 10))))}`
       + `  ${contextReported ? "" : "~"}${amount(contextTokens)} / ${amount(contextWindow)} · ${(contextTokens / contextWindow * 100).toFixed(1)}% used`;
   if (warnings.length) context = paint("warning", `${context} · ${warnings.join(" / ")}`, ui, caps);
-  if (input.repl) return `${headline}\n  ${context}\n`;
+  if (input.repl) return decor(`${headline}\n  ${context}\n`, caps);
   const lines = [headline, `  ${context}`];
   const all = stats.requests > 0;
   const shown: string[] = [];
@@ -82,10 +82,10 @@ export function formatTurnFooter(input: TurnFooterInput): string {
     if (stats.cacheReadRatio !== undefined) lines.push(`  Cache ratio ${(stats.cacheReadRatio * 100).toFixed(1)}% (reported ${stats.cacheRatioCoverage}/${stats.requests} requests)`);
   }
   if (resumable) lines.push("", formatResumeCommand(sessionId, ui, caps).trimEnd());
-  return lines.join("\n") + "\n";
+  return decor(lines.join("\n") + "\n", caps);
 }
 
-export function formatStats(stats: UsageSummary, _ui: UiOptions, _caps: TerminalCapabilities,
+export function formatStats(stats: UsageSummary, _ui: UiOptions, caps: TerminalCapabilities,
   lastTurn?: { elapsedMs: number; firstTextMs?: number }): string {
   const total = stats.requests;
   const lines = [`Requests    ${total}`,
@@ -95,5 +95,5 @@ export function formatStats(stats: UsageSummary, _ui: UiOptions, _caps: Terminal
     covered("Cache write", stats.cacheWriteTokensKnown, stats.cacheWriteCoverage, total),
     `Cache ratio ${stats.cacheReadRatio === undefined ? "unavailable" : `${(stats.cacheReadRatio * 100).toFixed(1)}%`} (reported ${stats.cacheRatioCoverage}/${total} requests)`];
   if (lastTurn) lines.push(`Last turn   ${duration(lastTurn.elapsedMs)}${lastTurn.firstTextMs === undefined ? "" : ` · first text ${duration(lastTurn.firstTextMs)}`}`);
-  return lines.join("\n") + "\n";
+  return decor(lines.join("\n") + "\n", caps);
 }

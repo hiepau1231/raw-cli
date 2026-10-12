@@ -1,7 +1,7 @@
 import { marked } from "marked";
 import { textWidth, wrapStyled } from "./layout.js";
 import { highlightCode } from "./highlight.js";
-import { paint } from "./theme.js";
+import { decor, paint } from "./theme.js";
 import type { TerminalCapabilities, UiOptions } from "./options.js";
 import { safeTerminalText } from "./safe.js";
 
@@ -47,7 +47,7 @@ function renderTable(token: Token, ui: UiOptions, caps: TerminalCapabilities, wi
   if (required > width || !columns.length) return plainRows.map((row) => row.map((value, index) =>
     `${paint("path", plainHeaders[index] ?? `Column ${index + 1}`, ui, caps)}: ${value}`).join("\n")).join("\n") + "\n";
   const format = (values: string[]) => values.map((value, index) => value + " ".repeat(Math.max(0, columns[index]! - textWidth(value)))).join(" | ");
-  return `${paint("accent", format(plainHeaders), ui, caps)}\n${columns.map((size) => "─".repeat(size)).join("─┼─")}\n`
+  return `${paint("accent", format(plainHeaders), ui, caps)}\n${decor(columns.map((size) => "─".repeat(size)).join("─┼─"), caps)}\n`
     + plainRows.map((row) => format(row)).join("\n") + "\n";
 }
 
@@ -77,7 +77,7 @@ function renderTokens(tokens: Token[], ui: UiOptions, caps: TerminalCapabilities
       return source.split("\n").map((line) => `${paint("muted", "> ", ui, caps)}${line}`).join("\n") + "\n";
     }
     if (type === "table") return renderTable(token, ui, caps, width);
-    if (type === "hr") return `${"─".repeat(Math.min(Math.max(3, width), 60))}\n`;
+    if (type === "hr") return `${decor("─".repeat(Math.min(Math.max(3, width), 60)), caps)}\n`;
     if (type === "html") return safe(String(token.raw ?? token.text ?? "")) + "\n";
     return safe(String(token.raw ?? token.text ?? "")) + "\n";
   }).join("");

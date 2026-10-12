@@ -1,6 +1,6 @@
 import { highlightCode, languageForPath } from "./highlight.js";
 import { wrapStyled } from "./layout.js";
-import { icon, paint, type IconRole } from "./theme.js";
+import { decor, icon, paint, type IconRole } from "./theme.js";
 import type { TerminalCapabilities, UiOptions } from "./options.js";
 import { statusLabel, type VisibleToolCall, type VisibleToolResult } from "../sessions/visible.js";
 import { callSummary, callTitle, isMcpIdentity } from "../tools/display.js";
@@ -30,7 +30,7 @@ export function formatToolStart(call: VisibleToolCall, ui: UiOptions, caps: Term
   const lines = wrapStyled(`${prefix}${detail ? `  ${paint("path", detail, ui, caps)}` : ""}`, width);
   // A call that never ran (rejected or interrupted) also prints its complete display arguments: nothing else shows them.
   if (!call.started) lines.push(...wrapStyled(`  ${paint("muted", safeTerminalText(JSON.stringify(call.arguments)), ui, caps)}`, width));
-  return lines.join("\n") + "\n";
+  return decor(lines.join("\n") + "\n", caps);
 }
 
 /** The pretty-printed lines of the largest value-safe reduction of a JSON value that fits in `budget` lines. */
@@ -88,5 +88,6 @@ export function formatToolResult(result: VisibleToolResult, ui: UiOptions, caps:
     budget -= lines.length;
     for (const line of lines) body.push(`  ${paint("muted", safeTerminalText(line), ui, caps)}`);
   }
-  return [header, ...body].join("\n") + "\n";
+  // The preview is for display only: in ASCII terminals its markers and separators, and the glyphs they cannot draw, are ASCII.
+  return decor([header, ...body].join("\n") + "\n", caps);
 }

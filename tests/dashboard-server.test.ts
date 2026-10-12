@@ -6,7 +6,7 @@ import { request } from "node:http";
 import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { startDashboard } from "../src/dashboard/server.js";
+import { listenError, startDashboard } from "../src/dashboard/server.js";
 import { LiveOutput, removeSpool } from "../src/dashboard/live-output.js";
 import { openSessionStore } from "../src/sessions/store.js";
 
@@ -152,4 +152,12 @@ test("the dashboard starts while an old live-output spool still has a file open"
     assert.ok(output.append("op", "seg", "assistant", "hello").text.includes("hello"));
     assert.ok(readdirSync(root).some((name) => name.startsWith(`${process.pid}-`)));
   } finally { closeSync(held); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a reserved or forbidden port names the port and suggests --port 0", () => {
+  const error = (code: string) => Object.assign(new Error(`listen ${code}`), { code });
+  assert.equal(listenError(error("EACCES"), 8787).message, "Port 8787 is reserved or not permitted; try --port 0");
+  assert.match(listenError(error("EADDRINUSE"), 8787).message, /Port 8787 is already in use/);
+  const other = error("EINVAL");
+  assert.equal(listenError(other, 8787), other);
 });

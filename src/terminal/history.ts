@@ -5,7 +5,7 @@ import { renderUserInput } from "../llm/types.js";
 import { renderMarkdown } from "./markdown.js";
 import { resolveUiOptions, terminalCapabilities, type TerminalCapabilities, type UiOptions } from "./options.js";
 import { safeTerminalText } from "./safe.js";
-import { icon, paint } from "./theme.js";
+import { decor, icon, paint } from "./theme.js";
 import { formatToolResult, formatToolStart } from "./tools.js";
 import { receiptLine } from "../panels/render.js";
 import type { PanelReceipt } from "../panels/contract.js";
@@ -14,9 +14,9 @@ export function renderTerminalHistory(item: HistoryItem, ui: UiOptions = resolve
   caps: TerminalCapabilities = terminalCapabilities(false, process.env, ui), width = 80): string {
   const payload = item.payload;
   if (item.kind === "run_end") return "";
-  if (item.kind === "panel_receipt") return `${paint("muted", safeTerminalText(receiptLine(payload as unknown as PanelReceipt)), ui, caps)}\n`;
+  if (item.kind === "panel_receipt") return `${paint("muted", decor(safeTerminalText(receiptLine(payload as unknown as PanelReceipt)), caps), ui, caps)}\n`;
   if (item.kind === "hook_event") return `${paint(payload.outcome === "error" ? "warning" : "muted",
-    safeTerminalText(`Hook ${String(payload.id)} · ${String(payload.event)} · ${String(payload.outcome)}${payload.message ? ` · ${String(payload.message)}` : payload.code ? ` · ${String(payload.code)}` : ""}`), ui, caps)}\n`;
+    decor(safeTerminalText(`Hook ${String(payload.id)} · ${String(payload.event)} · ${String(payload.outcome)}${payload.message ? ` · ${String(payload.message)}` : payload.code ? ` · ${String(payload.code)}` : ""}`), caps), ui, caps)}\n`;
   if (item.kind === "compaction") return `${safeTerminalText(`raw: compact ${String(payload.status)}`)}\n`;
   if (item.kind === "context_clearing") return `${paint("muted", safeTerminalText(`raw: cleared ${Array.isArray(payload.results) ? payload.results.length : 0} old tool results to saved copies (${String(payload.freedTokens)} tokens freed)`), ui, caps)}\n`;
   if (item.kind === "user") return `${paint("accent", icon("user", ui, caps), ui, caps)} ${safeTerminalText(renderUserInput(payload.input as Parameters<typeof renderUserInput>[0]))}\n`;
@@ -27,7 +27,7 @@ export function renderTerminalHistory(item: HistoryItem, ui: UiOptions = resolve
   }
   if (item.kind === "reasoning") {
     if (ui.reasoning === "hidden") return "";
-    const label = `${icon("thinking", ui, caps)} Thinking…`;
+    const label = `${icon("thinking", ui, caps)} ${decor("Thinking…", caps)}`;
     return `${paint("thinking", label, ui, caps)}\n${ui.reasoning === "full" ? paint("thinking", safeTerminalText(String(payload.text ?? "")), ui, caps) + "\n" : ""}`;
   }
   if (item.kind === "status") return `${safeTerminalText(String(payload.text ?? ""))}\n`;

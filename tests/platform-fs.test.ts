@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { test } from "node:test";
-import { contained, fsyncDirectory, readJsonText, renameWithRetry, stripBom } from "../src/platform/fs.js";
+import { contained, fsyncDirectory, readJsonText, renameWithRetry, sameFile, stripBom } from "../src/platform/fs.js";
 
 function errno(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(code), { code });
@@ -85,4 +85,13 @@ test("containment compares Windows paths case-insensitively and resolves dot seg
   assert.equal(contained("/a", "/a/b/c", path.posix), true);
   assert.equal(contained("/a", "/A/b", path.posix), false);
   assert.equal(contained("/a", "/a/../b", path.posix), false);
+});
+
+test("sameFile compares file IDs, and devices only when both stats report one", () => {
+  assert.equal(sameFile({ dev: 5, ino: 9 }, { dev: 5, ino: 9 }), true);
+  // Node 22 on Windows: a path-based stat leaves dev 0 while fstat reports the volume.
+  assert.equal(sameFile({ dev: 0, ino: 9 }, { dev: 5, ino: 9 }), true);
+  assert.equal(sameFile({ dev: 5, ino: 9 }, { dev: 0, ino: 9 }), true);
+  assert.equal(sameFile({ dev: 5, ino: 9 }, { dev: 6, ino: 9 }), false);
+  assert.equal(sameFile({ dev: 0, ino: 9 }, { dev: 5, ino: 8 }), false);
 });

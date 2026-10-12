@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { testConfig } from "./fixtures/config.js";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdtempSync } from "node:fs";
 import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,6 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
 import { posixOnly } from "./fixtures/platform.js";
+import { onShutdown, shutdownSignals } from "../src/platform/signals.js";
 
 process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "raw-cli-test-config-"));
 process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), "raw-cli-test-state-"));
@@ -515,4 +517,45 @@ test("T-08 review: malformed MCP config exits 2 while unreachable server exits 1
     agents: { fixture: { model: "fixture", tools: { use: ["mcp/unreachable/echo"] } } } }));
   const connection = await raw(["--config", config, "-y", "task"], { cwd: root });
   assert.equal(connection.code, 1, connection.stderr);
+});
+
+test("SIGHUP cancels a one-shot run like SIGTERM and stops the command it was running", { skip: posixOnly("signals") }, async () => {
+  const codes: Record<string, number | null> = {};
+  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+    const marker = `raw-hup-${signal}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
+      name: "bash", arguments: JSON.stringify({ command: `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)" ${marker}` }),
+    } }] }, "tool_calls"), openAiDone] }]);
+    const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), join(process.cwd(), "bin/raw.ts"),
+      "--config", testConfig("openai", "fixture", fixture.url), "-y", "run it"], { env: { ...process.env, OPENAI_API_KEY: "key" }, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.setEncoding("utf8").on("data", (part: string) => { output += part; });
+    child.stderr.setEncoding("utf8").on("data", (part: string) => { output += part; });
+    const alive = () => spawnSync("ps", ["-axo", "pid=,args="], { encoding: "utf8" }).stdout.split("\n").some((line) => line.includes(marker) && !line.includes("bash -c"));
+    try {
+      const until = Date.now() + 15000;
+      while (!alive()) {
+        if (Date.now() > until) throw new Error(`the command never started: ${output.slice(-500)}`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      child.kill(signal);
+      codes[signal] = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+      assert.equal(alive(), false, `${signal} left the command running`);
+    } finally { child.kill("SIGKILL"); await fixture.close(); }
+  }
+  assert.ok(codes.SIGTERM !== 0 && codes.SIGTERM !== null, JSON.stringify(codes));
+  assert.equal(codes.SIGHUP, codes.SIGTERM);
+});
+
+test("shutdown handlers cover SIGHUP everywhere and SIGBREAK on Windows, and come off again", () => {
+  assert.deepEqual(shutdownSignals("linux"), ["SIGTERM", "SIGHUP"]);
+  assert.deepEqual(shutdownSignals("win32"), ["SIGTERM", "SIGHUP", "SIGBREAK"]);
+  const emitter = new EventEmitter();
+  let calls = 0;
+  const off = onShutdown(() => { calls++; }, emitter, "win32");
+  for (const signal of ["SIGTERM", "SIGHUP", "SIGBREAK"]) assert.equal(emitter.listenerCount(signal), 1, signal);
+  emitter.emit("SIGBREAK"); emitter.emit("SIGHUP");
+  assert.equal(calls, 2);
+  off();
+  for (const signal of ["SIGTERM", "SIGHUP", "SIGBREAK"]) assert.equal(emitter.listenerCount(signal), 0, signal);
 });

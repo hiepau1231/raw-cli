@@ -5,7 +5,7 @@ import { applyPackageInputs, parseInputSchema } from "../src/packages/inputs.js"
 import { resolveComponent, assertDependencyGraph, fingerprintComponent } from "../src/packages/components.js";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { loadPackageManifest } from "../src/packages/manifest.js";
 
 test("package references retain stable owner, kind and export separately from aliases", () => {
@@ -66,7 +66,7 @@ test("typed input defaults, required fields and whole-value references are bound
 test("file inputs bind to the recipient config directory and never the publisher directory", () => {
   const schema = parseInputSchema({ type: "object", properties: { data: { type: "string", "x-raw-kind": "file" } }, required: ["data"] });
   assert.deepEqual(applyPackageInputs({ path: { "$input": "data" } }, schema, { data: "assets/data.json" },
-    ["path"], "/recipient/config"), { path: "/recipient/config/assets/data.json" });
+    ["path"], "/recipient/config"), { path: resolve("/recipient/config", "assets/data.json") });
   assert.throws(() => applyPackageInputs({ path: { "$input": "data" } }, schema, { data: "assets/data.json" }, ["path"]),
     /recipient config directory/);
 });

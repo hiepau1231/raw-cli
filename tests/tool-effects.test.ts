@@ -35,7 +35,8 @@ test("effect predicates ask before handler without synthesizing arguments", asyn
   assert.deepEqual(args, { patch: "original patch" });
   assert.deepEqual((observed[0] as { original: unknown }).original, args);
   assert.deepEqual((observed[1] as { arguments: unknown }).arguments, args);
-  assert.deepEqual((observed[1] as { effects: unknown }).effects, { files: [{ path: "/workspace/protected.txt" }] });
+  // Effect paths are absolute for the platform: on Windows "/workspace" is on the current drive.
+  assert.deepEqual((observed[1] as { effects: unknown }).effects, { files: [{ path: resolve("/workspace/protected.txt") }] });
 });
 
 test("descriptor failure or invalid effects never invokes the handler", async () => {
@@ -164,7 +165,7 @@ test("builtin write_file, edit_file and apply_patch share effects gates includin
         approved = true;
         assert.deepEqual(request.arguments, args);
         assert.ok((request.effects!.files as Array<{ path: string; operation: string }>)
-          .some(f => f.path === "/nonexistent-phase7/protected.txt" && f.operation === operation));
+          .some(f => f.path === resolve("/nonexistent-phase7/protected.txt") && f.operation === operation));
         return false;
       } });
     assert.equal(approved, true);
@@ -184,10 +185,12 @@ test("builtin write_file, edit_file and apply_patch share effects gates includin
 
 test("patch validator does not invent cwd aliases and real effects reject actual aliases", async () => {
   const { validateArgs, describeEffects } = await import("../src/tools/bundled/apply_patch/index.js");
-  const patch = "*** Begin Patch\n*** Add File: ../a\n+one\n*** Add File: /a\n+two\n*** End Patch";
+  // An absolute path for the platform: on Windows "/a" alone would be read as drive A:, so it is spelled with its drive.
+  const top = resolve("/a");
+  const patch = `*** Begin Patch\n*** Add File: ../a\n+one\n*** Add File: ${top.replaceAll("\\", "/")}\n+two\n*** End Patch`;
   assert.equal(validateArgs({ patch }), undefined);
-  assert.deepEqual(describeEffects({ patch }, { cwd: "/work/project" }), { files: [
-    { path: "/work/a", operation: "write" }, { path: "/a", operation: "write" },
+  assert.deepEqual(describeEffects({ patch }, { cwd: resolve("/work/project") }), { files: [
+    { path: resolve("/work/a"), operation: "write" }, { path: top, operation: "write" },
   ] });
-  assert.throws(() => describeEffects({ patch }, { cwd: "/work" }));
+  assert.throws(() => describeEffects({ patch }, { cwd: resolve("/work") }));
 });

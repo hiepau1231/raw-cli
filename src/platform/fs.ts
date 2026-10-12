@@ -17,6 +17,15 @@ export interface RenameRetryOptions {
   now?: () => number;
 }
 
+/**
+ * Whether two stats describe the same file. Some Node 22 releases on Windows report `dev` 0 from a path-based stat
+ * (libuv's GetFileInformationByName path leaves the volume serial unset) while `fstat` reports it, so a zero `dev`
+ * is unknown and only the file ID is compared.
+ */
+export function sameFile(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
+  return left.ino === right.ino && (left.dev === right.dev || left.dev === 0 || right.dev === 0);
+}
+
 export async function exists(target: string): Promise<boolean> {
   try { await access(target); return true; }
   catch { return false; }

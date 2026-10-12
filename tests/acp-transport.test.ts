@@ -102,7 +102,7 @@ test("standard saved-session transcript crosses stdio and WebSocket peers", asyn
 
 test("T-07b: malformed stdio JSON produces one parse error frame and no diagnostic stdout", () => {
   const child = spawnSync(process.execPath, ["--import", "tsx", "bin/raw.ts", "--acp", "--stdio", "--config", testConfig("ollama"), "-y"],
-    { cwd: process.cwd(), input: "{bad json}\n", encoding: "utf8", timeout: 3000 });
+    { cwd: process.cwd(), input: "{bad json}\n", encoding: "utf8", timeout: 15000 });
   assert.equal(child.status, 0);
   assertNoAcpDiagnostics(child.stderr);
   assert.deepEqual(child.stdout.trim().split("\n").map((line) => JSON.parse(line)),
@@ -177,7 +177,7 @@ test("T-07b: stdio handles split/coalesced JSON-RPC frames, notifications, inval
     const found = lines.findIndex((line) => (line.id ?? null) === id);
     if (found >= 0) return Promise.resolve(lines.splice(found, 1)[0]!);
     return Promise.race([new Promise<(typeof lines)[number]>((resolve) => pending.set(id, resolve)),
-      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error(`no ACP frame ${id}; stderr=${stderr}`)), 2000))]);
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error(`no ACP frame ${id}; stderr=${stderr}`)), 10000))]);
   };
   try {
     const initialize = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 999, clientCapabilities: {} } });

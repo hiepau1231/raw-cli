@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { testConfig } from "./fixtures/config.js";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, cp, mkdir, mkdtemp, readFile, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir, hostname } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -132,7 +132,7 @@ if (shells.length !== 1 || shells[0].registration.name !== "powershell") throw n
 registry.register(shells[0].registration);
 if (process.env.RAW_TEST_POWERSHELL) {
   const ran = await registry.dispatch("powershell", { command: "Write-Output ok" }, { cwd: process.cwd(), maxOutputBytes: 8192, autoApprove: true });
-  if (ran.isError || !/^ok\\n\\n?\\[exit 0 · /.test(ran.content.map(block => block.text).join(""))) throw new Error(JSON.stringify(ran));
+  if (ran.isError || !/^ok\\r?\\n\\n?\\[exit 0 · /.test(ran.content.map(block => block.text).join(""))) throw new Error(JSON.stringify(ran));
 }
 `], consumer, { ...process.env, ...(resolvePowerShell({ workspace: consumer }).ok ? { RAW_TEST_POWERSHELL: "1" } : {}) });
   assert.equal(installedAsk.code, 0, installedAsk.stderr);
@@ -194,7 +194,10 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
   assert.equal(JSON.parse(listedVars.stdout).vars.length, 3);
   const gotVar = await run(bin, ["--config", varsPath, "vars", "get", "hostname"], consumer, varsEnv);
   assert.equal(gotVar.code, 0, gotVar.stderr); assert.equal(JSON.parse(gotVar.stdout).value, hostname());
-  await assert.rejects(access(varsEnv.XDG_STATE_HOME));
+  // Reading vars writes no state; on Windows the only file is the job launcher Raw compiles and caches there.
+  if (process.platform !== "win32") await assert.rejects(access(varsEnv.XDG_STATE_HOME));
+  else assert.deepEqual((await readdir(varsEnv.XDG_STATE_HOME, { recursive: true }).catch(() => [] as string[]))
+    .filter((file) => !/^raw(?:\\bin(?:\\raw-job-[0-9a-f]{12}\.exe)?)?$/.test(file)), []);
   const variableCall = (name: string, args: unknown, id: string) => ({ frames: [openAiFrame({ tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }] }, "tool_calls"), openAiDone] });
   const varsProvider = await startMockProvider([
     variableCall("list_vars", {}, "catalog"), variableCall("read_var", { name: "hostname" }, "hostname"),

@@ -8,6 +8,7 @@ import { openSessionStore } from "../src/sessions/store.js";
 import { runSessionMaintenance } from "../src/sessions/maintenance.js";
 import { runPackageCli } from "../src/packages/cli.js";
 import { VERSION } from "../src/version.js";
+import { onShutdown } from "../src/platform/signals.js";
 
 const version = VERSION;
 class InputError extends Error {}
@@ -92,7 +93,7 @@ async function run(): Promise<void> {
     const vars = createVariableResolver({ config });
     const controller = new AbortController();
     const cancel = () => controller.abort();
-    process.once("SIGINT", cancel); process.once("SIGTERM", cancel);
+    process.once("SIGINT", cancel); const offCancel = onShutdown(cancel);
     try {
       const result = parsed.command === "vars-list" ? { vars: vars.list() } : await vars.read(parsed.variableName!, { signal: controller.signal });
       process.stdout.write(`${JSON.stringify(result)}\n`);
@@ -100,7 +101,7 @@ async function run(): Promise<void> {
       if (!controller.signal.aborted) throw error;
       process.exitCode = 130;
       process.stderr.write("raw: variable resolution cancelled\n");
-    } finally { process.off("SIGINT", cancel); process.off("SIGTERM", cancel); }
+    } finally { process.off("SIGINT", cancel); offCancel(); }
     return;
   }
   if (parsed.command === "config-list") {
@@ -155,9 +156,9 @@ async function run(): Promise<void> {
       serverFactory: () => createAcpServer({ runtime }) });
     process.stderr.write(`raw: ACP WebSocket listening on 127.0.0.1:${listener.port}\n`);
     await new Promise<void>((resolve) => {
-      const stop = () => { void listener.close().then(resolve); };
-      process.once("SIGINT", stop);
-      process.once("SIGTERM", stop);
+      const stop = () => { process.off("SIGINT", stop); offStop(); void listener.close().then(resolve); };
+      process.on("SIGINT", stop);
+      const offStop = onShutdown(stop);
     });
     return;
   }
@@ -193,7 +194,9 @@ async function run(): Promise<void> {
             updatedAt: panel.updatedAt, closed: panel.closed, document: panel.document })))}\n`);
         } else {
           const { safeTerminalText } = await import("../src/terminal/safe.js");
-          process.stdout.write(found.length ? `${safeTerminalText(renderPanelsText(found.map((panel) => ({ title: panelTitle(panel), document: panel.document, closed: panel.closed }))))}\n` : "No open panels.\n");
+          const { decor } = await import("../src/terminal/theme.js");
+          const caps = terminalCapabilities(Boolean(process.stdout.isTTY), process.env, resolveUiOptions({}, parsed.flags));
+          process.stdout.write(found.length ? `${decor(safeTerminalText(renderPanelsText(found.map((panel) => ({ title: panelTitle(panel), document: panel.document, closed: panel.closed })))), caps)}\n` : "No open panels.\n");
         }
       } else if (parsed.command === "sessions-delete") {
         if (!store.getSession(parsed.sessionId!)) throw new InputError(store.missingSessionMessage());

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { forkPackage, linkPackage, resolveInstalledPackage } from "../src/packages/store.js";
 
@@ -23,11 +24,11 @@ test("linked source changes only the next immutable snapshot and fork is indepen
   const old = await resolveInstalledPackage(options);
   writeFileSync(helper, 'export const value = "new";');
   assert.match(readFileSync(join(old.root, "tools", "helper", "helper.mjs"), "utf8"), /old/);
-  const oldModule = await import(join(old.root, "tools", "helper", "index.mjs"));
+  const oldModule = await import(pathToFileURL(join(old.root, "tools", "helper", "index.mjs")).href);
   assert.equal(await oldModule.handler(), "old");
   const next = await resolveInstalledPackage(options);
   assert.notEqual(next.digest, old.digest);
-  const newModule = await import(join(next.root, "tools", "helper", "index.mjs"));
+  const newModule = await import(pathToFileURL(join(next.root, "tools", "helper", "index.mjs")).href);
   assert.equal(await newModule.handler(), "new");
   const fork = join(root, "fork");
   await forkPackage({ ...options, out: fork });

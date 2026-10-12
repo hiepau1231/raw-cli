@@ -33,6 +33,19 @@ const symbols = {
   failure: ["✗", "[error]"], attention: ["!", "[!]"], continue: ["↪", "[continue]"],
 } as const;
 export type IconRole = keyof typeof symbols;
+
+// A failed panel item is `[F]`: `[x]` already marks a done one.
+const ASCII: Record<string, string> = { "[✗]": "[F]", "⚠": "!", "✗": "x", "↳": "->", "─": "-", "┼": "+", "▸": ">", "…": "...", "·": "|", "—": "-", "−": "-" };
+const DECORATION = /\[✗\]|[⚠✗↳─┼▸…·—−]/g;
+/**
+ * Display text in ASCII when the terminal needs it. Previews and panel text that carry model or tool text pass through
+ * too, so a terminal that cannot draw these glyphs shows their ASCII forms; stored text never changes.
+ */
+export function decor(text: string, capabilities: Pick<TerminalCapabilities, "ascii">): string {
+  return capabilities.ascii ? text.replace(DECORATION, (glyph) => ASCII[glyph]!) : text;
+}
+/** The activity spinner's frames. */
+export const spinnerFrames = (ascii: boolean | undefined): readonly string[] => ascii ? ["|", "/", "-", "\\"] : ["◌", "◐", "◓", "◑"];
 export function icon(role: IconRole, _ui: UiOptions, capabilities: TerminalCapabilities): string {
   return symbols[role][capabilities.unicode ? 0 : 1];
 }

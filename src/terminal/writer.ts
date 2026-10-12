@@ -1,5 +1,6 @@
 import type { Writable } from "node:stream";
 import { textWidth } from "./layout.js";
+import { spinnerFrames } from "./theme.js";
 
 export class TerminalWriter {
   private active = false;
@@ -8,7 +9,7 @@ export class TerminalWriter {
   private tail = "";
   constructor(private readonly output: Writable, private readonly cursor: boolean,
     private readonly clock: { interval: typeof setInterval; clear: typeof clearInterval } = { interval: setInterval, clear: clearInterval },
-    private readonly columns = 80) {}
+    private readonly columns = 80, private readonly ascii = false) {}
 
   write(value: string): void {
     this.suspend();
@@ -45,7 +46,7 @@ export class TerminalWriter {
     this.suspend();
     this.clearTail();
     if (!this.cursor) { this.output.write(`${label}\n`); return; }
-    const frames = ["◌", "◐", "◓", "◑"];
+    const frames = spinnerFrames(this.ascii);
     const draw = () => { this.output.write(`\r\x1b[2K${frames[this.frame++ % frames.length]} ${label}`); };
     this.active = true;
     draw();

@@ -10,7 +10,7 @@ import { renderTerminalHistory } from "./terminal/history.js";
 import { terminalCapabilities } from "./terminal/options.js";
 import { formatResumeCommand, formatStats, formatTurnFooter } from "./terminal/footer.js";
 import { effectiveInputBudget } from "./llm/context.js";
-import { icon, paint } from "./terminal/theme.js";
+import { decor, icon, paint } from "./terminal/theme.js";
 import { runSessionMaintenance } from "./sessions/maintenance.js";
 import type { SessionStore, SessionSummary } from "./sessions/store.js";
 
@@ -20,6 +20,7 @@ import { safeTerminalText } from "./terminal/safe.js";
 import type { ToolApprovalRequest } from "./tools/primitives.js";
 import { panelTitle, renderPanelsText, selectPanels } from "./panels/render.js";
 import { effectiveOutputTokens } from "./llm/output.js";
+import { onShutdown } from "./platform/signals.js";
 
 async function textRun(session: AgentSession, task: string, renderer: TerminalRenderer): Promise<RunResult> {
   renderer.start();
@@ -91,7 +92,7 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
   let startupCancelled = false;
   const cancelStartup = () => { startupCancelled = true; startupController.abort(); };
   process.on("SIGINT", cancelStartup);
-  process.on("SIGTERM", cancelStartup);
+  const offStartup = onShutdown(cancelStartup);
   let tools;
   try {
     tools = await createRuntimeTools({ runtime, cwd, signal: startupController.signal });
@@ -100,7 +101,7 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
     throw error;
   } finally {
     process.off("SIGINT", cancelStartup);
-    process.off("SIGTERM", cancelStartup);
+    offStartup();
   }
   if (startupCancelled) { await tools.mcp.close(); return 130; }
   const rl = task === undefined || process.stdin.isTTY
@@ -145,7 +146,7 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
     } } : {}) });
   const hookEvent = (event: import("./agent.js").RunEvent) => {
     if (currentRenderer) currentRenderer.event(event);
-    else if (event.type === "hook_event") process.stderr.write(`${safeTerminalText(`raw: hook ${event.id} ${event.event} ${event.outcome}${event.message ? ` · ${event.message}` : ""}`)}\n`);
+    else if (event.type === "hook_event") process.stderr.write(`${decor(safeTerminalText(`raw: hook ${event.id} ${event.event} ${event.outcome}${event.message ? ` · ${event.message}` : ""}`), caps)}\n`);
   };
   let session: AgentSession;
   let record: SessionSummary;
@@ -166,7 +167,7 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
   };
   const onTerm = () => { closed = true; session.abort(); rl?.close(); };
   process.on("SIGINT", interrupt);
-  process.on("SIGTERM", onTerm);
+  const offTerm = onShutdown(onTerm);
   rl?.on("SIGINT", interrupt);
   rl?.on("close", onClose);
   try {
@@ -210,7 +211,7 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
         const id = words.find((word) => word !== "--all");
         const found = selectPanels(store.listSessionPanels(record.id), { ...(all ? { all: true } : {}), ...(id ? { id } : {}) });
         process.stderr.write(!found ? `raw: unknown panel ${safeTerminalText(id ?? "")}\n`
-          : found.length ? `${safeTerminalText(renderPanelsText(found.map((panel) => ({ title: panelTitle(panel), document: panel.document, closed: panel.closed }))))}\n` : "raw: no open panels\n");
+          : found.length ? `${decor(safeTerminalText(renderPanelsText(found.map((panel) => ({ title: panelTitle(panel), document: panel.document, closed: panel.closed })))), caps)}\n` : "raw: no open panels\n");
         continue;
       }
       if (line === "/stats") { process.stderr.write(formatStats(session.stats(), runtime.ui, caps, lastTurn)); continue; }
@@ -242,7 +243,7 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
   } finally {
     rl?.close();
     process.off("SIGINT", interrupt);
-    process.off("SIGTERM", onTerm);
+    offTerm();
     await session.close(hookEvent);
     try { await processes.close(); } finally { await tools.mcp.close(); }
   }

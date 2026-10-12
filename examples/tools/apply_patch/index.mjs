@@ -149,6 +149,9 @@ import { closeSync as closeSync2, fsyncSync, openSync as openSync2 } from "fs";
 import { access, readFile, rename } from "fs/promises";
 import path from "path";
 var TRANSIENT = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
+function sameFile(left, right) {
+  return left.ino === right.ino && (left.dev === right.dev || left.dev === 0 || right.dev === 0);
+}
 async function exists(target) {
   try {
     await access(target);
@@ -328,7 +331,7 @@ async function snapshot(path5) {
   const handle = await open(path5, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) fail("patch_source_changed");
+    if (!info.isFile() || !sameFile(info, before)) fail("patch_source_changed");
     if (info.size > SOURCE_BYTES) fail("patch_source_too_large");
     const buffer = Buffer.alloc(Math.min(SOURCE_BYTES + 1, info.size + 1));
     let count = 0;
@@ -440,7 +443,7 @@ async function stageFilePatch(parsed) {
 async function recheck(staged) {
   if (staged.source) {
     const current = await snapshot(staged.change.path);
-    if (current.hash !== staged.source.hash || current.mode !== staged.source.mode || current.dev !== staged.source.dev || current.ino !== staged.source.ino) fail("patch_source_changed");
+    if (current.hash !== staged.source.hash || current.mode !== staged.source.mode || !sameFile(current, staged.source)) fail("patch_source_changed");
   } else await absent(staged.change.path);
   if (staged.change.destination) await absent(staged.change.destination);
 }

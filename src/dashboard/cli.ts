@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { startDashboard } from "./server.js";
+import { onShutdown } from "../platform/signals.js";
 
 export interface DashboardFlags { port?: number; configPath?: string; agent?: string; noOpen?: boolean; help?: boolean }
 export function parseDashboardArgs(args: readonly string[]): DashboardFlags {
@@ -36,7 +37,7 @@ export async function runDashboardCli(flags: DashboardFlags): Promise<void> {
   const controller = new AbortController();
   let stopped!: () => void; const stopRequested = new Promise<void>((resolve) => { stopped = resolve; });
   const stop = () => { controller.abort(); stopped(); };
-  process.once("SIGINT", stop); process.once("SIGTERM", stop);
+  process.once("SIGINT", stop); const offStop = onShutdown(stop);
   let server: Awaited<ReturnType<typeof startDashboard>> | undefined;
   try {
     server = await startDashboard({ ...(flags.port === undefined ? {} : { port: flags.port }),
@@ -47,5 +48,5 @@ export async function runDashboardCli(flags: DashboardFlags): Promise<void> {
     }
     await stopRequested;
   } catch (error) { if (!controller.signal.aborted) throw error; }
-  finally { await server?.close(); process.off("SIGINT", stop); process.off("SIGTERM", stop); }
+  finally { await server?.close(); process.off("SIGINT", stop); offStop(); }
 }

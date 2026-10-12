@@ -25,7 +25,7 @@ On a shared interactive terminal, Raw renders a small agent/model/cwd header, Ma
 
 Every tool result has a status line and a stderr preview. The body keeps at most nine source lines and 2,000 Unicode characters, preserving head and tail with an omission marker. Write, edit and patch calls are recorded in display history with their paths and byte counts, not the content they send; the bounded diff of an edit or patch travels in the result's host data. The display cap never changes the result sent to the model; `--max-output-bytes` controls the separate model-facing cap. Tool identity comes from the registry, so a custom or MCP tool with a built-in-sounding name still uses the generic formatter.
 
-All tools execute automatically with the host account's permissions, including on TTY and non-TTY input. `-y`/`--auto-approve` is a compatibility alias. Ctrl-C aborts active work; in a REPL it returns to `> `, and a second Ctrl-C while idle exits. EOF aborts active work and exits after cleanup. One-shot cancellation exits 130.
+All tools execute automatically with the host account's permissions, including on TTY and non-TTY input. `-y`/`--auto-approve` is a compatibility alias. Ctrl-C aborts active work; in a REPL it returns to `> `, and a second Ctrl-C while idle exits. EOF aborts active work and exits after cleanup; on Windows, Ctrl-D at the start of a line ends input, and Ctrl-Z does not. SIGTERM, SIGHUP (the terminal closed) and, on Windows, closing the console window or pressing Ctrl+Break cancel active work, close children and exit. One-shot cancellation exits 130.
 
 Exit codes are 0 for completed turns and informational commands, 1 for runtime/provider errors, 2 for argument/config errors, 3 for max steps, and 130 for user cancellation. Recoverable tool errors that the model handles do not set process exit status. Startup and shutdown close owned MCP clients and running shell processes.
 
@@ -42,7 +42,9 @@ Exit codes are 0 for completed turns and informational commands, 1 for runtime/p
 `raw dashboard [--port PORT] [--no-open] [--config PATH] [--agent NAME]` starts a
 foreground server bound to `127.0.0.1`. Default port is 8787; port 0 selects a free
 port. The printed authenticated launch URL remains usable if browser opening is
-unavailable. Ctrl-C/SIGTERM cancels owned work and closes children/connections.
+unavailable. Ctrl-C, SIGTERM, SIGHUP and, on Windows, Ctrl+Break or closing the
+console window cancel owned work and close children/connections. A port Windows
+reserves (Hyper-V ranges) fails with `Port N is reserved or not permitted; try --port 0`.
 
 The browser creates and resumes the same stored session IDs as CLI/ACP. Refresh or
 closing a tab leaves a server-owned run active; Stop cancels it explicitly. A

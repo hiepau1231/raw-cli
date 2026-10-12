@@ -140,6 +140,7 @@ test("packed dashboard configures, reconnects, updates a package, then installed
   } finally {
     if (existsSync(workspace)) await writeFile(join(workspace, "release"), "cleanup");
     await browser?.close(); if (host) { host.kill("SIGTERM"); await closed; }
-    await provider.close(); await rm(root, { recursive: true, force: true });
+    // Windows briefly keeps a just-closed process's directories busy; rm retries EBUSY.
+    await provider.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   }
 });

@@ -85,7 +85,7 @@ test("compact and verbose flags change successful tool detail on a shared termin
   } finally { await provider.close(); }
 });
 
-test("ASCII icons still distinguish read and success when color is disabled", async () => {
+test("ASCII icons still distinguish read and success when color is disabled", { skip: posixOnly("pty") }, async () => {
   const root = mkdtempSync(join(tmpdir(), "raw-terminal-ascii-"));
   writeFileSync(join(root, "a.txt"), "hello\n");
   const provider = await startMockProvider([

@@ -25,7 +25,11 @@ export interface UiOptions {
   readonly theme: ThemeName;
   readonly palette: Readonly<Partial<Record<PaletteRole, ColorName>>>;
 }
-export interface TerminalCapabilities { readonly tty: boolean; readonly ansi: boolean; readonly unicode: boolean; readonly cursor: boolean }
+/**
+ * `unicode` picks the Unicode icons; `ascii` makes every other decoration (spinner, separators, rules, markers) ASCII. It
+ * is set by `--icons ascii`, and by `auto` in a Windows console that is not known to draw Unicode glyphs.
+ */
+export interface TerminalCapabilities { readonly tty: boolean; readonly ansi: boolean; readonly unicode: boolean; readonly cursor: boolean; readonly ascii?: boolean }
 
 const choices = {
   density: ["compact", "normal", "verbose"],
@@ -73,9 +77,18 @@ export function resolveUiOptions(document: UiInput = {}, flags: UiInput = {}): U
     theme: flags.theme ?? document.theme ?? "terminal", palette });
 }
 
-export function terminalCapabilities(tty: boolean, env: NodeJS.ProcessEnv, ui: UiOptions): TerminalCapabilities {
+/** Windows terminals that draw Unicode glyphs; the legacy console host's fonts lack many of them. */
+export function unicodeConsole(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.WT_SESSION || env.TERM_PROGRAM === "vscode" || env.ConEmuTask || env.TERMINAL_EMULATOR === "JetBrains-JediTerm"
+    || env.TERM?.includes("xterm"));
+}
+
+export function terminalCapabilities(tty: boolean, env: NodeJS.ProcessEnv, ui: UiOptions,
+  platform: NodeJS.Platform = process.platform): TerminalCapabilities {
   const eligible = tty && env.TERM !== "dumb";
   const ansi = eligible && ui.color !== "never" && (ui.color === "always" || !env.NO_COLOR);
-  const unicode = ui.icons === "unicode" || (ui.icons === "auto" && eligible);
-  return { tty, ansi, unicode, cursor: ansi && eligible };
+  const glyphs = platform !== "win32" || unicodeConsole(env);
+  const unicode = ui.icons === "unicode" || (ui.icons === "auto" && eligible && glyphs);
+  const ascii = ui.icons === "ascii" || (ui.icons === "auto" && !glyphs);
+  return { tty, ansi, unicode, cursor: ansi && eligible, ...(ascii ? { ascii } : {}) };
 }

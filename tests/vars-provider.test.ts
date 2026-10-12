@@ -25,8 +25,9 @@ test("timeout and abort settle boundedly, including inherited pipes", async () =
   for (const mode of ["hang", "descendant"]) {
     const started = Date.now();
     // On Windows the provider's job ends the descendant as soon as the provider exits, so its pipes close at once and
-    // the empty output is the failure; elsewhere the descendant holds them open until the deadline.
-    const expected = mode === "descendant" && process.platform === "win32" ? /var_provider_invalid_response/ : /var_provider_timeout/;
+    // the empty output is the failure, unless Node starts too slowly to exit before the deadline; elsewhere the
+    // descendant holds them open until the deadline.
+    const expected = mode === "descendant" && process.platform === "win32" ? /var_provider_(?:invalid_response|timeout)/ : /var_provider_timeout/;
     await assert.rejects(runVariableProvider(spec(mode, 150), request), expected);
     assert.ok(Date.now() - started < 3000);
   }

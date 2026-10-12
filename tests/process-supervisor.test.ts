@@ -24,9 +24,10 @@ test("supervisor reports nonzero exits, timeout and spawn errors without false l
   const supervisor = new ProcessSupervisor();
   try {
     const context = supervisor.forSession("s");
-    const failed = await context.start({ command: "exit 7", cwd: process.cwd() }); await delay(100);
+    // Polled, not a fixed wait: Git Bash on Windows can take longer than 100 ms to start and exit.
+    const failed = await context.start({ command: "exit 7", cwd: process.cwd() }); await until(() => context.status(failed.id).state !== "running");
     assert.equal(context.status(failed.id).state, "failed"); assert.equal(context.status(failed.id).exitCode, 7);
-    const timeout = await context.start({ command: "sleep 30", cwd: process.cwd(), timeout_ms: 30 }); await delay(800);
+    const timeout = await context.start({ command: "sleep 30", cwd: process.cwd(), timeout_ms: 30 }); await until(() => !["running", "stopping"].includes(context.status(timeout.id).state));
     assert.equal(context.status(timeout.id).state, "timed_out");
     await assert.rejects(context.start({ command: "true", cwd: process.cwd(), bashPath: "/missing/raw-bash" }), /start/);
   } finally { await supervisor.close(); }
@@ -137,7 +138,8 @@ test("output resumes at the next UTF-8 boundary and rejects a page too small for
   const supervisor = new ProcessSupervisor(); const context = supervisor.forSession("boundary");
   try {
     const job = await context.start({ command: "printf '雪'", cwd: process.cwd() });
-    for (let i = 0; i < 100 && context.status(job.id).state === "running"; i++) await delay(10);
+    // Up to 10 s: Git Bash on Windows takes far longer than a second to start and exit.
+    for (let i = 0; i < 1000 && context.status(job.id).state === "running"; i++) await delay(10);
     const skipped = context.output(job.id, 1, 65536);
     assert.equal(skipped.nextCursor, 3); assert.equal(skipped.truncated, false);
     assert.throws(() => context.output(job.id, 0, 1), error => (error as { code?: string }).code === "output_budget_too_small");
@@ -153,7 +155,7 @@ test("natural command completion cleans non-detached descendants even when they 
   const supervisor = new ProcessSupervisor(); const context = supervisor.forSession("natural");
   try {
     const job = await context.start({ command: `${quote(process.execPath)} ${quote(script)} ${quote(marker)}`, cwd: root });
-    for (let i = 0; i < 100 && context.status(job.id).state === "running"; i++) await delay(10);
+    for (let i = 0; i < 1000 && context.status(job.id).state === "running"; i++) await delay(10);
     assert.ok(Number(await readFile(marker + ".ready", "utf8")) > 0);
     assert.equal(context.status(job.id).state, "exited");
     await supervisor.close(); await delay(900);

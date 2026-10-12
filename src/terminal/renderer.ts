@@ -6,7 +6,7 @@ import { toolArguments } from "../sessions/display.js";
 import { projectToolCall, projectToolResult, renderPlainToolResult, statusLabel, type VisibleToolCall } from "../sessions/visible.js";
 import { MarkdownStream } from "./markdown.js";
 import { terminalCapabilities } from "./options.js";
-import { icon, paint } from "./theme.js";
+import { decor, icon, paint } from "./theme.js";
 import { formatToolResult, formatToolStart } from "./tools.js";
 import { TerminalWriter } from "./writer.js";
 import { safeTerminalText } from "./safe.js";
@@ -18,11 +18,17 @@ function plainCall(call: VisibleToolCall): string {
   return safeTerminalText(`${heading} (${call.name} ${JSON.stringify(call.arguments)})`);
 }
 
-export function sharedInteractiveTerminal(): boolean {
-  if (!process.stdout.isTTY || !process.stderr.isTTY || process.env.TERM === "dumb") return false;
+/**
+ * Whether stdout and stderr are the same interactive terminal. Elsewhere their device and inode must match; Windows
+ * reports different values for the two handles of one console, so two TTYs are taken as one.
+ */
+export function sharedInteractiveTerminal(platform: NodeJS.Platform = process.platform,
+  streams: { stdout: { isTTY?: boolean; fd: number }; stderr: { isTTY?: boolean; fd: number } } = process, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!streams.stdout.isTTY || !streams.stderr.isTTY || env.TERM === "dumb") return false;
+  if (platform === "win32") return true;
   try {
-    const out = fstatSync(process.stdout.fd);
-    const err = fstatSync(process.stderr.fd);
+    const out = fstatSync(streams.stdout.fd);
+    const err = fstatSync(streams.stderr.fd);
     return out.isCharacterDevice() && err.isCharacterDevice() && out.dev === err.dev && out.ino === err.ino && out.rdev === err.rdev;
   } catch { return false; }
 }
@@ -63,8 +69,8 @@ export class TerminalRenderer {
     this.rich = shared && this.caps.ansi && this.stderrCaps.ansi;
     this.decoratedPlain = shared && !this.rich;
     this.width = Math.max(20, process.stdout.columns || 80);
-    this.answerWriter = new TerminalWriter(process.stdout, this.rich, undefined, this.width);
-    this.statusWriter = new TerminalWriter(process.stderr, this.rich, undefined, this.width);
+    this.answerWriter = new TerminalWriter(process.stdout, this.rich, undefined, this.width, this.caps.ascii);
+    this.statusWriter = new TerminalWriter(process.stderr, this.rich, undefined, this.width, this.stderrCaps.ascii);
   }
 
   start(): void {
@@ -72,8 +78,8 @@ export class TerminalRenderer {
     if ((this.rich || this.decoratedPlain) && this.showHeader) {
       const agent = this.runtime.modelConfig?.agentName ?? this.runtime.agentName ?? "raw";
       const model = this.runtime.modelConfig?.model ?? "unknown";
-      process.stderr.write(`${paint("accent", `${icon("brand", this.runtime.ui, this.caps)} raw`, this.runtime.ui, this.caps)} · agent ${agent} · model ${model}`
-        + `${this.resumed ? " · Resumed" : ""}\n`
+      process.stderr.write(`${paint("accent", `${icon("brand", this.runtime.ui, this.caps)} raw`, this.runtime.ui, this.caps)}${decor(" · ", this.caps)}agent ${agent}${decor(" · ", this.caps)}model ${model}`
+        + `${this.resumed ? decor(" · Resumed", this.caps) : ""}\n`
         + (this.runtime.ui.density === "compact" ? "\n" : `${paint("muted", this.cwd, this.runtime.ui, this.caps)}\n\n`));
     }
   }
@@ -161,7 +167,7 @@ export class TerminalRenderer {
     if (event.type === "text_delta") { this.addAnswer(event.text); return; }
     if (event.type === "reasoning_delta" && event.text && this.runtime.ui.reasoning !== "hidden") {
       this.flushAnswer();
-      if (!this.thinkingOpen) process.stderr.write(`${paint("thinking", `${icon("thinking", this.runtime.ui, this.caps)} Thinking…`, this.runtime.ui, this.caps)}\n`);
+      if (!this.thinkingOpen) process.stderr.write(`${paint("thinking", `${icon("thinking", this.runtime.ui, this.caps)} ${decor("Thinking…", this.caps)}`, this.runtime.ui, this.caps)}\n`);
       if (this.runtime.ui.reasoning === "full") process.stderr.write(paint("thinking", event.text, this.runtime.ui, this.caps));
       this.thinkingOpen = true;
       this.thinkingEndedWithNewline = this.runtime.ui.reasoning !== "full" || event.text.endsWith("\n");
@@ -191,7 +197,7 @@ export class TerminalRenderer {
     }
     if (event.type === "hook_event") {
       this.flushAnswer(); this.finishThinking();
-      process.stderr.write(`${paint(event.outcome === "error" ? "warning" : "muted", safeTerminalText(`Hook ${event.id} · ${event.event} · ${event.outcome}${event.message ? ` · ${event.message}` : event.code ? ` · ${event.code}` : ""}`), this.runtime.ui, this.caps)}\n`);
+      process.stderr.write(`${paint(event.outcome === "error" ? "warning" : "muted", decor(safeTerminalText(`Hook ${event.id} · ${event.event} · ${event.outcome}${event.message ? ` · ${event.message}` : event.code ? ` · ${event.code}` : ""}`), this.caps), this.runtime.ui, this.caps)}\n`);
       return;
     }
     if (event.type === "compact_start") {
@@ -209,14 +215,14 @@ export class TerminalRenderer {
   /** §13.2: one receipt line per committed panel update, on stderr so a one-shot run's stdout stays the answer. */
   private panelReceipts(event: Extract<RunEvent, { type: "tool_result" }>): void {
     for (const receipt of event.panelReceipts ?? []) {
-      process.stderr.write(`${paint(receipt.error ? "warning" : "muted", safeTerminalText(receiptLine(receipt)), this.runtime.ui, this.caps)}\n`);
+      process.stderr.write(`${paint(receipt.error ? "warning" : "muted", decor(safeTerminalText(receiptLine(receipt)), this.stderrCaps), this.runtime.ui, this.caps)}\n`);
     }
   }
 
   private plainEvent(event: RunEvent): void {
     if (event.type === "hook_event") {
       this.finishTextLine(); this.finishThinking();
-      process.stderr.write(`${safeTerminalText(`raw: hook ${event.id} ${event.event} ${event.outcome}${event.message ? ` · ${event.message}` : event.code ? ` · ${event.code}` : ""}`)}\n`);
+      process.stderr.write(`${decor(safeTerminalText(`raw: hook ${event.id} ${event.event} ${event.outcome}${event.message ? ` · ${event.message}` : event.code ? ` · ${event.code}` : ""}`), this.stderrCaps)}\n`);
       return;
     }
     if (event.type === "text_delta") {
@@ -227,7 +233,7 @@ export class TerminalRenderer {
     } else if (event.type === "reasoning_delta" && event.text && this.runtime.ui.reasoning !== "hidden") {
       this.finishTextLine();
       if (!this.thinkingOpen) process.stderr.write(this.decoratedPlain
-        ? `${icon("thinking", this.runtime.ui, this.caps)} Thinking…\n` : "raw: thinking\n");
+        ? `${icon("thinking", this.runtime.ui, this.caps)} ${decor("Thinking…", this.caps)}\n` : "raw: thinking\n");
       if (this.runtime.ui.reasoning === "full") process.stderr.write(event.text);
       this.thinkingOpen = true;
       this.thinkingEndedWithNewline = this.runtime.ui.reasoning !== "full" || event.text.endsWith("\n");
@@ -241,7 +247,7 @@ export class TerminalRenderer {
           this.runtime.ui, this.caps, this.width));
         return;
       }
-      process.stderr.write(`raw: ${plainCall(event.display ?? projectToolCall(event.name, this.session.toolIdentity(event.name), event.arguments, true, this.session.toolDisplay(event.name)))}\n`);
+      process.stderr.write(`raw: ${decor(plainCall(event.display ?? projectToolCall(event.name, this.session.toolIdentity(event.name), event.arguments, true, this.session.toolDisplay(event.name))), this.stderrCaps)}\n`);
     } else if (event.type === "tool_result") {
       this.finishTextLine(); this.finishThinking();
       const pending = this.pendingCalls.get(event.id);
@@ -258,7 +264,7 @@ export class TerminalRenderer {
       }
       if (pending) {
         this.pendingCalls.delete(event.id);
-        process.stderr.write(`raw: ⚠ ${plainCall(projectToolCall(pending.name, this.session.toolIdentity(pending.name), event.arguments ?? pending.arguments, false, this.session.toolDisplay(pending.name)))}\n`);
+        process.stderr.write(`raw: ${decor(`⚠ ${plainCall(projectToolCall(pending.name, this.session.toolIdentity(pending.name), event.arguments ?? pending.arguments, false, this.session.toolDisplay(pending.name)))}`, this.stderrCaps)}\n`);
       }
       const result = event.result;
       const display = event.display ?? projectToolResult(event.name, this.session.toolIdentity(event.name), result, undefined, this.session.toolDisplay(event.name));
@@ -269,8 +275,8 @@ export class TerminalRenderer {
         ...(typeof display.durationMs === "number" ? [`${display.durationMs}ms`] : []),
       ];
       const preview = renderPlainToolResult(display);
-      process.stderr.write(`raw: ${display.failed ? "✗" : "↳"} ${event.name} ${[status, ...meta].join(" · ")}${preview ? "" : " (empty)"}\n`);
-      if (preview) process.stderr.write(`${preview}\n`);
+      process.stderr.write(`raw: ${decor(display.failed ? "✗" : "↳", this.stderrCaps)} ${event.name} ${[status, ...meta].join(decor(" · ", this.stderrCaps))}${preview ? "" : " (empty)"}\n`);
+      if (preview) process.stderr.write(`${decor(preview, this.stderrCaps)}\n`);
       this.panelReceipts(event);
     } else if (event.type === "compact_start") {
       this.finishTextLine();

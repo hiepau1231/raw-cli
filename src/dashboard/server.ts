@@ -36,6 +36,13 @@ export interface DashboardServer {
   url: string; launchUrl: string; token: string; port: number; context: DashboardContext;
   close(): Promise<void>;
 }
+/** A listen failure the user can act on; Windows reserves port ranges for Hyper-V and answers EACCES inside them. */
+export function listenError(error: NodeJS.ErrnoException, port: number): Error {
+  if (error.code === "EADDRINUSE") return new DashboardError(409, "port_in_use", `Port ${port} is already in use; choose --port 0 or another port`);
+  if (error.code === "EACCES") return new DashboardError(409, "port_not_permitted", `Port ${port} is reserved or not permitted; try --port 0`);
+  return error;
+}
+
 export async function startDashboard(options: DashboardOptions = {}): Promise<DashboardServer> {
   if (options.signal?.aborted) throw new DashboardError(503, "cancelled", "Dashboard startup cancelled");
   const port = options.port ?? 8787;
@@ -121,8 +128,7 @@ export async function startDashboard(options: DashboardOptions = {}): Promise<Da
   try {
     if (options.signal?.aborted) throw new DashboardError(503, "cancelled", "Dashboard startup cancelled");
     await new Promise<void>((resolve, reject) => {
-      const failed = (error: NodeJS.ErrnoException) => { http.off("listening", ready); reject(error.code === "EADDRINUSE"
-        ? new DashboardError(409, "port_in_use", `Port ${port} is already in use; choose --port 0 or another port`) : error); };
+      const failed = (error: NodeJS.ErrnoException) => { http.off("listening", ready); reject(listenError(error, port)); };
       const ready = () => { listeningReady = true; http.off("error", failed); resolve(); };
       http.once("error", failed); http.once("listening", ready); http.listen(port, "127.0.0.1");
     });

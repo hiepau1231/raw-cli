@@ -4,7 +4,7 @@ import { chmod, link, lstat, mkdir, open, unlink } from "node:fs/promises";
 import { dirname, join, parse, relative, sep } from "node:path";
 import { errorResult, indexedResult, indexedResultFits, type IndexedResult } from "./results.js";
 import type { ToolResult } from "./types.js";
-import { renameWithRetry } from "../platform/fs.js";
+import { renameWithRetry, sameFile } from "../platform/fs.js";
 import { pathFor, resolveToolPath } from "../platform/paths.js";
 
 const PATCH_BYTES = 1024 * 1024;
@@ -153,7 +153,7 @@ async function snapshot(path: string): Promise<Snapshot> {
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) fail("patch_source_changed");
+    if (!info.isFile() || !sameFile(info, before)) fail("patch_source_changed");
     if (info.size > SOURCE_BYTES) fail("patch_source_too_large");
     const buffer = Buffer.alloc(Math.min(SOURCE_BYTES + 1, info.size + 1));
     let count = 0;
@@ -265,7 +265,7 @@ async function recheck(staged: StagedChange): Promise<void> {
   if (staged.source) {
     const current = await snapshot(staged.change.path);
     if (current.hash !== staged.source.hash || current.mode !== staged.source.mode
-      || current.dev !== staged.source.dev || current.ino !== staged.source.ino) fail("patch_source_changed");
+      || !sameFile(current, staged.source)) fail("patch_source_changed");
   } else await absent(staged.change.path);
   if (staged.change.destination) await absent(staged.change.destination);
 }
