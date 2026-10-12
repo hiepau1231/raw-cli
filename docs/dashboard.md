@@ -105,8 +105,9 @@ The sidebar lists every agent with its model and what it selects, with a dot on
 the default; on Library it lists each page with how many items it holds.
 
 The Agents list shows each agent's model, how many tools and skills it selects
-(or the package it is bound to) and which one is the default. Each row has New
-chat and a ⋯ menu with Set as default, Duplicate, Rename and Delete. Every action
+(or the package it is bound to) and which one is the default. A click anywhere on
+a row opens the agent; New chat and the ⋯ menu (Set as default, Duplicate, Rename
+and Delete) are separate buttons on it. Every action
 confirms in a dialog that also shows its errors; Delete keeps the agent's
 sessions.
 
@@ -130,9 +131,12 @@ editor is split into tabs:
 Switching tabs keeps the draft and never asks to leave the page.
 
 Library groups tools, skills and hooks, vars, MCP servers and packages. Each
-tools, skills or hooks list shows every component with its source (Builtin, Local,
-Agent, Package or Linked), Read-only and Invalid badges, and how many agents use
-it. Search filters by id, name and description. **Create** starts from a shipped
+tools, skills or hooks list shows every component on one line: its id, the start
+of its description, one source pill (Builtin, Local, Agent, Package or Linked)
+with a lock when it is read-only, an Invalid badge when it fails validation, and
+"Used by N" when agents select it. A click anywhere on a row opens the component,
+and so does a click on a Packages row. When the page is narrow the pills move
+under the name. Search filters by id, name and description. **Create** starts from a shipped
 example (or a hook template) and leaves the component unselected.
 
 A component opens with a breadcrumb, its badges and actions. Read-only components
@@ -183,13 +187,13 @@ Agent and source editor examples (isolated fixture data):
 ![Agent editor in dark mode](dashboard/agent-dark-desktop.png)
 ![Agent editor in light mode](dashboard/agent-light-desktop.png)
 
-The [dark Agents list](dashboard/agents-list-dark-desktop.png) uses the same layout.
+The [dark Agents list](dashboard/agents-list-dark-desktop.png) uses the same layout; [with the pointer on a row](dashboard/agents-list-hover-dark-desktop.png) the row fills.
 
 ![Tools list in light mode](dashboard/library-tools-light-desktop.png)
 ![Tool overview with its agents](dashboard/tool-dark-desktop.png)
 ![Vars overview with safe summaries](dashboard/vars-dark-desktop.png)
 
-The [dark Tools list](dashboard/library-tools-dark-desktop.png) uses the same layout.
+The [dark Tools list](dashboard/library-tools-dark-desktop.png) uses the same layout; [at 900 px](dashboard/library-tools-dark-900.png) the pills move under the name.
 
 Reproduce these images after building with
 `node --import tsx tests/dashboard-ui/capture-management.ts`.

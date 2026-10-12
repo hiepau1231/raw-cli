@@ -57,8 +57,11 @@ test.describe("component catalog", () => {
     await openPath(page, raw.server.launchUrl, "/library/tools");
     await expect(page.getByRole("heading", { name: "Tools", exact: true })).toBeVisible();
     const read = catalogRow(page, "Tools", "builtin/read_file");
+    // One source pill; read-only is its lock, with the words kept for the row's text.
+    await expect(read.locator(".badge")).toHaveCount(1);
     await expect(read.locator(".badge").filter({ hasText: "Builtin" })).toBeVisible();
-    await expect(read.locator(".badge").filter({ hasText: "Read-only" })).toBeVisible();
+    await expect(read.locator(".badge svg")).toHaveCount(1);
+    await expect(read).toContainText("Read-only");
     await expect(read).toContainText("Used by 2");
     await expect(catalogRow(page, "Tools", "builtin/bash")).toContainText("Used by 1");
     await expect(catalogRow(page, "Tools", "builtin/write_file")).toContainText("Not selected");

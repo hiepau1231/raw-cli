@@ -49,9 +49,10 @@ export function AgentsList({
               const summary = config.agentSummaries?.[name];
               const isDefault = config.defaultAgent === name;
               return (
-                <li key={name} className="data-row agent-row">
+                // The whole row opens the agent; New chat and ⋯ sit above the name link's cover.
+                <li key={name} className="data-row agent-row linked">
                   <div className="agent-row-name">
-                    <Link href={`/agents/${encodeURIComponent(name)}`}>{name}</Link>
+                    <Link className="row-link" href={`/agents/${encodeURIComponent(name)}`}>{name}</Link>
                     {isDefault && <span className="badge accent">Default</span>}
                     {summary?.from && <span className="badge">Package</span>}
                   </div>

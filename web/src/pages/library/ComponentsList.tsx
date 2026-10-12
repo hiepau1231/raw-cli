@@ -1,11 +1,33 @@
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { ChevronRight, Lock, Plus, Search } from "lucide-react";
 import { mutate } from "swr";
 import type { ComponentInfo } from "../../../../src/management/components.js";
 import { api, errorText } from "../../api.js";
 import { keys } from "../../data/keys.js";
 import { Link, useRouter } from "../../router.js";
 import { Empty, ErrorMessage, Field, Modal } from "../../ui.js";
+
+/** The chat sidebar's search field, for a Library list. */
+export function ListSearch({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="search-input list-search">
+      <Search size={16} aria-hidden="true" />
+      <input type="search" aria-label={label} placeholder={`${label}…`} value={value} onChange={(e) => onChange(e.target.value)} />
+    </label>
+  );
+}
+
+/** "Used by N" as a chip, anything else ("Not selected", "Usage unavailable") as muted text. */
+export function UsageLabel({ used, children }: { used: boolean; children: string }) {
+  return <span className={used ? "sp-chip tone-accent component-row-usage" : "muted component-row-usage"}>{children}</span>;
+}
+
+/** The › a linked row shows on hover or focus. */
+export const RowChevron = () => (
+  <span className="row-chevron" aria-hidden="true">
+    <ChevronRight size={16} />
+  </span>
+);
 
 export type ComponentKind = "tools" | "skills" | "hooks";
 
@@ -67,36 +89,32 @@ export function ComponentsList({
             </div>
             {create}
           </header>
-          <Field label={`Search ${kind}`}>
-            <input type="search" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          </Field>
+          <ListSearch label={`Search ${kind}`} value={filter} onChange={setFilter} />
           {visible.length ? (
             <ul className="data-table" aria-label={`${copy.title} catalog`}>
               {visible.map((item) => (
-                <li key={item.id} className="data-row component-row">
+                // The whole row opens the component (the name link covers it); the detail page shows the diagnostic.
+                <li key={item.id} className="data-row component-row linked">
                   <div className="component-row-name">
-                    <Link href={`/library/${kind}/${encodeURIComponent(item.id)}`}>{item.id}</Link>
+                    <Link className="row-link" href={`/library/${kind}/${encodeURIComponent(item.id)}`}>{item.id}</Link>
                     {item.description && <span className="muted component-row-description">{item.description}</span>}
                   </div>
                   <div className="metadata component-row-badges">
-                    <span className="badge">{sourceLabel[item.source] ?? item.source}</span>
-                    {item.readOnly && <span className="badge">Read-only</span>}
-                    {item.validation !== "valid" && (
-                      <span className="badge error" title={item.diagnostic}>
-                        Invalid
-                      </span>
-                    )}
+                    <span className="badge">
+                      {item.readOnly && <Lock size={11} aria-hidden="true" />}
+                      {sourceLabel[item.source] ?? item.source}
+                      {item.readOnly && <span className="sr-only"> (Read-only)</span>}
+                    </span>
+                    {item.validation !== "valid" && <span className="badge error">Invalid</span>}
                   </div>
-                  <span
-                    className="muted component-row-usage"
-                    title={item.usageAvailable ? item.usedBy.join(", ") : undefined}
-                  >
+                  <UsageLabel used={item.usageAvailable && item.usedBy.length > 0}>
                     {!item.usageAvailable
                       ? "Usage unavailable"
                       : item.usedBy.length
                         ? `Used by ${item.usedBy.length}`
                         : "Not selected"}
-                  </span>
+                  </UsageLabel>
+                  <RowChevron />
                 </li>
               ))}
             </ul>

@@ -1,3 +1,5 @@
+import { readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures.js";
 import { openPath, packageSource, seedLibrary } from "./library-seed.js";
@@ -18,6 +20,13 @@ const style = (locator: Locator, property: "backgroundColor" | "textDecorationLi
   locator.evaluate((element, property) => getComputedStyle(element)[property], property);
 const setTheme = (page: Page, theme: string) =>
   page.evaluate((theme) => (document.documentElement.dataset.theme = theme), theme);
+/** Moves the real pointer to a cell's centre: on a linked row the name link covers the cell, as it does for a user. */
+const pointAt = async (page: Page, locator: Locator, click = false) => {
+  await locator.scrollIntoViewIfNeeded();
+  const box = (await locator.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  if (click) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+};
 const nav = (page: Page, name: string) => page.getByRole("navigation", { name });
 const count = (page: Page, label: string) =>
   nav(page, "Library categories").getByRole("link", { name: label, exact: true }).locator(".nav-count");
@@ -164,4 +173,161 @@ test.describe("agent rows", () => {
     expect(await name.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
     expect(await agents.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   });
+});
+
+test.describe("lists", () => {
+  test.use({
+    scenario: {
+      agent: { tools: { use: ["builtin/read_file", "builtin/bash"] } },
+      extraAgents: { second: { model: "fixture", tools: { use: ["builtin/read_file"] } } },
+    },
+  });
+  const catalogRow = (page: Page, id: string) =>
+    page.getByRole("list", { name: "Tools catalog" }).getByRole("listitem").filter({ has: page.getByRole("link", { name: id, exact: true }) });
+  const agentRow = (page: Page, name: string) =>
+    page.getByRole("list", { name: "Agent list" }).getByRole("listitem").filter({ has: page.getByRole("link", { name, exact: true }) });
+  /** A local tool whose manifest no longer parses, so the catalog marks it Invalid. */
+  const breakTool = async (raw: { json: (path: string, method?: string, body?: unknown) => Promise<unknown>; configPath: string }) => {
+    await raw.json("/components/tools", "POST", { id: "local/broken", cloneFrom: "builtin/read_file" });
+    const found = readdirSync(dirname(raw.configPath), { recursive: true, encoding: "utf8" }).find((path) => path.endsWith(join("broken", "tool.json")));
+    writeFileSync(join(dirname(raw.configPath), found!), "{ not json");
+  };
+
+  test("a row opens from anywhere and its controls stay separate", async ({ page, raw }) => {
+    await seedLibrary(raw);
+    await breakTool(raw);
+    await openPath(page, raw.server.launchUrl, "/agents");
+    await pointAt(page, agentRow(page, "raw").locator(".agent-row-model"), true);
+    await expect(page).toHaveURL(/\/agents\/raw$/);
+    await openPath(page, raw.server.launchUrl, "/agents");
+    await agentRow(page, "raw").getByRole("button", { name: "Actions for raw" }).click();
+    await expect(page.getByRole("menuitem", { name: "Duplicate" })).toBeVisible();
+    await expect(page).toHaveURL(/\/agents$/);
+    await page.keyboard.press("Escape");
+    await agentRow(page, "raw").getByRole("button", { name: "New chat" }).click();
+    await expect(page).toHaveURL(/\/chat\/[^/]+$/);
+
+    await openPath(page, raw.server.launchUrl, "/library/tools");
+    await pointAt(page, catalogRow(page, "builtin/read_file").locator(".component-row-usage"), true);
+    await expect(page).toHaveURL(/\/library\/tools\/builtin%2Fread_file$/);
+    await openPath(page, raw.server.launchUrl, "/library/tools");
+    await pointAt(page, catalogRow(page, "builtin/bash").locator(".component-row-badges .badge").first(), true);
+    await expect(page).toHaveURL(/\/library\/tools\/builtin%2Fbash$/);
+    await openPath(page, raw.server.launchUrl, "/library/tools");
+    await pointAt(page, catalogRow(page, "local/broken").locator(".badge.error"), true);
+    await expect(page).toHaveURL(/\/library\/tools\/local%2Fbroken$/);
+
+    await openPath(page, raw.server.launchUrl, "/library/packages");
+    await pointAt(page, page.getByRole("list", { name: "Installed packages" }).getByRole("listitem").first().locator(".component-row-usage"), true);
+    await expect(page).toHaveURL(/\/library\/packages\/shared$/);
+  });
+
+  test("linked rows fill on hover, show the chevron and never underline; vars rows do not", async ({ page, raw }) => {
+    await seedLibrary(raw);
+    for (const theme of ["light", "dark"]) {
+      await openPath(page, raw.server.launchUrl, "/agents");
+      await setTheme(page, theme);
+      const agent = agentRow(page, "second");
+      await pointAt(page, agent.locator(".agent-row-model"));
+      await expect.poll(() => style(agent, "backgroundColor"), `agents ${theme}`).toBe(await token(page, "--panel-hover"));
+      expect(await style(agent.getByRole("link", { name: "second", exact: true }), "textDecorationLine")).toBe("none");
+
+      await openPath(page, raw.server.launchUrl, "/library/tools");
+      await setTheme(page, theme);
+      const tool = catalogRow(page, "builtin/bash");
+      const chevron = tool.locator(".row-chevron");
+      await page.mouse.move(0, 0);
+      await expect.poll(() => chevron.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+      await pointAt(page, tool.locator(".component-row-usage"));
+      await expect.poll(() => style(tool, "backgroundColor"), `tools ${theme}`).toBe(await token(page, "--panel-hover"));
+      await expect.poll(() => chevron.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+      expect(await style(tool.getByRole("link", { name: "builtin/bash", exact: true }), "textDecorationLine")).toBe("none");
+
+      await openPath(page, raw.server.launchUrl, "/library/vars");
+      await setTheme(page, theme);
+      const variable = page.getByRole("list", { name: "Variables" }).getByRole("listitem").first();
+      await page.mouse.move(0, 0);
+      const rest = await style(variable, "backgroundColor");
+      await variable.locator(".definition-name").hover();
+      await page.waitForTimeout(250);
+      expect(await style(variable, "backgroundColor"), `vars ${theme}`).toBe(rest);
+      await expect(variable.locator(".row-chevron")).toHaveCount(0);
+      await expect(variable.getByRole("link")).toHaveCount(0);
+    }
+  });
+
+  test("keyboard focus rings the row", async ({ page, raw }) => {
+    await openPath(page, raw.server.launchUrl, "/library/tools");
+    const first = page.getByRole("list", { name: "Tools catalog" }).getByRole("listitem").first();
+    expect(await style(first, "boxShadow")).toBe("none");
+    await page.getByLabel("Search tools").focus();
+    await page.keyboard.press("Tab");
+    await expect(first.getByRole("link")).toBeFocused();
+    expect(await style(first, "boxShadow")).not.toBe("none");
+  });
+
+  test("catalog rows are one line with one source pill and a usage chip", async ({ page, raw }) => {
+    await openPath(page, raw.server.launchUrl, "/library/tools");
+    const read = catalogRow(page, "builtin/read_file");
+    const description = read.locator(".component-row-description");
+    const { height, line } = await description.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      // `normal` line height: 1.4 × the font size bounds one line of Inter.
+      line: parseFloat(getComputedStyle(element).lineHeight) || 1.4 * parseFloat(getComputedStyle(element).fontSize),
+    }));
+    expect(height).toBeLessThanOrEqual(line * 1.2);
+    expect(await description.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    const badges = read.locator(".component-row-badges .badge");
+    await expect(badges).toHaveCount(1);
+    await expect(badges).toContainText("Builtin");
+    await expect(badges.locator("svg")).toHaveCount(1);
+    await expect(read).toContainText("Read-only");
+    await expect(read.locator(".component-row-usage")).toHaveText("Used by 2");
+    await expect(read.locator(".component-row-usage")).toHaveClass(/sp-chip/);
+    for (const theme of ["light", "dark"]) {
+      await setTheme(page, theme);
+      expect(await style(read.locator(".component-row-usage"), "backgroundColor")).toBe(await token(page, "--accent-soft"));
+    }
+    const write = catalogRow(page, "builtin/write_file");
+    await expect(write.locator(".component-row-usage")).toHaveText("Not selected");
+    await expect(write.locator(".component-row-usage")).not.toHaveClass(/sp-chip/);
+    await expect(page.locator("label.search-input").getByLabel("Search tools")).toHaveAttribute("placeholder", "Search tools…");
+
+    // Usage follows the agents: attaching the tool turns its row into a chip.
+    await openPath(page, raw.server.launchUrl, "/library/tools/builtin%2Fwrite_file");
+    await page.getByRole("button", { name: "Attach to second" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Attached" })).toBeVisible();
+    await openPath(page, raw.server.launchUrl, "/library/tools");
+    await expect(write.locator(".component-row-usage")).toHaveText("Used by 1");
+    await expect(write.locator(".component-row-usage")).toHaveClass(/sp-chip/);
+  });
+
+  for (const width of [900, 700]) {
+    test(`a narrow card stacks badges under the name at ${width} px`, async ({ page, raw }) => {
+      await seedLibrary(raw);
+      await page.setViewportSize({ width, height: 800 });
+      for (const [path, list] of [["/library/tools", "Tools catalog"], ["/library/packages", "Installed packages"]] as const) {
+        await openPath(page, raw.server.launchUrl, path);
+        const row = page.getByRole("list", { name: list }).getByRole("listitem").first();
+        await expect(row).toBeVisible();
+        const box = await row.evaluate((element) => {
+          const rect = (selector: string) => element.querySelector(selector)!.getBoundingClientRect();
+          const s = getComputedStyle(element);
+          return {
+            content: element.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight),
+            name: rect(".component-row-name"),
+            description: rect(".component-row-description"),
+            badges: rect(".component-row-badges"),
+            usage: rect(".component-row-usage"),
+          };
+        });
+        expect(box.badges.top, path).toBeGreaterThanOrEqual(box.name.bottom - 1);
+        expect(box.description.width, path).toBeGreaterThanOrEqual(0.85 * box.content);
+        expect(box.usage.width, path).toBeGreaterThan(0);
+        expect(Math.abs(box.usage.top + box.usage.height / 2 - (box.badges.top + box.badges.height / 2)), path).toBeLessThan(6);
+        await expect(row.locator(".component-row-usage")).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+      }
+    });
+  }
 });

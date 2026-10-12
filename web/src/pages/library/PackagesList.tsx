@@ -2,7 +2,8 @@ import { useState, type ReactNode } from "react";
 import { Download, Upload } from "lucide-react";
 import type { PackageStageView, PackageView } from "../../../../src/dashboard/packages.js";
 import { Link } from "../../router.js";
-import { Empty, ErrorMessage, Field } from "../../ui.js";
+import { Empty, ErrorMessage } from "../../ui.js";
+import { ListSearch, RowChevron, UsageLabel } from "./ComponentsList.js";
 
 export const sourceBadge = (item: PackageView) => (item.entry.source.kind === "link" ? "Linked" : "Artifact");
 export const usageText = (usedBy: string[] | undefined) =>
@@ -66,29 +67,22 @@ export function PackagesList({
               {importButton}
             </div>
           </header>
-          <Field label="Search packages">
-            <input type="search" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          </Field>
+          <ListSearch label="Search packages" value={filter} onChange={setFilter} />
           {visible.length ? (
             <ul className="data-table" aria-label="Installed packages">
               {visible.map((item) => (
-                <li key={item.alias} className="data-row package-row">
+                <li key={item.alias} className="data-row package-row linked">
                   <div className="component-row-name">
-                    <Link href={`/library/packages/${encodeURIComponent(item.alias)}`}>{item.alias}</Link>
+                    <Link className="row-link" href={`/library/packages/${encodeURIComponent(item.alias)}`}>{item.alias}</Link>
                     <span className="muted component-row-description">{item.entry.name}</span>
                   </div>
                   <div className="metadata component-row-badges">
                     <span className="badge">{item.entry.version}</span>
                     <span className="badge">{sourceBadge(item)}</span>
-                    {item.diagnostic && (
-                      <span className="badge warning" title={item.diagnostic}>
-                        Needs attention
-                      </span>
-                    )}
+                    {item.diagnostic && <span className="badge warning">Needs attention</span>}
                   </div>
-                  <span className="muted component-row-usage" title={item.usedBy?.join(", ")}>
-                    {usageText(item.usedBy)}
-                  </span>
+                  <UsageLabel used={!!item.usedBy?.length}>{usageText(item.usedBy)}</UsageLabel>
+                  <RowChevron />
                 </li>
               ))}
             </ul>

@@ -44,6 +44,13 @@ try {
       path: `docs/dashboard/agents-list-${theme}-desktop.png`,
     });
   }
+  // The pointer on a row: the row fills and the sidebar shows the same kind of rows as the chat list.
+  const reviewer = page.getByRole("list", { name: "Agent list" }).getByRole("listitem").nth(1);
+  const model = (await reviewer.locator(".agent-row-model").boundingBox())!;
+  await page.mouse.move(model.x + model.width / 2, model.y + model.height / 2);
+  await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+  if (!process.argv.includes("--packages-only")) await page.screenshot({ path: "docs/dashboard/agents-list-hover-dark-desktop.png" });
+  await page.mouse.move(0, 0);
   await page.getByRole("link", { name: "raw", exact: true }).first().click();
   await page.getByLabel("System prompt", { exact: true }).waitFor();
   for (const theme of ["light", "dark"]) {
@@ -70,6 +77,12 @@ try {
     light: "library-tools-light-desktop.png",
     dark: "library-tools-dark-desktop.png",
   });
+  // A narrow card: at 900 px the sidebar stays and the pills move under the name.
+  await page.setViewportSize({ width: 900, height: 900 });
+  await shoot("/library/tools", () => page.getByRole("list", { name: "Tools catalog" }).waitFor(), {
+    dark: "library-tools-dark-900.png",
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await shoot("/library/tools/local%2Fprobe", () => page.getByRole("list", { name: "Agents using this component" }).waitFor(), {
     dark: "tool-dark-desktop.png",
   });

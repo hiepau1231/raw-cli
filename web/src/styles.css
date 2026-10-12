@@ -2619,6 +2619,10 @@ code.tool-summary {
   max-width: 1200px;
   min-width: 0;
 }
+/* The "Used by" chip in Library rows is the chat's accent chip. */
+.management-page {
+  --sp-tint-accent: var(--accent-soft);
+}
 .settings-content > header {
   margin-bottom: 30px;
 }
@@ -3083,8 +3087,56 @@ code.tool-summary {
 .data-row:first-child {
   border-top: 0;
 }
-.data-row:hover {
-  background: var(--panel);
+/*
+ * A row that opens something: its name link covers the row, so a click anywhere opens it; buttons and menus sit above
+ * the cover. Rows that open nothing (Vars, MCP) get no fill.
+ */
+.data-table {
+  container-type: inline-size;
+}
+.data-row.linked {
+  position: relative;
+  cursor: pointer;
+  transition: background-color 120ms;
+}
+.data-row.linked:hover {
+  background: var(--panel-hover);
+}
+.data-row .row-link,
+.data-row .row-link:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+.row-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.row-link:focus-visible {
+  outline: none;
+}
+.data-row.linked:has(.row-link:focus-visible) {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.data-row.linked :is(button, .actions) {
+  position: relative;
+  z-index: 1;
+}
+.row-chevron {
+  display: flex;
+  justify-self: end;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.data-row.linked:hover .row-chevron,
+.data-row.linked:has(.row-link:focus-visible) .row-chevron {
+  opacity: 1;
+}
+.list-search {
+  max-width: 420px;
+  margin-bottom: var(--space-4);
+  background: var(--canvas);
 }
 .data-row .actions {
   margin: 0;
@@ -3194,8 +3246,10 @@ code.tool-summary {
   white-space: nowrap;
   font-size: 13px;
 }
-.data-row.component-row {
-  grid-template-columns: minmax(0, 2.4fr) minmax(0, 1.2fr) minmax(0, 0.8fr);
+/* Library rows on one line: name and description, the pills, usage, the chevron. */
+.data-row.component-row,
+.data-row.package-row {
+  grid-template-columns: minmax(0, 1fr) auto 104px 16px;
 }
 .component-row-name {
   display: flex;
@@ -3208,12 +3262,14 @@ code.tool-summary {
   color: var(--text);
   overflow-wrap: anywhere;
 }
+.component-row-name .row-link {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
 .component-row-description {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
 }
 .metadata.component-row-badges {
@@ -3221,8 +3277,10 @@ code.tool-summary {
   flex-wrap: wrap;
 }
 .component-row-usage {
+  justify-self: end;
   font-size: 13px;
   text-align: right;
+  white-space: nowrap;
 }
 .catalog-no-results {
   padding: var(--space-4);
@@ -3342,9 +3400,7 @@ code.tool-summary {
   align-items: center;
   gap: var(--space-2);
 }
-.data-row.package-row {
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 0.8fr);
-}
+
 .package-status {
   display: flex;
   flex-wrap: wrap;
@@ -3434,17 +3490,7 @@ code.tool-summary {
   .agent-row .agent-row-counts {
     display: none;
   }
-  .data-row.component-row {
-    grid-template-columns: minmax(0, 1fr);
-    row-gap: var(--space-2);
-  }
-  .data-row.package-row {
-    grid-template-columns: minmax(0, 1fr);
-    row-gap: var(--space-2);
-  }
-  .component-row .component-row-usage {
-    display: none;
-  }
+
   .data-row.definition-row {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas: "name actions" "badges actions";
@@ -6406,4 +6452,29 @@ textarea.panel-input {
   margin: var(--space-2) 2px 0;
   color: var(--muted);
   font-size: var(--panel-font-sm);
+}
+/* A narrow list (the card, not the window, decides: at 900-1100 px the sidebar takes 330 px): pills and usage go under the name. */
+@container (max-width: 640px) {
+  .data-row.component-row,
+  .data-row.package-row {
+    grid-template-columns: auto minmax(0, 1fr) 16px;
+    grid-template-areas: "name name name" "badges usage chevron";
+    row-gap: var(--space-2);
+  }
+  .data-row.component-row .component-row-name,
+  .data-row.package-row .component-row-name {
+    grid-area: name;
+  }
+  .data-row.component-row .component-row-badges,
+  .data-row.package-row .component-row-badges {
+    grid-area: badges;
+  }
+  .data-row.component-row .component-row-usage,
+  .data-row.package-row .component-row-usage {
+    grid-area: usage;
+  }
+  .data-row.component-row .row-chevron,
+  .data-row.package-row .row-chevron {
+    grid-area: chevron;
+  }
 }
