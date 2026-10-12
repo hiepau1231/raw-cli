@@ -111,6 +111,12 @@ export class SessionOperations {
       this.publish({ type: "operation", sessionId: operation.sessionId, operationId: operation.id, operation });
     };
     const event = (event: RunEvent) => {
+      // The commit set the operation's committed position; clients learn the agent has the message from the operation.
+      if (event.type === "input_committed") {
+        operation = store.getOperation(operation.id) ?? operation;
+        this.publish({ type: "operation", sessionId: operation.sessionId, operationId: operation.id, operation });
+        return;
+      }
       if (event.type === "tool_start") startedTools++;
       if (event.type === "tool_result" && (event.display?.failed ?? event.result.isError)) failedTools++;
       this.publish({ type: "event", sessionId: operation.sessionId, operationId: operation.id, event });

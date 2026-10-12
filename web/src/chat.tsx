@@ -15,10 +15,11 @@ import {
 } from "lucide-react";
 import { Dialog, DropdownMenu } from "radix-ui";
 import type { DashboardBootstrap } from "../../src/dashboard/contract.js";
+import type { RunResult } from "../../src/agent.js";
 import type { SessionOperation } from "../../src/sessions/operations.js";
 import type { SessionSummary } from "../../src/sessions/store.js";
 import type { Preferences } from "./preferences.js";
-import { api, ApiError, errorText } from "./api.js";
+import { api, ApiError, errorText, upload } from "./api.js";
 import { useComposerMeta, useHome } from "./data/queries.js";
 import { shortenPath } from "./workspace/workspace-state.js";
 import { Skeleton, TimelineSkeleton } from "./states.js";
@@ -28,7 +29,7 @@ import { DETAILS_ID } from "./panels/panel-state.js";
 import { RequestControls } from "./composer/RequestControls.js";
 import { useRequestChoice } from "./composer/useRequestChoice.js";
 import { forgetSession, isTerminal, useSession } from "./session.js";
-import { Timeline } from "./timeline.js";
+import { PendingMessage, Timeline } from "./timeline.js";
 import { Inspector } from "./inspector.js";
 import { resolveAction } from "../../src/panels/actions.js";
 import type { ActionHost } from "./panels/actions.js";
@@ -38,7 +39,7 @@ import { useRouter } from "./router.js";
 import { Composer } from "./composer/Composer.js";
 import { createDraftStore, type DraftStore } from "./composer/draft-store.js";
 import { AttachmentChips } from "./composer/AttachmentChips.js";
-import { useAttachments } from "./composer/useAttachments.js";
+import { useAttachments, type Chip } from "./composer/useAttachments.js";
 import { fileProvider } from "./composer/files.js";
 import { slashProvider } from "./composer/commands.js";
 
@@ -93,6 +94,45 @@ const HistoryLoader = memo(function HistoryLoader({ rowRef, loading, error, onRe
     </div>
   );
 });
+
+/** What a sent message holds, so its bubble can send it again or put it back in the message box (docs/chat-design.md §5). */
+interface Sent {
+  /** The message box's text; `input` is what the agent gets (an attachment-only message has a line of its own). */
+  draft: string;
+  input: string;
+  images: Chip[];
+  files: Chip[];
+}
+/** The message this page sends: its bubble shows it until the session's operations take over at the receipt. */
+interface Outgoing extends Sent {
+  clientRequestId: string;
+  status: "sending" | "sent" | "not_sent" | "not_confirmed";
+  error?: string;
+}
+const sentStorageKey = (sessionId: string) => `raw.dashboard.sent.${sessionId}`;
+/** The messages a tab remembers attachments for. */
+const SENT_REMEMBERED = 20;
+/** Remembers a message's file references and image names in this tab, so after a reload its bubble can still retry and edit it. */
+function rememberSent(sessionId: string, clientRequestId: string, sent: Sent) {
+  if (!sent.images.length && !sent.files.length) return;
+  try {
+    const entries = Object.entries(JSON.parse(sessionStorage.getItem(sentStorageKey(sessionId)) ?? "{}") as Record<string, unknown>)
+      .filter(([key]) => key !== clientRequestId).slice(1 - SENT_REMEMBERED);
+    entries.push([clientRequestId, { files: sent.files.map((chip) => chip.path), images: sent.images.map((chip) => chip.name) }]);
+    sessionStorage.setItem(sentStorageKey(sessionId), JSON.stringify(Object.fromEntries(entries)));
+  } catch {}
+}
+function recallSent(sessionId: string, clientRequestId: string): { files: string[]; images: string[] } {
+  const strings = (value: unknown) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+  try {
+    const entry = (JSON.parse(sessionStorage.getItem(sentStorageKey(sessionId)) ?? "{}") as Record<string, { files?: unknown; images?: unknown } | undefined>)[clientRequestId];
+    return { files: strings(entry?.files), images: strings(entry?.images) };
+  } catch {
+    return { files: [], images: [] };
+  }
+}
+const fileChip = (path: string, index: number): Chip =>
+  ({ key: `sent-file-${index}`, type: "file", kindId: "file", name: path.split("/").at(-1) ?? path, path, status: "ready" });
 
 /** How far `entry` is below the top of the conversation viewport. */
 const entryOffset = (entry: Element, viewport: HTMLElement) =>
@@ -153,7 +193,6 @@ export function Chat({
   const request = useRequestChoice(id, agent, meta.controls, metaFor);
   const skills = meta.skills;
   const att = useAttachments(id, meta.attachmentKinds);
-  const sentKeys = useRef<string[]>([]);
   const [error, setError] = useState("");
   const [dialogError, setDialogError] = useState("");
   const [pending, setPending] = useState(false);
@@ -163,6 +202,7 @@ export function Chat({
   const [deleting, setDeleting] = useState(false);
   const [title, setTitle] = useState("");
   const [unconfirmed, setUnconfirmed] = useState<string>();
+  const [outgoing, setOutgoing] = useState<Outgoing>();
   const [narrow, setNarrow] = useState(
     () => matchMedia("(max-width:1199px)").matches,
   );
@@ -238,6 +278,7 @@ export function Chat({
     setError("");
     following.current = preferences.follow;
     setUnconfirmed(undefined);
+    setOutgoing(undefined);
   }, [id, drafts]);
   // The agent from the session list is only provisional (it may predate a later turn). Once the
   // stream reports the saved agent, follow it unless the user picked one in this chat.
@@ -285,22 +326,20 @@ export function Chat({
     const anchor = keepInPlace.current?.anchor;
     if (element && anchor?.element.isConnected) element.scrollTop += entryOffset(anchor.element, element) - anchor.offset;
     if (following.current && !prepending.current) scrollToBottom();
-  }, [state, scrollToBottom]);
+    // A message being sent shows before the session changes (docs/chat-design.md §5).
+  }, [state, outgoing, scrollToBottom]);
   const checkReceipt = async (key: string) => {
     try {
       const op = await api<SessionOperation>(
         `/sessions/${id}/operations?clientRequestId=${encodeURIComponent(key)}`,
       );
       receipt(op);
+      setOutgoing((old) => (old?.clientRequestId === key ? { ...old, status: "sent" } : old));
       setUnconfirmed(undefined);
       setError("");
       try {
         sessionStorage.removeItem(`raw.dashboard.pending.${id}`);
       } catch {}
-      if (op.kind === "turn") {
-        if (store.get() === op.input) store.set("");
-        att.consume(sentKeys.current);
-      }
       onChanged();
     } catch (cause) {
       setUnconfirmed(key);
@@ -319,6 +358,77 @@ export function Chat({
     if (key) void checkReceipt(key);
   }, [id, !!state]);
   const hasContent = att.images.length + att.files.length > 0;
+  /**
+   * Puts a message back in the message box: its text before what is typed there, its file references, and its images,
+   * either the same chips (the server refused the request, so their staged items remain) or uploaded again.
+   */
+  const putBack = (sent: Sent, sameChips: boolean) => {
+    const typed = store.get();
+    if (typed !== sent.draft) store.set(typed.trim() ? `${sent.draft}\n\n${typed}` : sent.draft);
+    for (const chip of sent.files) if (chip.path) att.addFileRef(chip.path);
+    if (sameChips) att.restore(sent.images);
+    // Each image once, however often Edit is pressed: one already back in the box keeps its chip.
+    else att.addFiles(sent.images.flatMap((chip) => (chip.file && !att.chips.some((entry) => entry.file === chip.file) ? [chip.file] : [])));
+    input.current?.focus();
+  };
+  /**
+   * Sends a message as a new request; its bubble shows from this call on (docs/chat-design.md §5). `staged` are the
+   * images' staged ids; without them (Retry) the images are uploaded again, since a request consumes its staged items.
+   */
+  const deliver = async (sent: Sent, staged: string[] | undefined) => {
+    const clientRequestId = crypto.randomUUID();
+    rememberSent(id, clientRequestId, sent);
+    setOutgoing({ ...sent, clientRequestId, status: "sending" });
+    following.current = true;
+    setAtBottom(true);
+    const mark = (status: Outgoing["status"], error?: string) =>
+      setOutgoing((old) => (old?.clientRequestId === clientRequestId ? { ...old, status, ...(error ? { error } : {}) } : old));
+    let attachments = staged;
+    if (!attachments) {
+      try {
+        const signal = new AbortController().signal;
+        attachments = await Promise.all(
+          sent.images.flatMap((chip) => (chip.file ? [upload<{ id: string }>(id, chip.file, signal).then((item) => item.id)] : [])),
+        );
+      } catch (cause) {
+        mark("not_sent", errorText(cause));
+        putBack(sent, false);
+        return;
+      }
+    }
+    try {
+      sessionStorage.setItem(`raw.dashboard.pending.${id}`, clientRequestId);
+    } catch {}
+    try {
+      const op = await api<SessionOperation>(`/sessions/${id}/operations`, "POST", {
+        clientRequestId,
+        kind: "turn",
+        agent,
+        input: sent.input,
+        ...(attachments.length ? { attachments } : {}),
+        ...(sent.files.length ? { files: sent.files.map((chip) => chip.path) } : {}),
+        ...(request.body ? { request: request.body } : {}),
+      });
+      receipt(op);
+      mark("sent");
+      try {
+        sessionStorage.removeItem(`raw.dashboard.pending.${id}`);
+      } catch {}
+      onChanged();
+    } catch (cause) {
+      if (!(cause instanceof ApiError)) {
+        mark("not_confirmed");
+        await checkReceipt(clientRequestId);
+        return;
+      }
+      try {
+        sessionStorage.removeItem(`raw.dashboard.pending.${id}`);
+      } catch {}
+      mark("not_sent", errorText(cause));
+      putBack(sent, !!staged);
+      if (cause.code === "unknown_attachment") att.expire();
+    }
+  };
   const send = async (kind: "turn" | "compact") => {
     const draft = store.get();
     if (
@@ -332,67 +442,134 @@ export function Chat({
     submitting.current = true;
     setPending(true);
     setError("");
-    const uploads = att.images;
-    const references = att.files;
-    const sent = [...uploads, ...references].map((chip) => chip.key);
-    sentKeys.current = sent;
-    // An attachment-only turn still needs text; the model input is never empty.
-    const text = draft.trim()
-      ? draft
-      : uploads.length
-        ? `Please look at the attached image${uploads.length > 1 ? "s" : ""}.`
-        : "Please look at the referenced file" + (references.length > 1 ? "s." : ".");
-    const clientRequestId = crypto.randomUUID();
     try {
-      sessionStorage.setItem(`raw.dashboard.pending.${id}`, clientRequestId);
-    } catch {}
-    try {
-      const op = await api<SessionOperation>(
-        `/sessions/${id}/operations`,
-        "POST",
-        {
-          clientRequestId,
-          kind,
-          agent,
-          ...(kind === "turn"
-            ? {
-                input: text,
-                ...(uploads.length
-                  ? { attachments: uploads.map((chip) => chip.serverId) }
-                  : {}),
-                ...(references.length
-                  ? { files: references.map((chip) => chip.path) }
-                  : {}),
-                ...(request.body ? { request: request.body } : {}),
-              }
-            : {}),
-        },
-      );
-      receipt(op);
-      try {
-        sessionStorage.removeItem(`raw.dashboard.pending.${id}`);
-      } catch {}
       if (kind === "turn") {
-        if (store.get() === draft) store.set("");
-        att.consume(sent);
+        const images = att.images;
+        const files = att.files;
+        // An attachment-only turn still needs text; the model input is never empty.
+        const text = draft.trim()
+          ? draft
+          : images.length
+            ? `Please look at the attached image${images.length > 1 ? "s" : ""}.`
+            : "Please look at the referenced file" + (files.length > 1 ? "s." : ".");
+        // The message leaves the box at once; its bubble holds it from here (docs/chat-design.md §5).
+        store.set("");
+        att.consume([...images, ...files].map((chip) => chip.key));
+        await deliver({ draft, input: text, images, files }, images.map((chip) => chip.serverId!));
+        return;
       }
-      following.current = true;
-      setAtBottom(true);
-      onChanged();
-    } catch (cause) {
-      setError(errorText(cause));
-      if (cause instanceof ApiError && cause.code === "unknown_attachment")
-        att.expire();
-      if (!(cause instanceof ApiError)) await checkReceipt(clientRequestId);
-      else
+      const clientRequestId = crypto.randomUUID();
+      try {
+        sessionStorage.setItem(`raw.dashboard.pending.${id}`, clientRequestId);
+      } catch {}
+      try {
+        const op = await api<SessionOperation>(`/sessions/${id}/operations`, "POST", { clientRequestId, kind, agent });
+        receipt(op);
         try {
           sessionStorage.removeItem(`raw.dashboard.pending.${id}`);
         } catch {}
+        following.current = true;
+        setAtBottom(true);
+        onChanged();
+      } catch (cause) {
+        setError(errorText(cause));
+        if (!(cause instanceof ApiError)) await checkReceipt(clientRequestId);
+        else
+          try {
+            sessionStorage.removeItem(`raw.dashboard.pending.${id}`);
+          } catch {}
+      }
     } finally {
       submitting.current = false;
       setPending(false);
     }
   };
+  /**
+   * The latest turn when the agent has not received its message: waiting while it starts, not delivered once it ended.
+   * Delivery is the operation's committed position, so a message outside the loaded history still counts as received.
+   */
+  const latestTurn = state?.operations.reduce<SessionOperation | undefined>(
+    (latest, op) => (op.kind === "turn" && (!latest || op.acceptedAt > latest.acceptedAt) ? op : latest), undefined);
+  const unreceived =
+    latestTurn && latestTurn.committedUserPosition === undefined
+    && !state!.history.items.some((item) => item.kind === "user" && item.operationId === latestTurn.id)
+      ? latestTurn
+      : undefined;
+  const ownSend = unreceived && outgoing?.clientRequestId === unreceived.clientRequestId ? outgoing : undefined;
+  const recalled = useMemo(
+    () => (unreceived && !ownSend ? recallSent(id, unreceived.clientRequestId) : undefined),
+    [id, unreceived?.clientRequestId, !!ownSend],
+  );
+  const recalledSent = useMemo<Sent | undefined>(
+    () => recalled && { draft: unreceived!.input ?? "", input: unreceived!.input ?? "", images: [], files: recalled.files.map(fileChip) },
+    // The recalled entry and the input belong to the same operation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [recalled],
+  );
+  const unreceivedSent = ownSend ?? recalledSent;
+  const unreceivedRef = useRef(unreceivedSent);
+  unreceivedRef.current = unreceivedSent;
+  const deliverRef = useRef(deliver);
+  deliverRef.current = deliver;
+  const putBackRef = useRef(putBack);
+  putBackRef.current = putBack;
+  const retryUnreceived = useCallback(() => {
+    const sent = unreceivedRef.current;
+    if (!sent || submitting.current || latest.current.busy || !latest.current.agent) return;
+    submitting.current = true;
+    setPending(true);
+    setError("");
+    void deliverRef.current(sent, undefined).finally(() => {
+      submitting.current = false;
+      setPending(false);
+    });
+  }, []);
+  const editUnreceived = useCallback(() => {
+    const sent = unreceivedRef.current;
+    if (sent) putBackRef.current(sent, false);
+  }, []);
+  // A message the agent received no longer needs its chips in memory.
+  useEffect(() => {
+    if (outgoing?.status !== "sent") return;
+    if (state?.operations.some((op) => op.clientRequestId === outgoing.clientRequestId && op.committedUserPosition !== undefined))
+      setOutgoing(undefined);
+  }, [outgoing, state?.operations]);
+  // The stream can report the operation before the receipt arrives; from then on the operation tells where the message is.
+  const shownOutgoing = outgoing && outgoing.status !== "sent"
+    && !state?.operations.some((op) => op.clientRequestId === outgoing.clientRequestId) ? outgoing : undefined;
+  const unreceivedReason = unreceived && isTerminal(unreceived.state)
+    ? unreceived.state === "cancelled" || unreceived.state === "interrupted"
+      ? "Stopped before the agent received it"
+      : unreceived.error?.message ?? (unreceived.result as RunResult | undefined)?.message ?? unreceived.state
+    : undefined;
+  const pendingMessage = shownOutgoing
+    ? {
+        operationId: undefined,
+        node: (
+          <PendingMessage
+            text={shownOutgoing.input}
+            attachments={[...shownOutgoing.images, ...shownOutgoing.files].map((chip) => ({ name: chip.name }))}
+            status={shownOutgoing.status as "sending" | "not_sent" | "not_confirmed"}
+            reason={shownOutgoing.status === "not_sent" ? shownOutgoing.error : undefined}
+          />
+        ),
+      }
+    : unreceived
+      ? {
+          operationId: unreceived.id,
+          node: (
+            <PendingMessage
+              text={unreceived.input ?? ""}
+              attachments={ownSend
+                ? [...ownSend.images, ...ownSend.files].map((chip) => ({ name: chip.name }))
+                : [...(recalled?.images ?? []).map((name) => ({ name, again: true })), ...(recalledSent?.files ?? []).map((chip) => ({ name: chip.name }))]}
+              status={unreceivedReason === undefined ? "waiting" : "not_delivered"}
+              reason={unreceivedReason}
+              {...(unreceivedReason !== undefined ? { onRetry: retryUnreceived, onEdit: editUnreceived } : {})}
+            />
+          ),
+        }
+      : undefined;
   /** One earlier page at a time; after a failure, loading on scroll waits for Retry. */
   const loadingHistory = useRef(false);
   const historyFailed = useRef(false);
@@ -653,8 +830,8 @@ export function Chat({
                 <HistoryLoader rowRef={loaderRow} loading={historyLoading} error={historyError} onRetry={retryEarlier} />
               )}
               {!state && !streamError && <TimelineSkeleton />}
-              {state && <Timeline state={state} preferences={preferences} onOpenPanel={panels.show} actions={panelActions} onInsert={insertRef} />}
-              {state && !state.history.items.length && !current && (
+              {state && <Timeline state={state} preferences={preferences} onOpenPanel={panels.show} actions={panelActions} onInsert={insertRef} pending={pendingMessage} />}
+              {state && !state.history.items.length && !current && !pendingMessage && (
                 <div className="chat-intro">
                   <h2>What would you like to work on?</h2>
                   <p className="muted">
@@ -663,7 +840,7 @@ export function Chat({
                   </p>
                 </div>
               )}
-              {current && visibleMilestone && (
+              {current && visibleMilestone && !(milestone === "Preparing" && pendingMessage) && (
                 <p className="working-status">
                   <span className="activity-dot" />
                   {milestone}
@@ -675,10 +852,11 @@ export function Chat({
                   Committed history refreshes automatically.
                 </p>
               )}
-              {state?.operations[0]?.error && (
+              {/* A message the agent did not get says why in its bubble. */}
+              {state?.operations[0] && state.operations[0].id !== unreceived?.id && state.operations[0].error && (
                 <ErrorMessage>{state.operations[0].error.message}</ErrorMessage>
               )}
-              {state?.operations[0]?.state === "interrupted" && (
+              {state?.operations[0] && state.operations[0].id !== unreceived?.id && state.operations[0].state === "interrupted" && (
                 <p className="warning">
                   The previous operation was interrupted. Inspect tool outcomes
                   before sending another turn. Nothing is replayed
@@ -720,6 +898,11 @@ export function Chat({
                     } catch {}
                     setUnconfirmed(undefined);
                     setError("");
+                    // The message goes back in the message box; a receipt that shows up later still reaches the timeline.
+                    if (outgoing?.status === "not_confirmed") {
+                      putBack(outgoing, true);
+                      setOutgoing(undefined);
+                    }
                   }}
                 >
                   Dismiss check and keep draft

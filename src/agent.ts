@@ -84,6 +84,8 @@ export type RunEvent = (
   /** Provider-native compaction was configured but not used for this compaction; the checkpoint strategy ran instead. */
   | { type: "compact_warning"; message: string; details?: CompactionDetails }
   | { type: "run_end"; result: RunResult }
+  /** The user message is in the conversation: the agent received it (docs/chat-design.md §5). */
+  | { type: "input_committed" }
   | ({ type: "panel_update" } & PanelLiveEvent)
   | { type: "hook_event"; id: string; event: HookReceipt["event"]; outcome: HookReceipt["outcome"];
       durationMs: number; message?: string; code?: string }
@@ -1278,6 +1280,7 @@ export class AgentSession {
         : typeof input === "string" ? `${noteText}\n\n${input}` : [{ type: "text", text: noteText }, ...input];
       this.commitMessage({ role: "user", content: structuredClone(modelInput) }, firstTask ? { originalTask: input } : {},
         [{ kind: "user", payload: { input: structuredClone(input) } }], true, undefined, notes.map((note) => note.sequence));
+      emit({ type: "input_committed" });
       if (firstTask) this.originalTask = structuredClone(input);
       // A chat still carrying a placeholder title is named from its first message, even when that turn predates this fix.
       this.durable((store, sessionId, owner) => store.setTitleFromPrompt(sessionId, owner, renderUserInput(input)));

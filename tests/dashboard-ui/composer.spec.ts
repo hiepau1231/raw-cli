@@ -113,6 +113,8 @@ test.describe("slash commands", () => {
     await expect(card.getByRole("button", { name: "Compact now", exact: true })).toBeEnabled();
     await page.keyboard.press("Escape");
     await expect(card).toHaveCount(0);
+    // The closed card hands focus back to the ring a moment after it goes; typing before that would lose keys to the ring.
+    await expect(page.locator(".composer-area").getByRole("button", { name: /^Context: / })).toBeFocused();
     const id = new URL(page.url()).pathname.split("/").at(-1)!;
     await input.pressSequentially("/compact");
     await page.keyboard.press("Enter");

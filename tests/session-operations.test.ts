@@ -64,6 +64,32 @@ test("durable duplicate submit runs one tool once across completion and service 
   } finally { await service.close(); f.cleanup(); }
 });
 
+test("the operation is published with your committed message before the answer streams", async () => {
+  const f = fixture();
+  const provider: ProviderAdapter = { modelConfig, async generate(request) {
+    request.onTextDelta?.("answer"); return { text: "answer", toolCalls: [], finishReason: "stop" };
+  } };
+  const service = new SessionOperations({ store: f.store, attach: async ({ owner, operation }) => ({
+    agent: createAgent({ provider, cwd: f.root, persistence: { store: f.store, sessionId: f.session.id,
+      surface: "web", owner, ownership: "host", operationId: operation.id } }), modelConfig,
+    compactOptions: { keepRecentTurns: 1, maxOutputTokens: 64 }, async close() {},
+  }) });
+  const seen: string[] = [];
+  service.subscribe((event) => {
+    if (event.type === "operation") seen.push(`operation:${event.operation.state}:${event.operation.committedUserPosition ?? "-"}`);
+    else if (event.type === "event") seen.push(`event:${event.event.type}`);
+  });
+  try {
+    const operation = service.submit(f.intent);
+    assert.equal((await service.wait(operation.id)).state, "completed");
+    const committed = seen.indexOf("operation:running:0");
+    assert.ok(committed > seen.indexOf("operation:running:-"), seen.join(" "));
+    assert.ok(committed < seen.indexOf("event:text_delta"), seen.join(" "));
+    // The commit is host bookkeeping: observers get the operation, never the run event itself.
+    assert.ok(!seen.includes("event:input_committed"), seen.join(" "));
+  } finally { await service.close(); f.cleanup(); }
+});
+
 test("startup retains ownership, can be cancelled, and never consumes accepted input", async () => {
   const f = fixture();
   let entered!: () => void;

@@ -181,6 +181,11 @@ export function useAttachments(sessionId: string, metas: KindMeta[]) {
     setChips((old) => old.filter((chip) => !keys.includes(chip.key)));
   }, []);
 
+  /** Puts back chips taken by a request the server refused; their staged items are still there. */
+  const restore = useCallback((back: Chip[]) => {
+    setChips((old) => [...old, ...back.filter((chip) => !old.some((entry) => entry.key === chip.key))]);
+  }, []);
+
   const summary = useMemo(
     () => ({
       uploading: chips.some((chip) => chip.status === "uploading"),
@@ -190,5 +195,5 @@ export function useAttachments(sessionId: string, metas: KindMeta[]) {
     }),
     [chips],
   );
-  return { chips, ...summary, addFiles, addFileRef, remove, retry, expire, consume };
+  return { chips, ...summary, addFiles, addFileRef, remove, retry, expire, consume, restore };
 }

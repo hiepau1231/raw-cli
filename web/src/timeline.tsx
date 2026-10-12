@@ -385,6 +385,55 @@ const MessageRow = memo(function MessageRow({ item, segment, sessionId }: { item
   );
 });
 
+/** Where a message the agent has not received yet stands (docs/chat-design.md §5). */
+export type PendingStatus = "sending" | "waiting" | "not_delivered" | "not_sent" | "not_confirmed";
+const PENDING_LABEL: Record<PendingStatus, string> = {
+  sending: "Sending…",
+  waiting: "Waiting for the agent",
+  not_delivered: "Not delivered · the agent did not receive this message",
+  not_sent: "Not sent",
+  not_confirmed: "Not confirmed",
+};
+
+/**
+ * Your message before the agent has it: the bubble with a status line under it instead of the time, and Retry and Edit
+ * when the agent did not get it (docs/chat-design.md §5). An image only named after a reload is to attach again.
+ */
+export const PendingMessage = memo(function PendingMessage({ text, attachments, status, reason, onRetry, onEdit }: {
+  text: string;
+  attachments: ReadonlyArray<{ name: string; again?: boolean }>;
+  status: PendingStatus;
+  reason?: string | undefined;
+  onRetry?: (() => void) | undefined;
+  onEdit?: (() => void) | undefined;
+}) {
+  const failed = status === "not_delivered" || status === "not_sent" || status === "not_confirmed";
+  return (
+    <article className={`message user pending${failed ? " failed" : ""}`} data-testid="pending-message">
+      <div className="bubble">
+        {attachments.length ? (
+          <div className="sent-attachments" aria-label="Attachments">
+            {attachments.map((item, index) => (
+              <span className="sent-attachment" key={index}>{item.again ? `${item.name} · attach again` : item.name}</span>
+            ))}
+          </div>
+        ) : null}
+        <div className="user-text">{text}</div>
+      </div>
+      <p className="pending-status">{PENDING_LABEL[status]}</p>
+      {reason && <p className="pending-reason">{reason}</p>}
+      {(onRetry || onEdit) && (
+        <div className="pending-actions">
+          {onRetry && <button type="button" className="text-button" onClick={onRetry}>Retry</button>}
+          {onEdit && <button type="button" className="text-button" onClick={onEdit}>Edit</button>}
+        </div>
+      )}
+    </article>
+  );
+});
+/** The id of the record that stands for your pending message in the timeline. */
+const PENDING_RECORD = "pending:message";
+
 /**
  * One turn: your message and everything up to the next one. Its props are only what it shows, so a turn whose records,
  * calls, approvals, questions, views, operations and panels did not change is not rendered again (docs/chat-design.md §10).
@@ -411,6 +460,8 @@ interface TurnProps {
   actions: ActionHost | undefined;
   onInsert: InsertRef;
   onOpenPanel: (panel: string) => void;
+  /** Your pending message, for the turn that holds it. */
+  pending: ReactNode;
 }
 const NONE: never[] = [];
 const sameList = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((value, index) => value === b[index]);
@@ -436,7 +487,7 @@ function sameTurn(a: TurnProps, b: TurnProps): boolean {
 
 const TurnView = memo(function TurnView({
   records, keys, pairs, approvals: pendingApprovals, interactions, live, views, operations, compactions, panels,
-  priorTools, priorViews, priorCompactions, sessionId, preferences, availabilityRevision, actions, onInsert, onOpenPanel,
+  priorTools, priorViews, priorCompactions, sessionId, preferences, availabilityRevision, actions, onInsert, onOpenPanel, pending,
 }: TurnProps) {
   /** Each record's group key in the last committed render, so a group keeps its key when records join it at either end. */
   const groupKeys = useRef<ReadonlyMap<string, string>>(new Map());
@@ -539,6 +590,11 @@ const TurnView = memo(function TurnView({
     elapsedMs = undefined;
   };
   records.forEach((item, index) => {
+    if (item.id === PENDING_RECORD) {
+      flush();
+      result.push(pending);
+      return;
+    }
     if (item.interactionRequestId) {
       flush();
       if (item.interactionViewInstanceId) renderedViews.add(item.interactionViewInstanceId);
@@ -650,12 +706,15 @@ export const Timeline = memo(function Timeline({
   onOpenPanel,
   actions,
   onInsert = noInsert,
+  pending,
 }: {
   state: ChatState;
   preferences: Preferences;
   onOpenPanel: (panel: string) => void;
   actions?: ActionHost | undefined;
   onInsert?: InsertRef;
+  /** Your message before the agent has it, and its operation once there is one (docs/chat-design.md §5). */
+  pending?: { operationId: string | undefined; node: ReactNode } | undefined;
 }) {
   /** Each record's turn key in the last committed render. */
   const turnKeys = useRef<ReadonlyMap<string, string>>(new Map());
@@ -758,6 +817,18 @@ export const Timeline = memo(function Timeline({
         compaction: item.details,
       });
     }
+  if (pending) {
+    // The bubble says how the operation ended; its run status would say it again.
+    if (pending.operationId) {
+      const ended = records.findIndex((item) => item.kind === "run_end" && item.operationId === pending.operationId);
+      if (ended >= 0) records.splice(ended, 1);
+    }
+    // Where the history's bubble will be: after the operation's hook receipts, before its answer.
+    const record: HistoryView = { id: PENDING_RECORD, kind: "user", status: "pending", sequence: Number.MAX_SAFE_INTEGER,
+      createdAt: Date.now(), ...(pending.operationId ? { operationId: pending.operationId } : {}) };
+    const at = pending.operationId ? records.findIndex((item) => item.operationId === pending.operationId && !item.hook) : -1;
+    records.splice(at < 0 ? records.length : at, 0, record);
+  }
   const availabilityRevision = `${state.snapshotCount}:${state.session.agentName}:${state.operations.filter(op => isTerminal(op.state)).map(op => `${op.id}:${op.state}`).join(",")}`;
   const turns = splitTurns(records);
   const { keys: turnKeyList, next } = assignStableKeys(turns.map((turn) => ({ ids: turn.map((record) => record.id), prefix: "" })), turnKeys.current);
@@ -844,6 +915,7 @@ export const Timeline = memo(function Timeline({
           actions: interactive ? actions : undefined,
           onInsert,
           onOpenPanel,
+          pending: pending && segments.has(PENDING_RECORD) ? pending.node : undefined,
         };
         return <TurnView key={turnKeyList[index]} {...props} />;
       })}

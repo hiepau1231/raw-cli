@@ -1030,6 +1030,43 @@ main > .error-banner {
 .message-meta time {
   margin-right: 2px;
 }
+/* A message on its way, or one the agent did not get (docs/chat-design.md §5): the same bubble, a status line under it. */
+.message.user.pending {
+  margin-bottom: 18px;
+}
+.pending-status,
+.pending-reason {
+  max-width: 78%;
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  text-align: right;
+}
+.message.user.failed .pending-status {
+  color: var(--error);
+}
+.pending-actions {
+  display: flex;
+  gap: 2px;
+}
+.pending-actions .text-button {
+  min-height: 30px;
+  font-size: 12.5px;
+}
+.sent-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.sent-attachment {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 12px;
+}
 :is(.message-meta, .message-actions) .icon-button {
   color: var(--muted);
 }
