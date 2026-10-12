@@ -43,6 +43,14 @@ test("a command naming a file runs by its extension", () => {
   assert.deepEqual(resolveWin("./hook.sh", ["x"], ["C:\\work\\hook.sh"]), { ok: true, file: "C:\\Git\\bin\\bash.exe", args: ["C:\\work\\hook.sh", "x"] });
   const noBash = resolveCommand("./hook.sh", [], { cwd: "C:\\work", env, platform: "win32", exists: files("C:\\work\\hook.sh") });
   assert.equal(noBash.ok === false && noBash.code, "bash_unavailable");
+  // A configured interpreter given by name is found on PATH, never as a same-named file in the cwd.
+  const named = (shell: string, script: string) => resolveCommand(script, [], { cwd: "C:\\work", env, platform: "win32",
+    exists: files(`C:\\work\\${script.slice(2)}`, `C:\\work\\${shell}`, `C:\\tools\\${shell}`), bash: () => shell, powershell: () => shell });
+  assert.equal(named("bash.exe", "./hook.sh").ok && (named("bash.exe", "./hook.sh") as ResolvedCommand).file, "C:\\tools\\bash.exe");
+  assert.equal(named("pwsh.exe", "./hook.ps1").ok && (named("pwsh.exe", "./hook.ps1") as ResolvedCommand).file, "C:\\tools\\pwsh.exe");
+  const unresolved = resolveCommand("./hook.sh", [], { cwd: "C:\\work", env, platform: "win32", exists: files("C:\\work\\hook.sh", "C:\\work\\bash.exe"),
+    bash: () => "bash.exe" });
+  assert.equal(unresolved.ok === false && unresolved.code, "bash_unavailable");
   const batch = resolveWin("./hook", [], ["C:\\work\\hook.bat"]);
   assert.equal(batch.ok && batch.file, "C:\\Windows\\System32\\cmd.exe");
   assert.deepEqual(resolveWin("D:\\bin\\x.exe", ["a b"], ["D:\\bin\\x.exe"]), { ok: true, file: "D:\\bin\\x.exe", args: ["a b"] });

@@ -75,27 +75,32 @@ export function resolveCommand(command: string, args: readonly string[], options
   const exists = options.exists ?? isRegularFile;
   const extensions = (envValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
   const withExtensions = (base: string) => [...(win32.extname(base) ? [base] : []), ...extensions.map((ext) => base + ext.toLowerCase())];
-  let file: string | undefined;
-  if (win32.isAbsolute(command) || /[\\/]/.test(command)) {
-    file = withExtensions(win32.resolve(options.cwd, command)).find(exists);
-  } else {
+  const locate = (name: string): string | undefined => {
+    if (win32.isAbsolute(name) || /[\\/]/.test(name)) return withExtensions(win32.resolve(options.cwd, name)).find(exists);
     for (const directory of (envValue(env, "PATH") ?? "").split(";")) {
       const entry = directory.replace(/^"(.*)"$/, "$1");
       if (!entry || !win32.isAbsolute(entry)) continue;
-      file = withExtensions(win32.join(entry, command)).find(exists);
-      if (file) break;
+      const found = withExtensions(win32.join(entry, name)).find(exists);
+      if (found) return found;
     }
-  }
+    return undefined;
+  };
+  // A configured interpreter given by name (RAW_BASH_PATH=bash.exe) is found the same way: the job launcher starts
+  // exactly the file it is given, and Windows would look for a bare name in the cwd.
+  const interpreter = (found: string) => win32.isAbsolute(found) ? found : locate(found);
+  const file = locate(command);
   if (!file) return { ok: false, code: "not_found", message: `command not found: ${command}` };
   const extension = win32.extname(file).toLowerCase();
   if ([".js", ".mjs", ".cjs"].includes(extension)) return { ok: true, file: options.node ?? process.execPath, args: [file, ...args] };
   if (extension === ".ps1") {
-    const powershell = (options.powershell ?? (() => findPowerShell(env, exists, options.cwd)))();
+    const configured = (options.powershell ?? (() => findPowerShell(env, exists, options.cwd)))();
+    const powershell = configured && interpreter(configured);
     if (!powershell) return { ok: false, code: "not_found", message: "PowerShell was not found" };
     return { ok: true, file: powershell, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file, ...args] };
   }
   if (extension === ".sh") {
-    const bash = (options.bash ?? (() => findGitBash(env, options.cwd, exists)))();
+    const configured = (options.bash ?? (() => findGitBash(env, options.cwd, exists)))();
+    const bash = configured && interpreter(configured);
     if (!bash) return { ok: false, code: "bash_unavailable", message: "Bash was not found. Install Git for Windows or set RAW_BASH_PATH to its bin\\bash.exe." };
     return { ok: true, file: bash, args: [file, ...args] };
   }
