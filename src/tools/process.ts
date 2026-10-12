@@ -4,7 +4,7 @@ import type { ToolResult } from "./types.js";
 import { errorResult, utf8Prefix, utf8Suffix } from "./results.js";
 import { OutputSpill, savedLabel } from "./spill.js";
 import { resolveBash } from "./shells.js";
-import { jobLauncher, stateDirectory, terminateTree, wrapInJob, type ResolvedCommand } from "../platform/windows.js";
+import { jobLauncher, resolveCommand, stateDirectory, terminateTree, wrapInJob, type ResolvedCommand } from "../platform/windows.js";
 
 type Channel = "stdout" | "stderr";
 interface Segment { channel?: Channel; text: string }
@@ -119,6 +119,11 @@ export function spawnShell(options: { command: string; cwd: string; env?: NodeJS
   let launch: ResolvedCommand = { file: bash.path, args: ["-c", options.command] };
   let jobbed = false;
   if (platform === "win32") {
+    // The launcher starts exactly the file it is given, so a bare or missing RAW_BASH_PATH is resolved here, on PATH
+    // and never in the cwd, and a missing one fails like a spawn would.
+    const resolved = resolveCommand(bash.path, launch.args, { cwd: options.cwd, platform });
+    if (!resolved.ok) throw Object.assign(new Error(`spawn ${bash.path} ENOENT`), { code: "ENOENT", syscall: "spawn" });
+    launch = resolved;
     const launcher = jobLauncher({ platform, stateDir: stateDirectory() });
     launch = wrapInJob(launch, launcher);
     jobbed = launcher !== undefined;

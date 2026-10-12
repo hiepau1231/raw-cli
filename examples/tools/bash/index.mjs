@@ -253,6 +253,53 @@ function isRegularFile(file) {
     return false;
   }
 }
+function resolveCommand(command, args, options) {
+  const platform = options.platform ?? process.platform;
+  if (platform !== "win32") return { ok: true, file: command, args: [...args] };
+  const env = options.env ?? process.env;
+  const exists = options.exists ?? isRegularFile;
+  const extensions = (envValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  const withExtensions = (base) => [...win32.extname(base) ? [base] : [], ...extensions.map((ext) => base + ext.toLowerCase())];
+  let file;
+  if (win32.isAbsolute(command) || /[\\/]/.test(command)) {
+    file = withExtensions(win32.resolve(options.cwd, command)).find(exists);
+  } else {
+    for (const directory2 of (envValue(env, "PATH") ?? "").split(";")) {
+      const entry = directory2.replace(/^"(.*)"$/, "$1");
+      if (!entry || !win32.isAbsolute(entry)) continue;
+      file = withExtensions(win32.join(entry, command)).find(exists);
+      if (file) break;
+    }
+  }
+  if (!file) return { ok: false, code: "not_found", message: `command not found: ${command}` };
+  const extension = win32.extname(file).toLowerCase();
+  if ([".js", ".mjs", ".cjs"].includes(extension)) return { ok: true, file: options.node ?? process.execPath, args: [file, ...args] };
+  if (extension === ".ps1") {
+    const powershell = (options.powershell ?? (() => findPowerShell(env, exists)))();
+    if (!powershell) return { ok: false, code: "not_found", message: "PowerShell was not found" };
+    return { ok: true, file: powershell, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file, ...args] };
+  }
+  if (extension === ".sh") {
+    const bash = (options.bash ?? (() => findGitBash(env, options.cwd, exists)))();
+    if (!bash) return { ok: false, code: "bash_unavailable", message: "Bash was not found. Install Git for Windows or set RAW_BASH_PATH to its bin\\bash.exe." };
+    return { ok: true, file: bash, args: [file, ...args] };
+  }
+  if (extension === ".cmd" || extension === ".bat") {
+    const twice = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i.test(file);
+    const line = [quoteCmdCommand(file), ...args.map((arg) => quoteCmdArgument(arg, twice))].join(" ");
+    return { ok: true, file: systemBinary("cmd.exe", env), args: ["/d", "/s", "/c", `"${line}"`], windowsVerbatimArguments: true, batch: file };
+  }
+  return { ok: true, file, args: [...args] };
+}
+var CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+function quoteCmdCommand(file) {
+  return win32.normalize(file).replace(CMD_META, "^$1");
+}
+function quoteCmdArgument(arg, twice = false) {
+  let quoted = arg.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"').replace(/(?=(\\+?)?)\1$/, "$1$1");
+  quoted = `"${quoted}"`.replace(CMD_META, "^$1");
+  return twice ? quoted.replace(CMD_META, "^$1") : quoted;
+}
 function quoteWindowsArgument(arg) {
   if (!arg) return '""';
   if (!/[ \t"]/.test(arg)) return arg;
@@ -269,6 +316,20 @@ function quoteWindowsArgument(arg) {
     } else beforeQuote = false;
   }
   return `"${out}"`;
+}
+function findPowerShell(env = process.env, exists = isRegularFile) {
+  const configured = envValue(env, "RAW_POWERSHELL_PATH");
+  if (configured) return configured;
+  const onPath = resolveCommand("pwsh", [], { cwd: "C:\\", env, platform: "win32", exists });
+  if (onPath.ok) return onPath.file;
+  const programFiles = envValue(env, "ProgramFiles");
+  for (const candidate of [
+    ...programFiles ? [win32.join(programFiles, "PowerShell", "7", "pwsh.exe")] : [],
+    systemBinary(win32.join("WindowsPowerShell", "v1.0", "powershell.exe"), env)
+  ]) {
+    if (exists(candidate)) return candidate;
+  }
+  return void 0;
 }
 function findGitBash(env, workspace, exists = isRegularFile) {
   const configured = envValue(env, "RAW_BASH_PATH");
@@ -488,6 +549,9 @@ function spawnShell(options, platform = process.platform) {
   let launch = { file: bash.path, args: ["-c", options.command] };
   let jobbed = false;
   if (platform === "win32") {
+    const resolved = resolveCommand(bash.path, launch.args, { cwd: options.cwd, platform });
+    if (!resolved.ok) throw Object.assign(new Error(`spawn ${bash.path} ENOENT`), { code: "ENOENT", syscall: "spawn" });
+    launch = resolved;
     const launcher = jobLauncher({ platform, stateDir: stateDirectory() });
     launch = wrapInJob(launch, launcher);
     jobbed = launcher !== void 0;

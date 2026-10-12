@@ -11,7 +11,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 
 static class RawJob {
-  const uint JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800;
   const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
   const int JobObjectExtendedLimitInformation = 9;
   const uint STARTF_USESTDHANDLES = 0x00000100;
@@ -103,7 +102,9 @@ static class RawJob {
     IntPtr job = CreateJobObjectW(IntPtr.Zero, null);
     if (job == IntPtr.Zero) return Fail("CreateJobObject");
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+    // No breakaway: Cygwin/MSYS (Git Bash) asks every child to break away whenever the job allows it, which would put
+    // pipeline members and their descendants outside the job. Denying it never fails their spawn; they check first.
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref limits,
       Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION)))) return Fail("SetInformationJobObject");
     if (!AssignProcessToJobObject(job, GetCurrentProcess())) return Fail("AssignProcessToJobObject");

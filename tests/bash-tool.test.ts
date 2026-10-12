@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { ChildProcess, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 import { delegate } from "../src/tools/bundled/bash/index.js";
 import { createAgent, type RunEvent } from "../src/agent.js";
@@ -19,6 +19,7 @@ import type { ToolResult } from "../src/tools/types.js";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
 import { processesWithMarker, waitForNoMarked } from "./fixtures/windows-processes.js";
 import { resolveBash } from "../src/tools/shells.js";
+import { runBash } from "../src/tools/process.js";
 
 /** How a stopped bash call ends: Windows stops the whole job, elsewhere the process group. */
 const STOPPED = process.platform === "win32" ? "process tree stopped" : "process group stopped";
@@ -166,13 +167,13 @@ test("7: a conditional ask rule on command sees aliased calls before anything ru
   const asked: Record<string, unknown>[] = [];
   const context = { cwd, maxOutputBytes: 8192, approve: (request: { arguments: Record<string, unknown> }) => { asked.push(request.arguments); return false; } };
   const marker = join(cwd, "marker");
-  for (const args of [{ command: `rm -rf ${cwd}/x && touch ${marker}` }, { cmd: `rm -rf ${cwd}/x && touch ${marker}` }]) {
+  for (const args of [{ command: `rm -rf x && touch marker` }, { cmd: `rm -rf x && touch marker` }]) {
     const result = await tools.dispatch("bash", args, context);
     assert.equal(result.code, "approval_denied");
   }
-  assert.deepEqual(asked, [{ command: `rm -rf ${cwd}/x && touch ${marker}` }, { command: `rm -rf ${cwd}/x && touch ${marker}` }]);
+  assert.deepEqual(asked, [{ command: `rm -rf x && touch marker` }, { command: `rm -rf x && touch marker` }]);
   assert.equal(existsSync(marker), false);
-  const control = await tools.dispatch("bash", { cmd: `touch ${join(cwd, "marker2")}` }, context);
+  const control = await tools.dispatch("bash", { cmd: "touch marker2" }, context);
   assert.equal(control.isError, false);
   assert.equal(asked.length, 2);
   assert.equal(existsSync(join(cwd, "marker2")), true);
@@ -238,7 +239,7 @@ test("9b: without an available process tool the call runs in the foreground with
     ];
     for (const [label, build, base] of setups) {
       const marker = join(cwd, `${label}-ran`);
-      const result = await (await build()).dispatch("bash", { command: `touch ${marker}; echo fg`, is_background: true }, { cwd, maxOutputBytes: 8192, processes });
+      const result = await (await build()).dispatch("bash", { command: `touch ${basename(marker)}; echo fg`, is_background: true }, { cwd, maxOutputBytes: 8192, processes });
       assert.equal(result.isError, false, label);
       assert.equal(existsSync(marker), true, label);
       assert.ok(text(result).endsWith(BACKGROUND_NOTE), label);
@@ -249,13 +250,13 @@ test("9b: without an available process tool the call runs in the foreground with
         [...base, { match: "builtin/bash", effect: "ask", when: { source: "arguments", any: "run_in_background", regex: "^true$" } }]);
       const blockedMarker = join(cwd, `${label}-blocked`);
       const asked: Record<string, unknown>[] = [];
-      const denied = await ruled.dispatch("bash", { command: `touch ${blockedMarker}`, is_background: true },
+      const denied = await ruled.dispatch("bash", { command: `touch ${basename(blockedMarker)}`, is_background: true },
         { cwd, maxOutputBytes: 8192, processes, approve: (request) => { asked.push(request.arguments); return false; } });
       assert.equal(denied.code, "approval_denied", label);
-      assert.deepEqual(asked, [{ command: `touch ${blockedMarker}`, run_in_background: true }], label);
+      assert.deepEqual(asked, [{ command: `touch ${basename(blockedMarker)}`, run_in_background: true }], label);
 
       const { hook: flagHook } = await hook(cwd, "builtin/bash", "flag");
-      const hooked = await (await build()).dispatch("bash", { command: `touch ${blockedMarker}`, is_background: true },
+      const hooked = await (await build()).dispatch("bash", { command: `touch ${basename(blockedMarker)}`, is_background: true },
         { cwd, maxOutputBytes: 8192, processes, ...hookContext(new HookDispatcher([flagHook]), cwd) });
       assert.equal(hooked.code, "hook_denied", label);
       assert.equal(existsSync(blockedMarker), false, label);
@@ -263,7 +264,7 @@ test("9b: without an available process tool the call runs in the foreground with
     }
     // Not exposed to this call: the whitelist leaves process out.
     const marker = join(cwd, "unexposed-ran");
-    const unexposed = await (await registry(["bash", "process"])).dispatch("bash", { command: `touch ${marker}`, background: true },
+    const unexposed = await (await registry(["bash", "process"])).dispatch("bash", { command: `touch ${basename(marker)}`, background: true },
       { cwd, maxOutputBytes: 8192, processes, whitelist: ["bash"] });
     assert.equal(existsSync(marker), true);
     assert.ok(text(unexposed).endsWith(BACKGROUND_NOTE));
@@ -279,14 +280,14 @@ test("9c: a process gate that refuses ends the call with an error and nothing ru
     const marker = join(cwd, "ran");
     const rule: ToolPolicyRule = { match: "builtin/process", effect: "ask", when: { source: "arguments", any: "action", regex: "^start$" } };
     const asked: string[] = [];
-    const rejected = await (await registry(["bash", "process"], [rule])).dispatch("bash", { command: `touch ${marker}`, run_in_background: true },
+    const rejected = await (await registry(["bash", "process"], [rule])).dispatch("bash", { command: `touch ${basename(marker)}`, run_in_background: true },
       { cwd, maxOutputBytes: 8192, processes, approve: (request) => { asked.push(request.identity); return false; } });
     assert.equal(rejected.isError, true);
     assert.equal(rejected.code, "approval_denied");
     assert.deepEqual(asked, ["builtin/process"]);
 
     const { hook: block } = await hook(cwd, "builtin/process", "always");
-    const blocked = await (await registry(["bash", "process"])).dispatch("bash", { command: `touch ${marker}`, run_in_background: true },
+    const blocked = await (await registry(["bash", "process"])).dispatch("bash", { command: `touch ${basename(marker)}`, run_in_background: true },
       { cwd, maxOutputBytes: 8192, processes, ...hookContext(new HookDispatcher([block]), cwd) });
     assert.equal(blocked.code, "hook_denied");
     await sleep(300);
@@ -375,7 +376,7 @@ test("a copied bash tool without delegation runs in the foreground and says so",
   const tools = new ToolRegistry();
   const { delegate: _delegate, ...local } = bash!;
   tools.register(local);
-  const result = await tools.dispatch("bash", { command: `touch ${join(cwd, "ran")}`, run_in_background: true }, { cwd, maxOutputBytes: 8192 });
+  const result = await tools.dispatch("bash", { command: "touch ran", run_in_background: true }, { cwd, maxOutputBytes: 8192 });
   assert.equal(existsSync(join(cwd, "ran")), true);
   assert.ok(text(result).endsWith(BACKGROUND_NOTE));
 });
@@ -456,4 +457,15 @@ test("on Windows a stop that fails keeps the aborted result and its output, and 
     assert.match(text(result), /\[stopping the command failed: kill EPERM\]/);
     assert.match(text(result), new RegExp(`\\[aborted after \\d+\\.\\ds; ${STOPPED}\\]$`));
   } finally { ChildProcess.prototype.kill = kill; }
+});
+
+test("on Windows a bare Bash path is looked up on PATH, never in the cwd, and a missing one fails to spawn", { skip: onlyWindows }, async () => {
+  const cwd = await workdir("raw-bash-planted-");
+  // A planted "Bash" that would run if the launcher were handed the bare name: CreateProcess searches the cwd.
+  await copyFile(process.execPath, join(cwd, "raw-planted-bash.exe"));
+  for (const bashPath of ["raw-planted-bash", "raw-missing-bash", join(cwd, "missing", "bash.exe")]) {
+    const result = await runBash({ command: "echo ran", cwd, maxOutputBytes: 8192, bashPath });
+    assert.equal(result.code, "bash_spawn_error", bashPath);
+    assert.match(text(result), /cannot start Bash: spawn .* ENOENT/, bashPath);
+  }
 });
