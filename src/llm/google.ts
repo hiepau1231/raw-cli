@@ -8,18 +8,24 @@ function inputContents(request: ProviderRequest): Content[] {
   const contents: Content[] = [];
   const syntheticIds = new Set<string>();
   const pendingResults: Part[] = [];
+  /** Consecutive user entries are one user content: the function responses first, then your text and images (docs/providers.md). */
+  const pushUser = (parts: Part[]) => {
+    const last = contents.at(-1);
+    if (last?.role === "user") last.parts = [...(last.parts ?? []), ...parts];
+    else contents.push({ role: "user", parts });
+  };
   const flushResults = () => {
-    if (pendingResults.length) contents.push({ role: "user", parts: pendingResults.splice(0) });
+    if (pendingResults.length) pushUser(pendingResults.splice(0));
   };
   for (const message of request.messages) {
     if (message.role !== "tool") flushResults();
     if (message.role === "user") {
       const parts = nativeUserContent(message.content);
-      contents.push({ role: "user", parts: parts.some((part) => part.type === "image")
+      pushUser(parts.some((part) => part.type === "image")
         ? parts.flatMap((part): Part[] => part.type === "image"
           ? [{ inlineData: { mimeType: part.mimeType, data: part.data } }]
           : part.text ? [{ text: part.text }] : [])
-        : [{ text: renderUserInput(message.content) }] });
+        : [{ text: renderUserInput(message.content) }]);
     }
     else if (message.role === "assistant") {
       syntheticIds.clear();

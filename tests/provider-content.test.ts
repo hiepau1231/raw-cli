@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createProvider } from "../src/llm/client.js";
-import type { ProviderName, ResolvedModelConfig } from "../src/llm/types.js";
+import type { ModelMessage, ProviderName, ResolvedModelConfig, UserInput } from "../src/llm/types.js";
+import { makePng } from "./fixtures/images.js";
 import { anthropicFrame, googleFrame, openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
 import type { ToolResult } from "../src/tools/types.js";
 import { nativeToolContent } from "../src/llm/content.js";
@@ -254,3 +255,80 @@ test("linked malformed arguments remain an error call for matching tool-result c
     assert.ok(result.toolCalls[0]?.argumentError);
   } finally { await fixture.close(); }
 });
+
+// docs/providers.md: a user message after tool results joins their user turn for Anthropic and Google.
+{
+  const anthropicOk = [
+    anthropicFrame("message_start", { message: { id: "m", type: "message", role: "assistant", content: [], model: "fixture-model", stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } }),
+    anthropicFrame("content_block_start", { index: 0, content_block: { type: "text", text: "ok" } }),
+    anthropicFrame("content_block_stop", { index: 0 }),
+    anthropicFrame("message_delta", { delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }),
+    anthropicFrame("message_stop", {}),
+  ];
+  const googleOk = [googleFrame({ candidates: [{ content: { role: "model", parts: [{ text: "ok" }] }, finishReason: "STOP" }] })];
+  const responsesOk = [`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", sequence_number: 1,
+    response: { id: "r", object: "response", status: "completed", output: [{ id: "m", type: "message", role: "assistant", status: "completed",
+      content: [{ type: "output_text", text: "ok", annotations: [] }] }], usage: null } })}\n\n`, "data: [DONE]\n\n"];
+  const png = makePng().toString("base64");
+  const withImage: UserInput = [{ type: "text", text: "x" }, { type: "image", mimeType: "image/png", data: png }];
+  const result = (text: string): ToolResult => ({ isError: false, content: [{ type: "text", text }] });
+  /** assistant(tool_use a, b) → tool a → tool b → the user message `last`. */
+  const afterTools = (last: UserInput): ModelMessage[] => [
+    { role: "user", content: "hello" },
+    { role: "assistant", text: "", toolCalls: [{ id: "a", name: "noop", arguments: {} }, { id: "b", name: "noop", arguments: {} }] },
+    { role: "tool", callId: "a", name: "noop", result: result("A") },
+    { role: "tool", callId: "b", name: "noop", result: result("B") },
+    { role: "user", content: last },
+  ];
+  async function sent(method: ResolvedModelConfig["method"], frames: string[], messages: ModelMessage[]) {
+    const provider = method === "anthropic-messages" ? "anthropic" : method === "google-generate-content" ? "google" : "openai";
+    const mock = await startMockProvider([{ frames }]);
+    try {
+      const turn = await createProvider({ ...agent(provider, mock.url), method }).generate({ ...request, messages });
+      assert.equal(turn.text, "ok");
+      return mock.requests[0]!.body as Record<string, unknown>;
+    } finally { await mock.close(); }
+  }
+  const anthropicMessages = async (messages: ModelMessage[]) => (await sent("anthropic-messages", anthropicOk, messages)).messages;
+  const googleContents = async (messages: ModelMessage[]) => (await sent("google-generate-content", googleOk, messages)).contents;
+  const anthropicResult = (id: string, text: string) => ({ type: "tool_result", tool_use_id: id, is_error: false, content: [{ type: "text", text }] });
+  const googleResult = (id: string, text: string) => ({ functionResponse: { name: "noop", id, response: { output: text } } });
+
+  test("Anthropic: the tool results and the user message after them are one user message", async () => {
+    const turn = (await anthropicMessages(afterTools("x"))) as Array<{ role: string; content: unknown }>;
+    assert.deepEqual(turn.map((message) => message.role), ["user", "assistant", "user"]);
+    assert.equal(turn[0]!.content, "hello");
+    assert.deepEqual(turn[2]!.content, [anthropicResult("a", "A"), anthropicResult("b", "B"), { type: "text", text: "x" }]);
+    const image = (await anthropicMessages(afterTools(withImage))) as Array<{ role: string; content: unknown }>;
+    assert.deepEqual(image[2]!.content, [anthropicResult("a", "A"), anthropicResult("b", "B"), { type: "text", text: "x" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: png } }]);
+  });
+
+  test("Google: the tool results and the user message after them are one user content", async () => {
+    const turn = (await googleContents(afterTools("x"))) as Array<{ role: string; parts: unknown[] }>;
+    assert.deepEqual(turn.map((content) => content.role), ["user", "model", "user"]);
+    assert.deepEqual(turn[0]!.parts, [{ text: "hello" }]);
+    assert.deepEqual(turn[2]!.parts, [googleResult("a", "A"), googleResult("b", "B"), { text: "x" }]);
+    const image = (await googleContents(afterTools(withImage))) as Array<{ role: string; parts: unknown[] }>;
+    assert.deepEqual(image[2]!.parts, [googleResult("a", "A"), googleResult("b", "B"), { text: "x" }, { inlineData: { mimeType: "image/png", data: png } }]);
+  });
+
+  test("two user messages in a row are one message with both parts in order; a message after an answer stays apart", async () => {
+    const twice: ModelMessage[] = [{ role: "user", content: "hello" }, { role: "user", content: withImage }];
+    assert.deepEqual(await anthropicMessages(twice), [{ role: "user", content: [{ type: "text", text: "hello" }, { type: "text", text: "x" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: png } }] }]);
+    assert.deepEqual(await googleContents(twice), [{ role: "user", parts: [{ text: "hello" }, { text: "x" }, { inlineData: { mimeType: "image/png", data: png } }] }]);
+    const apart: ModelMessage[] = [{ role: "user", content: "hello" }, { role: "assistant", text: "hi", toolCalls: [] }, { role: "user", content: "again" }];
+    assert.deepEqual(await anthropicMessages(apart), [{ role: "user", content: "hello" }, { role: "assistant", content: [{ type: "text", text: "hi" }] },
+      { role: "user", content: "again" }]);
+    assert.deepEqual(await googleContents(apart), [{ role: "user", parts: [{ text: "hello" }] }, { role: "model", parts: [{ text: "hi" }] },
+      { role: "user", parts: [{ text: "again" }] }]);
+  });
+
+  test("OpenAI chat and Responses keep the tool results and the user message after them apart", async () => {
+    const chat = (await sent("openai-chat-completions", [openAiFrame({ content: "ok" }, "stop"), openAiDone], afterTools("x"))).messages as Array<{ role: string }>;
+    assert.deepEqual(chat.map((message) => message.role), ["system", "user", "assistant", "tool", "tool", "user"]);
+    const responses = (await sent("openai-responses", responsesOk, afterTools("x"))).input as Array<{ type?: string; role?: string }>;
+    assert.deepEqual(responses.map((item) => item.role ?? item.type), ["user", "function_call", "function_call", "function_call_output", "function_call_output", "user"]);
+  });
+}

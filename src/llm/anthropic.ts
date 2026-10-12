@@ -17,14 +17,21 @@ export const ANTHROPIC_COMPACTION_INSTRUCTIONS_LIMIT = 16384;
 
 function inputMessages(request: { messages: readonly ModelMessage[] }): MessageParam[] {
   const messages: MessageParam[] = [];
+  /** Consecutive user entries are one user message: the tool results first, then your text and images (docs/providers.md). */
+  const pushUser = (content: MessageParam["content"]) => {
+    const last = messages.at(-1);
+    if (last?.role !== "user") return void messages.push({ role: "user", content });
+    const blocks = (value: MessageParam["content"]) => (typeof value === "string" ? value ? [{ type: "text" as const, text: value }] : [] : value);
+    last.content = [...blocks(last.content), ...blocks(content)];
+  };
   for (const message of request.messages) {
     if (message.role === "user") {
       const parts = nativeUserContent(message.content);
-      messages.push({ role: "user", content: (parts.some((part) => part.type === "image")
+      pushUser((parts.some((part) => part.type === "image")
         ? parts.flatMap((part): Array<Record<string, unknown>> => part.type === "image"
           ? [{ type: "image", source: { type: "base64", media_type: part.mimeType, data: part.data } }]
           : part.text ? [{ type: "text", text: part.text }] : [])
-        : renderUserInput(message.content)) as MessageParam["content"] });
+        : renderUserInput(message.content)) as MessageParam["content"]);
     }
     else if (message.role === "assistant") {
       const blocks = Array.isArray(message.opaque) ? message.opaque : [
@@ -37,7 +44,7 @@ function inputMessages(request: { messages: readonly ModelMessage[] }): MessageP
       const content: Array<Record<string, unknown>> = [];
       if (result.text) content.push({ type: "text", text: result.text });
       for (const image of result.images) content.push({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } });
-      messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: message.callId, is_error: message.result.isError, content: content as never }] });
+      pushUser([{ type: "tool_result", tool_use_id: message.callId, is_error: message.result.isError, content: content as never }]);
     }
   }
   return messages;
