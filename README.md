@@ -10,11 +10,11 @@
 - **Connect your systems.** Selected MCP tools and runtime variables sit next to the built-ins.
 - **Share the result.** Package an agent with its tools and skills as a `.rawpkg` that your team installs.
 
-Each agent selects ordered tools, skills and hooks, and can supply a system prompt, so a request carries only what that agent was given. That also keeps models with limited context useful. Raw ships thirteen tools as editable plugins: `read_file`, `write_file`, `edit_file`, `apply_patch`, `bash`, `view_image`, `list_skills`, `load_skill`, `list_vars`, `read_var`, `todo`, `ask_user`, and `process`. Apply patch, Todo, Ask, and Process are selected explicitly; they are not added to the starter tool selection. Tools, skills and hooks can also live in the user's config directory or beside a selected agent config. Selected MCP tools remain available. Standard Agent Client Protocol (ACP) lets an IDE or parent agent run sessions.
+Each agent selects ordered tools, skills and hooks, and can supply a system prompt, so a request carries only what that agent was given. That also keeps models with limited context useful. Raw ships fourteen tools as editable plugins: `read_file`, `write_file`, `edit_file`, `apply_patch`, `bash`, `powershell`, `view_image`, `list_skills`, `load_skill`, `list_vars`, `read_var`, `todo`, `ask_user`, and `process`. Apply patch, PowerShell, Todo, Ask, and Process are selected explicitly; they are not added to the starter tool selection, except that on Windows without Git Bash the starter selects PowerShell in place of Bash. Tools, skills and hooks can also live in the user's config directory or beside a selected agent config. Selected MCP tools remain available. Standard Agent Client Protocol (ACP) lets an IDE or parent agent run sessions.
 
 ## Install and run
 
-Requires Node.js 22.13+ and Bash for the `bash` tool. Documentation: [raw.tlelabs.com](https://raw.tlelabs.com). To shape Raw into your own agent, read [Design an effective agent](https://raw.tlelabs.com/docs/guides/design-an-agent/) and the [FAQ](https://raw.tlelabs.com/docs/start/faq/).
+Requires Node.js 22.13+ on macOS, Linux or Windows 10/11, and Bash for the `bash` tool. Documentation: [raw.tlelabs.com](https://raw.tlelabs.com). To shape Raw into your own agent, read [Design an effective agent](https://raw.tlelabs.com/docs/guides/design-an-agent/) and the [FAQ](https://raw.tlelabs.com/docs/start/faq/).
 
 ```sh
 npm install -g @tlelabs/raw
@@ -22,6 +22,10 @@ raw config init
 ```
 
 Run it once without installing with `npx @tlelabs/raw --help`. To install the latest commit from GitHub instead, use `npm install -g github:lploc94/raw-cli`; installing from a Git ref runs the `prepare` build, so it downloads build tooling and takes longer. Each [GitHub release](https://github.com/lploc94/raw-cli/releases) also attaches the packed tarball. To work from a checkout, run `npm ci` (which also builds) and `npm install -g .`.
+
+### Windows
+
+Raw runs natively on Windows; WSL is not needed. Install [Git for Windows](https://git-scm.com/download/win) for the `bash` tool: Raw finds its Git Bash (`RAW_BASH_PATH` wins) and never picks WSL's `bash.exe` on its own. Without Git Bash, `raw config init` selects the `powershell` tool instead, and either tool can be selected later. The `powershell` tool runs PowerShell 7 (`pwsh`) when installed, which is recommended, else the Windows PowerShell 5.1 every Windows has; `RAW_POWERSHELL_PATH` picks another. Config lives in `%USERPROFILE%\.config\raw` and sessions in `%USERPROFILE%\.local\state\raw`. Stopping a command or background job ends its whole process tree at once. Policy rules and hooks written for `builtin/bash` do not cover `builtin/powershell`; add rules for each shell an agent selects.
 
 `config init` creates `~/.config/raw/config.json` (or `$XDG_CONFIG_HOME/raw/config.json`) once with setup-capable agent `raw`; edit the local model ID or add your hosted model. `raw "query"` uses the configured `default_agent`, which may name a different agent in an existing config. `--config PATH` selects another strict JSON config file.
 

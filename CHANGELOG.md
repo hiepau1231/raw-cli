@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- Raw runs natively on Windows 10/11 without WSL. The `bash` tool finds Git
+  for Windows' Bash (`RAW_BASH_PATH` still wins) and never picks WSL's
+  launcher; commands, hooks, variable providers and MCP servers start with
+  Windows command lookup, and a job object stops a command's whole process
+  tree. Managed background processes work on Windows.
+- New opt-in `powershell` tool (`builtin/powershell`) with `bash`'s
+  arguments and Bash-like exit codes; `process` starts take
+  `"shell": "powershell"`. On Windows without Git Bash, `raw config init`
+  selects it in place of `bash`.
+- Terminal output uses ASCII decorations in consoles that cannot draw
+  Unicode, closing the terminal or Ctrl+Break shuts Raw down like SIGTERM,
+  and the dashboard explains a port Windows reserves.
+
 ## [0.1.4] - 2026-10-12
 
 - Built-in tools take the single-call shapes models are trained on:
