@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { capResult } from "../src/tools/results.js";
-import { savedLabel, setSpillTotalBytesForTests, spillFits, SPILL_MAX_BYTES, SPILL_TOTAL_BYTES, spillText } from "../src/tools/spill.js";
+import { shortPath } from "./fixtures/platform.js";
+import { isSpillFilePath, savedLabel, setSpillTotalBytesForTests, spillFits, SPILL_MAX_BYTES, SPILL_TOTAL_BYTES, spillText } from "../src/tools/spill.js";
 
 test("saved outputs stay within the aggregate bound by deleting the oldest copies", () => {
   setSpillTotalBytesForTests(2500);
@@ -37,4 +40,22 @@ test("a copy that holds only the start of the output says so wherever it is name
   const capped = capResult({ isError: false, content: [{ type: "text", text: "x".repeat(5000) }], fullOutputPath: "/tmp/saved.log", fullOutputCapped: true }, 1024);
   assert.match(JSON.stringify(capped.content), /Full output saved to \/tmp\/saved\.log \(first \d+ bytes\)/);
   assert.equal(capped.fullOutputCapped, true);
+});
+
+test("a saved output is recognised however its temp root is spelled", () => {
+  const saved = spillText("t", "x".repeat(10)).path!;
+  assert.equal(isSpillFilePath(saved), true);
+  const dir = mkdtempSync(join(tmpdir(), "raw-spill-link-"));
+  try {
+    // Another spelling of the same temp root: a link to it here, the 8.3 short name and a lower-case drive on Windows.
+    const link = join(dir, "temp");
+    symlinkSync(realpathSync.native(tmpdir()), link, process.platform === "win32" ? "junction" : "dir");
+    // A link to the spill folder itself has a name without the prefix, as a Windows short name (RAW-OU~1) does.
+    const folder = join(dir, "spill");
+    symlinkSync(dirname(saved), folder, process.platform === "win32" ? "junction" : "dir");
+    const spellings = [join(link, basename(dirname(saved)), basename(saved)), join(folder, basename(saved))];
+    if (process.platform === "win32") spellings.push(shortPath(saved), saved[0]!.toLowerCase() + saved.slice(1));
+    for (const spelling of spellings) assert.equal(isSpillFilePath(spelling), true, spelling);
+    assert.equal(isSpillFilePath(join(dir, basename(dirname(saved)), basename(saved))), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

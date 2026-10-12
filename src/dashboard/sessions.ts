@@ -44,7 +44,7 @@ export interface SessionSnapshot {
 }
 export function workspacePath(value: unknown, base: string): string {
   const input = textField(value, "cwd", 4096);
-  try { const path = realpathSync(resolve(base, input)); if (statSync(path).isDirectory()) return path; } catch {}
+  try { const path = realpathSync.native(resolve(base, input)); if (statSync(path).isDirectory()) return path; } catch {}
   throw new DashboardError(400, "invalid_workspace", "Choose an existing directory");
 }
 function stringList(value: unknown, field: string, max: number): string[] {
@@ -421,7 +421,7 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
       if (inputRoute[2] !== undefined && inputRoute[3] === "/send-now" && method === "POST") return reply(operations.sendNow(id, decodeURIComponent(inputRoute[2])), 202);
       if (inputRoute[2] !== undefined && inputRoute[3] === "/edit" && method === "POST") {
         // The message comes back as the composer holds it: its text, its files as workspace paths, and its images staged again.
-        let root: string | undefined; try { root = realpathSync(requireSession(id).cwd); } catch { root = undefined; }
+        let root: string | undefined; try { root = realpathSync.native(requireSession(id).cwd); } catch { root = undefined; }
         const staged: AttachmentInfo[] = [];
         try {
           const back = store.takeBackQueuedInput(id, decodeURIComponent(inputRoute[2]), (input, blocks) => {

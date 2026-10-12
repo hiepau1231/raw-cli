@@ -1,10 +1,10 @@
-import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { applyPackageInputs, parseInputSchema } from "./inputs.js";
 import { parseComponentReference, parseSelectionReference } from "./references.js";
 import { resolveInstalledDependency, resolveInstalledPackage, type PackageStoreOptions } from "./store.js";
 import { hostCapabilities } from "./contract.js";
+import { hasSeparator, readJsonText } from "../platform/fs.js";
 
 type JsonObject = Record<string, unknown>;
 export interface PackageAsset { folder: string; name: string; canonicalIdentity: string; as?: string }
@@ -86,7 +86,7 @@ export async function resolvePackageAgentBinding(binding: unknown, options: Pack
   }
   const path = selected.manifest.exports.agents?.[parsed.exportName];
   if (!path) throw new Error(`unknown package agent export: ${local.from}`);
-  const source = record(JSON.parse(await readFile(join(selected.root, path), "utf8")), `package agent ${local.from}`);
+  const source = record(JSON.parse(await readJsonText(join(selected.root, path))), `package agent ${local.from}`);
   if (source.model !== undefined) throw new Error(`package agent must not define recipient model: ${local.from}`);
   const inputs = local.inputs === undefined ? {} : record(local.inputs, "package agent inputs");
   const definition = selectedInputs(source, selected.manifest.inputs, inputs, options.configPath,
@@ -174,7 +174,7 @@ export async function resolvePackageDefinition(reference: string, inputs: unknow
   for (const capability of selected.manifest.requires ?? []) if (!hostCapabilities.has(capability)) {
     throw new Error(`${reference} requires unsupported host capability ${capability}`);
   }
-  const source = record(JSON.parse(await readFile(join(selected.root, path), "utf8")), reference);
+  const source = record(JSON.parse(await readJsonText(join(selected.root, path))), reference);
   const supplied = inputs === undefined ? {} : record(inputs, `${reference} inputs`);
   const permitted = kind === "vars" ? new Set(["source", "cache_ttl_ms"])
     : kind === "var_providers" ? new Set(["command", "args", "cwd", "timeout_ms", "max_output_bytes"])
@@ -243,12 +243,12 @@ export async function resolvePackageDefinitions(agent: JsonObject, root: JsonObj
     if (!selected) { delete providers[name]; continue; }
     const item = await resolvePackageDefinition(from, (binding as { inputs?: unknown }).inputs, options, "var_providers", context);
     const value = item.value;
-    if (typeof value.command === "string" && value.command.includes("/") && !isAbsolute(value.command)) {
+    if (typeof value.command === "string" && hasSeparator(value.command) && !isAbsolute(value.command)) {
       value.command = join(item.root, value.command);
     }
     if (Array.isArray(value.args)) value.args = value.args.map((arg) =>
       typeof arg === "string" && !arg.startsWith("-") && !isAbsolute(arg) && !arg.includes("://")
-        && arg.includes("/") && existsSync(join(item.root, arg))
+        && hasSeparator(arg) && existsSync(join(item.root, arg))
         ? join(item.root, arg) : arg);
     providers[name] = value;
   }
@@ -267,12 +267,12 @@ export async function resolvePackageDefinitions(agent: JsonObject, root: JsonObj
     if (!selectedMcp.has(name)) { delete servers[name]; continue; }
     const item = await resolvePackageDefinition(from, (binding as { inputs?: unknown }).inputs, options, "mcp", context);
     const value = item.value;
-    if (typeof value.command === "string" && value.command.includes("/") && !isAbsolute(value.command)) {
+    if (typeof value.command === "string" && hasSeparator(value.command) && !isAbsolute(value.command)) {
       value.command = join(item.root, value.command);
     }
     if (Array.isArray(value.args)) value.args = value.args.map((arg) =>
       typeof arg === "string" && !arg.startsWith("-") && !isAbsolute(arg) && !arg.includes("://")
-        && arg.includes("/") && existsSync(join(item.root, arg))
+        && hasSeparator(arg) && existsSync(join(item.root, arg))
         ? join(item.root, arg) : arg);
     servers[name] = value;
     mcpIdentities[name] = item.canonicalIdentity;

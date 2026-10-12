@@ -26,7 +26,7 @@ export class InteractionService {
     publish?: (request: InteractionRequest) => void } = {}) { options.store?.recoverInteractions(); }
 
   assertStoreBinding(store: SessionStore): void {
-    if (!this.options.store || this.options.store.storeId !== store.storeId || realpathSync(this.options.store.path) !== realpathSync(store.path))
+    if (!this.options.store || this.options.store.storeId !== store.storeId || realpathSync.native(this.options.store.path) !== realpathSync.native(store.path))
       throw new InteractionError("interaction_invalid", "persisted agents require an interaction service bound to the same session store");
   }
 

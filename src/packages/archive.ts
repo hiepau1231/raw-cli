@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter } from "@zip.js/zip.js";
 import { packagePath, type RawPackageManifest } from "./contract.js";
 import { loadPackageManifest } from "./manifest.js";
+import { renameWithRetry } from "../platform/fs.js";
 
 const MAX_ENTRIES = 4096;
 const MAX_FILE = 16 * 1024 * 1024;
@@ -61,7 +62,7 @@ export async function packPackage(root: string, out: string): Promise<{ sha256: 
   if (result.byteLength > MAX_TOTAL) throw new Error("package archive exceeds size limit");
   await mkdir(dirname(out), { recursive: true });
   const staged = `${out}.tmp-${randomUUID()}`;
-  try { await writeFile(staged, result, { flag: "wx" }); await rename(staged, out); }
+  try { await writeFile(staged, result, { flag: "wx" }); await renameWithRetry(staged, out); }
   catch (error) { await rm(staged, { force: true }); throw error; }
   return { sha256: sha256(result), bytes: result.byteLength };
 }

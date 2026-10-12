@@ -16,7 +16,9 @@ export async function withPackageWriteLock<T>(indexPath: string, work: () => Pro
       finally { await handle.close(); }
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // On Windows a lock file another process is deleting reports EPERM until the delete completes.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST" && !(code === "EPERM" && process.platform === "win32")) throw error;
       let owner: { pid?: number; nonce?: string } | undefined;
       try { owner = JSON.parse(await readFile(path, "utf8")) as typeof owner; }
       catch { /* an owner may still be writing its new lock */ }

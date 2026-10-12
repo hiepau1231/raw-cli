@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { exists, renameWithRetry } from "../platform/fs.js";
 
 interface Asset { path: string; bytes: Buffer; mode: number }
 
@@ -59,10 +60,9 @@ export async function snapshotHook(folder: string, configPath: string, id: strin
       await mkdir(dirname(target), { recursive: true, mode: 0o700 });
       await writeFile(target, file.bytes, { mode: file.mode, flag: "wx" });
     }
-    try { await rename(stage, destination); }
-    catch (error) {
-      if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-    }
+    // Another process may publish the same snapshot first; Windows reports that as EPERM, not EEXIST.
+    try { await renameWithRetry(stage, destination, { keepExisting: true }); }
+    catch (error) { if (!await exists(destination)) throw error; }
   } finally { await rm(stage, { recursive: true, force: true }); }
   if (digest(await inventory(destination)) !== hash) throw new Error(`selected hook snapshot modified: ${id}`);
   return destination;

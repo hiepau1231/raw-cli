@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, realpath, rename, rm, stat, link } from "node:fs/promises";
+import { mkdir, open, readFile, realpath, rm, stat, link } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { withPackageWriteLock } from "../packages/lock.js";
+import { renameWithRetry } from "../platform/fs.js";
 
 export const MAX_EDIT_BYTES = 1024 * 1024;
 export class ManagementError extends Error {
@@ -41,7 +42,7 @@ export async function publishText(path: string, source: string, original: TextSn
     const current = await readText(path); assertRevision(original.revision, current);
     if (original.exists) {
       if (await realpath(path) !== destination) throw new ManagementError("conflict", "file target changed during save", current.revision);
-      await rename(stage, destination);
+      await renameWithRetry(stage, destination);
     } else {
       try { await link(stage, destination); }
       catch (error) {

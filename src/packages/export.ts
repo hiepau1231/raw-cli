@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { readConfigDocument } from "../config.js";
@@ -9,6 +9,7 @@ import { createPackageResolutionContext, resolvePackageAgentBinding, resolvePack
   resolvePackageSelections } from "./resolve-agent.js";
 import { resolveInstalledPackage } from "./store.js";
 import { bundledToolsRoot } from "../tools/plugins/loader.js";
+import { contained, isFileArgument, isPathCommand, readJsonText } from "../platform/fs.js";
 export { inspectPackage } from "./inspect.js";
 
 export interface ExportAgentOptions {
@@ -54,7 +55,7 @@ export async function exportAgentPackage(options: ExportAgentOptions): Promise<{
   const definitions = await resolvePackageDefinitions(source, document.data, packageOptions, originAlias,
     packageContext, originAlias ? configured.inputs as Record<string, unknown> | undefined : undefined);
   const packageOwned = (path: string): boolean => packageRoot !== undefined
-    && (path === packageRoot || path.startsWith(`${packageRoot}/`));
+    && contained(packageRoot, path);
   const out = resolve(options.out);
   const unresolved: string[] = [];
   const checkAsset = async (path: string, label: string, directory: boolean, ownedRoot?: string): Promise<void> => {
@@ -71,7 +72,7 @@ export async function exportAgentPackage(options: ExportAgentOptions): Promise<{
   };
   if (typeof source.system_prompt_file === "string") {
     const path = resolve(configDir, source.system_prompt_file);
-    const external = isAbsolute(source.system_prompt_file) && !path.startsWith(`${configDir}/`);
+    const external = isAbsolute(source.system_prompt_file) && !contained(configDir, path);
     if (!external || packageOwned(path) || options.includeFiles?.some((item) => resolve(configDir, item) === path)) {
       await checkAsset(path, "system prompt", false, external ? undefined : configDir);
     }
@@ -121,7 +122,7 @@ export async function exportAgentPackage(options: ExportAgentOptions): Promise<{
   };
   if (typeof agent.system_prompt_file === "string") {
     const sourcePath = resolve(configDir, agent.system_prompt_file);
-    if (isAbsolute(agent.system_prompt_file) && !sourcePath.startsWith(`${configDir}/`)) {
+    if (isAbsolute(agent.system_prompt_file) && !contained(configDir, sourcePath)) {
       agent.system_prompt_file = await includeFile(sourcePath, `prompts/${options.agentName}.md`)
         ?? addInput("system_prompt_file", "file", "Recipient system prompt file");
     } else {
@@ -143,7 +144,7 @@ export async function exportAgentPackage(options: ExportAgentOptions): Promise<{
     if (id.startsWith("builtin/")) {
       const builtin = /^builtin\/([a-z][a-z0-9_-]*)$/.exec(id);
       if (!builtin) throw new Error(`invalid builtin selection: ${id}`);
-      const declared = JSON.parse(await readFile(join(bundledToolsRoot(), builtin[1]!, "tool.json"), "utf8")) as { panels?: unknown; effects_schema?: unknown };
+      const declared = JSON.parse(await readJsonText(join(bundledToolsRoot(), builtin[1]!, "tool.json"))) as { panels?: unknown; effects_schema?: unknown };
       if (Array.isArray(declared.panels) && declared.panels.length) usesPanels = true;
       if (declared.effects_schema !== undefined) usesEffects = true;
     }
@@ -155,7 +156,7 @@ export async function exportAgentPackage(options: ExportAgentOptions): Promise<{
     const path = `tools/${folder}`;
     await copyOwnedTree(sourceRoot, join(out, path));
     try {
-      const declared = JSON.parse(await readFile(join(sourceRoot, "tool.json"), "utf8")) as { panels?: unknown; effects_schema?: unknown };
+      const declared = JSON.parse(await readJsonText(join(sourceRoot, "tool.json"))) as { panels?: unknown; effects_schema?: unknown };
       if (Array.isArray(declared.panels) && declared.panels.length) usesPanels = true;
       if (declared.effects_schema !== undefined) usesEffects = true;
     } catch { /* an unreadable manifest is reported by inspectPackage */ }
@@ -227,12 +228,12 @@ export async function exportAgentPackage(options: ExportAgentOptions): Promise<{
       }
       const providerName = source.name;
       const provider = structuredClone(record(providerDefinitions[providerName], `var provider ${providerName}`));
-      if (typeof provider.command === "string" && (isAbsolute(provider.command) || provider.command.includes("/"))) {
+      if (typeof provider.command === "string" && isPathCommand(provider.command)) {
         provider.command = await includeFile(provider.command, `assets/providers/${providerName}/command-${basename(provider.command)}`)
           ?? addInput(`provider_${providerName}_command`, "file", `Recipient provider executable for ${providerName}`);
       } else if (typeof provider.command === "string") prerequisites.add(provider.command);
       if (Array.isArray(provider.args)) {
-        provider.args = await Promise.all(provider.args.map(async (arg, index) => typeof arg === "string" && (arg.startsWith("./") || isAbsolute(arg))
+        provider.args = await Promise.all(provider.args.map(async (arg, index) => typeof arg === "string" && isFileArgument(arg)
           ? await includeFile(arg, `assets/providers/${providerName}/arg-${index}-${basename(arg)}`)
             ?? addInput(`provider_${providerName}_arg_${index}`, "file", `Recipient provider argument file ${index} for ${providerName}`) : arg));
       }
@@ -264,13 +265,13 @@ export async function exportAgentPackage(options: ExportAgentOptions): Promise<{
     if (emittedMcp[serverName]) continue;
     const server = structuredClone(record(mcpDefinitions[serverName], `mcp server ${serverName}`));
     if (typeof server.command === "string") {
-      if (server.command.includes("/") || isAbsolute(server.command)) server.command = await includeFile(server.command,
+      if (isPathCommand(server.command)) server.command = await includeFile(server.command,
         `assets/mcp/${serverName}/command-${basename(server.command)}`)
           ?? addInput(`mcp_${serverName}_command`, "file", `Recipient MCP executable for ${serverName}`);
       else prerequisites.add(server.command);
     }
     if (typeof server.url === "string") server.url = addInput(`mcp_${serverName}_url`, "string", `Recipient MCP endpoint for ${serverName}`);
-    if (Array.isArray(server.args)) server.args = await Promise.all(server.args.map(async (arg, index) => typeof arg === "string" && (arg.startsWith("./") || isAbsolute(arg))
+    if (Array.isArray(server.args)) server.args = await Promise.all(server.args.map(async (arg, index) => typeof arg === "string" && isFileArgument(arg)
       ? await includeFile(arg, `assets/mcp/${serverName}/arg-${index}-${basename(arg)}`)
         ?? addInput(`mcp_${serverName}_arg_${index}`, "file", `Recipient MCP argument file ${index} for ${serverName}`) : arg));
     for (const key of ["env", "headers"] as const) if (server[key] !== undefined) {

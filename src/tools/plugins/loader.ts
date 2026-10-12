@@ -13,6 +13,7 @@ import type { ToolManifest, ToolPlugin } from "./contract.js";
 import type { SelectedSkill } from "../../skills/contract.js";
 import { selectedToolSnapshot } from "./snapshot.js";
 import type { PackageAsset } from "../../packages/resolve-agent.js";
+import { readJsonText, stripBom } from "../../platform/fs.js";
 
 // Built-ins returning host-owned content (selected skills, configured vars) whole rather than within max_output_bytes.
 const hostContentTools = new Set(["builtin/list_skills", "builtin/load_skill", "builtin/list_vars", "builtin/read_var"]);
@@ -68,7 +69,7 @@ async function selectedManifest(id: string, root: string, direct?: PackageAsset,
   if (!inside(realFolder, realManifest) || !inside(realFolder, realEntry)) throw new Error(`selected tool entry escapes folder: ${id}`);
   let manifest: ToolManifest;
   let manifestBytes: Buffer;
-  try { manifestBytes = await readFile(realManifest); manifest = parseToolManifest(JSON.parse(manifestBytes.toString("utf8")), id, folder, warn); }
+  try { manifestBytes = await readFile(realManifest); manifest = parseToolManifest(JSON.parse(stripBom(manifestBytes.toString("utf8"))), id, folder, warn); }
   catch (error) { throw new Error(`invalid selected tool manifest ${id}: ${(error as Error).message}`); }
   const validateSchema = compileToolSchema(manifest);
   const snapshot = await selectedToolSnapshot(direct?.canonicalIdentity ?? id, realFolder, manifest, manifestBytes,
@@ -97,7 +98,7 @@ export async function readToolManifests(options: LoadToolPluginsOptions): Promis
       const parsed = direct ? undefined : parseId(id);
       const folder = direct?.name ?? parsed!.folder;
       const folderPath = direct?.folder ?? join(roots[parsed!.scope], folder);
-      const manifest = parseToolManifest(JSON.parse(await readFile(await realpath(join(folderPath, "tool.json")), "utf8")), id, folder, options.onWarning);
+      const manifest = parseToolManifest(JSON.parse(await readJsonText(await realpath(join(folderPath, "tool.json")))), id, folder, options.onWarning);
       found.push({ id, manifest });
     } catch { /* selection errors are reported by loadToolPlugins when the runtime starts */ }
   }

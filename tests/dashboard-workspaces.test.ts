@@ -7,13 +7,16 @@ import { test } from "node:test";
 import type { SessionSummary } from "../src/sessions/store.js";
 import { dashboardFixture } from "./fixtures/dashboard.js";
 import { openAiDone, openAiFrame } from "./fixtures/mock-provider.js";
+import { shortPath } from "./fixtures/platform.js";
+import { workspacePath } from "../src/dashboard/sessions.js";
+import { homeDirectory } from "../src/dashboard/workspaces.js";
 
 interface Item { cwd: string; updatedAt: number; sessions: number; running: number; exists: boolean }
 interface Listing { items: Item[]; home: string; current: string }
 interface Browse { path: string; parent: string | null; home: string; entries: Array<{ name: string; path: string; symlink?: boolean }>; truncated: boolean }
 const reply = { frames: [openAiFrame({ content: "ok" }, "stop"), openAiDone] };
 
-function tempDir(prefix: string): string { return realpathSync(mkdtempSync(join(tmpdir(), prefix))); }
+function tempDir(prefix: string): string { return realpathSync.native(mkdtempSync(join(tmpdir(), prefix))); }
 function tree(root: string): string[] {
   const out: string[] = [];
   const walk = (dir: string) => { for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -228,4 +231,18 @@ test("workspace routes require the dashboard token", async () => {
       assert.equal(response.status, 401, path);
     }
   } finally { await f.close(); }
+});
+
+test("a workspace path is canonical however it is spelled, and the Windows home ignores an MSYS HOME", () => {
+  const root = tempDir("raw-workspace-spelling-");
+  try {
+    const real = join(root, "project");
+    mkdirSync(real);
+    symlinkSync(real, join(root, "link"), process.platform === "win32" ? "junction" : "dir");
+    const spellings = [join(root, "link"), join(root, "project", ".", "..", "project")];
+    if (process.platform === "win32") spellings.push(shortPath(real), real[0]!.toLowerCase() + real.slice(1));
+    for (const spelling of spellings) assert.equal(workspacePath(spelling, root), real, spelling);
+    assert.equal(homeDirectory({ HOME: "/c/Users/raw", USERPROFILE: "C:\\Users\\raw" }, "win32"), "C:\\Users\\raw");
+    assert.equal(homeDirectory({ HOME: "/home/raw", USERPROFILE: "C:\\Users\\raw" }, "linux"), "/home/raw");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

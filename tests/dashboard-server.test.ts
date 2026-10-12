@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { request } from "node:http";
@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { startDashboard } from "../src/dashboard/server.js";
+import { LiveOutput, removeSpool } from "../src/dashboard/live-output.js";
 import { openSessionStore } from "../src/sessions/store.js";
 
 function fixture() {
@@ -134,4 +135,21 @@ test("shutdown cancels an owned startup child and releases the writer before clo
     try { assert.equal(store.sessionIsBusy(session.id), false); assert.equal(store.listOperations(session.id)[0]?.state, "cancelled"); }
     finally { store.close(); }
   } finally { child?.kill("SIGKILL"); await server.close(); f.cleanup(); }
+});
+
+test("the dashboard starts while an old live-output spool still has a file open", () => {
+  for (const code of ["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"]) {
+    assert.doesNotThrow(() => removeSpool("old", () => { throw Object.assign(new Error(code), { code }); }), code);
+  }
+  assert.throws(() => removeSpool("old", () => { throw Object.assign(new Error("EIO"), { code: "EIO" }); }), { code: "EIO" });
+  const root = mkdtempSync(join(tmpdir(), "raw-live-spool-"));
+  const old = join(root, "999999999-old");
+  mkdirSync(old);
+  writeFileSync(join(old, "segment"), "text");
+  const held = openSync(join(old, "segment"), "r");
+  try {
+    const output = new LiveOutput(root);
+    assert.ok(output.append("op", "seg", "assistant", "hello").text.includes("hello"));
+    assert.ok(readdirSync(root).some((name) => name.startsWith(`${process.pid}-`)));
+  } finally { closeSync(held); rmSync(root, { recursive: true, force: true }); }
 });

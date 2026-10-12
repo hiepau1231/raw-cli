@@ -5,6 +5,7 @@ import { deepFreeze, hostCapabilities, type ComponentKind } from "./contract.js"
 import type { LoadedPackageManifest } from "./manifest.js";
 import { parseComponentReference } from "./references.js";
 import { parseSkillMarkdown } from "../skills/frontmatter.js";
+import { stripBom } from "../platform/fs.js";
 
 export interface ComponentContext {
   self?: LoadedPackageManifest;
@@ -77,7 +78,7 @@ export async function fingerprintComponent(pkg: LoadedPackageManifest, kind: Com
     const mode = (await stat(join(pkg.root, file))).mode & 0o111;
     let content: Buffer | string = bytes;
     if (kind === "tools" && file.endsWith("/tool.json")) {
-      const manifest = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+      const manifest = JSON.parse(stripBom(bytes.toString("utf8"))) as Record<string, unknown>;
       delete manifest.version;
       content = canonical(manifest);
     } else if (kind === "skills" && file.endsWith("/SKILL.md")) {

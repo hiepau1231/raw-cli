@@ -321,3 +321,14 @@ test("copied standalone apply_patch and edit_file keep their effects and own Fil
   assert.match(JSON.stringify(panel.document), /created.txt/);
   host.close();
 });
+
+test("a selected tool whose tool.json starts with a byte order mark loads and runs", async () => {
+  const options = await workspace();
+  const folder = join(dirname(options.configPath), "tools", "bom");
+  await plugin(folder, "bom", "bom_tool");
+  await writeFile(join(folder, "tool.json"), `\uFEFF${await readFile(join(folder, "tool.json"), "utf8")}`);
+  const tools = await loadToolPlugins({ ...options, selectedIds: ["agent/bom"] });
+  const registry = new ToolRegistry();
+  for (const tool of tools) registry.register(tool.registration);
+  assert.deepEqual(registry.definitions().map((item) => item.name), ["bom_tool"]);
+});

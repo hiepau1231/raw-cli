@@ -99,3 +99,17 @@ test("hook exports validate declared assets passively and reject escaping paths"
   symlinkSync(join(root, "hooks", "guard", "index.mjs"), join(root, "hooks", "guard", "link.mjs"));
   await assert.rejects(loadPackageManifest(root), /symlink/);
 });
+
+test("files nested several folders deep load with / paths, and a BOM manifest and agent load", async () => {
+  const root = mkdtempSync(join(tmpdir(), "raw-package-manifest-"));
+  mkdirSync(join(root, "agents"), { recursive: true });
+  mkdirSync(join(root, "skills", "review", "references", "deep"), { recursive: true });
+  writeFileSync(join(root, "agents", "agent.json"), "\uFEFF{}");
+  writeFileSync(join(root, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Review.\n---\n");
+  writeFileSync(join(root, "skills", "review", "references", "deep", "notes.md"), "notes\n");
+  writeFileSync(join(root, "raw-package.json"), `\uFEFF${JSON.stringify({ schema_version: 1, name: "@example/deep", version: "1.0.0", description: "Deep files",
+    files: ["agents/agent.json", "skills/review"], exports: { agents: { agent: "agents/agent.json" }, skills: { review: "skills/review" } },
+    dependencies: {} })}`);
+  const loaded = await loadPackageManifest(root);
+  assert.deepEqual([...loaded.files].sort(), ["agents/agent.json", "skills/review/SKILL.md", "skills/review/references/deep/notes.md"]);
+});

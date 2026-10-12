@@ -40,7 +40,7 @@ export async function startDashboard(options: DashboardOptions = {}): Promise<Da
   if (options.signal?.aborted) throw new DashboardError(503, "cancelled", "Dashboard startup cancelled");
   const port = options.port ?? 8787;
   if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new DashboardError(400, "invalid_port", "port must be an integer from 0 to 65535");
-  const cwd = realpathSync(options.cwd ?? process.cwd());
+  const cwd = realpathSync.native(options.cwd ?? process.cwd());
   if (!statSync(cwd).isDirectory()) throw new DashboardError(400, "invalid_workspace", "workspace must be a directory");
   const env = options.env ?? process.env;
   const configPath = configFilePath({ cwd, env, ...(options.configPath ? { configPath: options.configPath } : {}) });

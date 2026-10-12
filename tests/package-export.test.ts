@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path, { join } from "node:path";
 import { test } from "node:test";
 import { exportAgentPackage, inspectPackage } from "../src/packages/export.js";
+import { contained, hasSeparator, isFileArgument, isPathCommand } from "../src/platform/fs.js";
 
 test("export requirements include selected builtin effects and panels without copying tools", async () => {
   const root = mkdtempSync(join(tmpdir(), "raw-export-builtins-"));
@@ -104,4 +105,17 @@ test("draft export reports missing selected assets without creating a distributa
   symlinkSync(outside, join(root, "tools", "missing"), "dir");
   const escaped = await exportAgentPackage({ ...options, draft: true });
   assert.match(escaped.report.unresolved.join("\n"), /escapes its owned root/);
+});
+
+test("export recognises Windows file commands, file arguments and paths inside the config folder", () => {
+  for (const command of ["bin\\tool.exe", ".\\x", "C:\\tools\\x.exe", "bin/tool", "/usr/bin/x"]) {
+    assert.equal(isPathCommand(command, path.win32), true, command);
+  }
+  for (const command of ["node", "npx", "uvx"]) assert.equal(isPathCommand(command, path.win32), false, command);
+  assert.equal(isPathCommand("bin\\tool", path.posix), false);
+  for (const arg of [".\\server.js", "./server.js", "C:\\a\\server.js"]) assert.equal(isFileArgument(arg, path.win32), true, arg);
+  for (const arg of ["--port", "bin\\x", "8080"]) assert.equal(isFileArgument(arg, path.win32), false, arg);
+  assert.equal(hasSeparator("bin\\x", path.win32), true);
+  assert.equal(contained("C:\\Users\\raw\\.config\\raw", "c:\\users\\raw\\.config\\raw\\prompts\\a.md", path.win32), true);
+  assert.equal(contained("C:\\Users\\raw\\.config\\raw", "C:\\Users\\raw\\.config\\raw-other\\a.md", path.win32), false);
 });

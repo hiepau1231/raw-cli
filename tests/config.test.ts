@@ -111,3 +111,11 @@ test("a declared context turns automatic compaction on at 80% of the input budge
   assert.equal(await load({ x: { ...model("ollama", "a"), context_window_tokens: 200000 } }, { compact: { trigger_tokens: false } }), undefined);
   assert.equal(await load({ x: { ...model("ollama", "a"), context_window_tokens: 200000 } }, { compact: { trigger_tokens: 50000 } }), 50000);
 });
+
+test("a config.json saved with a UTF-8 byte order mark loads", async () => {
+  const contents = { default_agent: "local", models: { a: model("ollama", "upstream-bom", "http://127.0.0.1:9003/v1") },
+    agents: { local: { model: "a", tools: { use: ["builtin/read_file"] } } } };
+  const { home } = fixture(`\uFEFF${JSON.stringify(contents, null, 2).replaceAll("\n", "\r\n")}`);
+  const loaded = await loadConfig({ home, env: {}, requireModel: true });
+  assert.equal(loaded.modelConfig?.model, "upstream-bom");
+});

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { canonicalConfigPath, configFilePath, type LoadConfigOptions } from "../config.js";
 import { packageRoot } from "../package-root.js";
@@ -14,6 +14,7 @@ import { HOST_CONTENT_BYTES } from "../tools/results.js";
 import { mutateConfig, readManagedConfig } from "./config.js";
 import { record } from "./agents.js";
 import { contained, ManagementError, ownedPath, readText, relativeFile, saveOwnedText, validText, type TextSnapshot } from "./files.js";
+import { renameWithRetry, stripBom } from "../platform/fs.js";
 
 export type EditableComponentKind = "tools" | "skills" | "hooks";
 export interface ComponentInfo {
@@ -96,12 +97,12 @@ export class ComponentManager {
       return value.source;
     };
     if (kind === "tools") {
-      const manifest = parseToolManifest(JSON.parse(await read("tool.json")), asset.id, asset.name);
+      const manifest = parseToolManifest(JSON.parse(stripBom(await read("tool.json"))), asset.id, asset.name);
       compileToolSchema(manifest); await read("index.mjs");
       return { name: manifest.name, description: manifest.description, manifest: manifest as unknown as Record<string, unknown> };
     }
     if (kind === "hooks") {
-      const manifest = parseHookManifest(JSON.parse(await read("hook.json")), asset.id, asset.name);
+      const manifest = parseHookManifest(JSON.parse(stripBom(await read("hook.json"))), asset.id, asset.name);
       for (const path of [manifest.command, ...manifest.args]) if (path.startsWith("./")) await read(path.slice(2));
       return { name: manifest.name, description: manifest.events.map((event) => event.name).join(", "),
         manifest: manifest as unknown as Record<string, unknown> };
@@ -123,7 +124,7 @@ export class ComponentManager {
           const pkg = await this.package(match[1]!); const path = pkg.manifest.exports.agents?.[match[2]!];
           if (!path) { usageAvailable = false; continue; }
           const source = await readText(await ownedPath(pkg.root, path));
-          const definition = JSON.parse(source.source) as Record<string, unknown>;
+          const definition = JSON.parse(stripBom(source.source)) as Record<string, unknown>;
           const overrides = record(agent.overrides);
           const block = Object.hasOwn(overrides, kind) ? overrides[kind] : definition[kind];
           agent = { [kind]: block };
@@ -211,7 +212,7 @@ export class ComponentManager {
         await this.files(stage); await this.validate(kind, { id, folder: stage, name, source: scope, readOnly: false });
         try { await lstat(destination); throw new ManagementError("conflict", "component already exists"); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-        await rename(stage, destination);
+        await renameWithRetry(stage, destination);
       } finally { await rm(stage, { recursive: true, force: true }); }
     });
     return this.inspect(kind, id);
@@ -230,13 +231,13 @@ export class ComponentManager {
     return this.publish(kind, id, async (stage, name) => {
       await copyOwnedTree(source.folder, stage);
       if (kind === "tools") {
-        const file = join(stage, "tool.json"); const value = JSON.parse((await readText(file)).source) as Record<string, unknown>;
+        const file = join(stage, "tool.json"); const value = JSON.parse(stripBom((await readText(file)).source)) as Record<string, unknown>;
         value.id = name; value.name = name; await writeFile(file, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
       } else if (kind === "skills") {
         const file = join(stage, "SKILL.md"); const value = (await readText(file)).source;
         await writeFile(file, value.replace(/^name:.*$/m, `name: ${name.replaceAll("_", "-")}`), { mode: 0o600 });
       } else {
-        const file = join(stage, "hook.json"); const value = JSON.parse((await readText(file)).source) as Record<string, unknown>;
+        const file = join(stage, "hook.json"); const value = JSON.parse(stripBom((await readText(file)).source)) as Record<string, unknown>;
         value.name = name; await writeFile(file, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
       }
     });

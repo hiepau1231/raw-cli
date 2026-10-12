@@ -48,16 +48,21 @@ function spillDirectory(): string {
 
 /**
  * Whether `path` names a file directly inside a saved-output directory of any Raw process under this temp root
- * (`<tmpdir>/raw-output-*`). Lexical only; a caller that opens the file checks its realpath with this too.
+ * (`<tmpdir>/raw-output-*`). The temp root may be written another way (a Windows short name, another drive-letter
+ * case, a link), so it is compared canonically too; a caller that opens the file checks its realpath with this too.
  */
 export function isSpillFilePath(path: string): boolean {
   if (!isAbsolute(path)) return false;
-  const parent = dirname(resolve(path));
-  const name = basename(parent);
-  if (!name.startsWith(PREFIX) || name.length === PREFIX.length) return false;
   const roots = new Set([resolve(tmpdir())]);
-  try { roots.add(realpathSync(tmpdir())); } catch { /* the lexical root still applies */ }
-  return roots.has(dirname(parent));
+  try { roots.add(realpathSync.native(tmpdir())); } catch { /* the lexical root still applies */ }
+  const spill = (parent: string) => {
+    const name = basename(parent);
+    return name.startsWith(PREFIX) && name.length > PREFIX.length && roots.has(dirname(parent));
+  };
+  const parent = dirname(resolve(path));
+  if (spill(parent)) return true;
+  // A short name spells the folder itself differently too (RAW-OU~1), so canonicalize before reading its name.
+  try { return spill(realpathSync.native(parent)); } catch { return false; }
 }
 
 /** Keeps this process's saved files within SPILL_TOTAL_BYTES by deleting the oldest ones other than `keep`. */

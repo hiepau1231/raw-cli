@@ -220,7 +220,7 @@ export function createAcpServer(options: AcpServerOptions): AcpServer {
     if (!isAbsolute(cwd)) throw RequestError.invalidParams(undefined, "cwd must be absolute");
     try {
       if (!statSync(cwd).isDirectory()) throw new Error("not a directory");
-      return realpathSync(cwd);
+      return realpathSync.native(cwd);
     } catch { throw RequestError.invalidParams(undefined, "cwd must be an existing directory"); }
   };
   const startSession = (cwd: string, mcpServers: readonly McpServer[], resumeId?: string,
@@ -233,7 +233,7 @@ export function createAcpServer(options: AcpServerOptions): AcpServer {
     const saved = resumeId === undefined ? undefined : store.getSession(resumeId);
     if (resumeId !== undefined) {
       if (!saved) throw rawError(rawErrors.unknownSession, `unknown or expired session: ${store.missingSessionMessage()}`);
-      if (realpathSync(saved.cwd) !== canonicalCwd) throw RequestError.invalidParams(undefined, "session cwd differs from saved cwd");
+      if (realpathSync.native(saved.cwd) !== canonicalCwd) throw RequestError.invalidParams(undefined, "session cwd differs from saved cwd");
       if (sessions.has(resumeId)) throw rawError(rawErrors.busy, "session is already attached to this peer");
     }
     let claimed: SessionOwner | undefined;

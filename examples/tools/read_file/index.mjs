@@ -4,7 +4,7 @@ import { constants as fsConstants } from "fs";
 // src/tools/file-patch.ts
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 import { constants } from "fs";
-import { chmod, link, lstat, mkdir, open, rename, unlink } from "fs/promises";
+import { chmod, link, lstat, mkdir, open, unlink } from "fs/promises";
 import { dirname as dirname2, join as join2, parse, relative, resolve as resolve2, sep } from "path";
 
 // src/tools/types.ts
@@ -39,6 +39,11 @@ function errorResult(code, message) {
   return { isError: true, code, content: [{ type: "text", text: message }] };
 }
 
+// src/platform/fs.ts
+import { closeSync as closeSync2, fsyncSync, openSync as openSync2 } from "fs";
+import { access, readFile, rename } from "fs/promises";
+import path from "path";
+
 // src/tools/file-patch.ts
 var PATCH_BYTES = 1024 * 1024;
 var SOURCE_BYTES = 16 * 1024 * 1024;
@@ -72,13 +77,13 @@ var HOST_DIFF_BYTES = 64 * 1024;
 var ENTRY_DIFF_BYTES = 8 * 1024;
 var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
 var within = (inside) => !!inside && inside !== ".." && !inside.startsWith(`..${sep2}`) && !isAbsolute2(inside);
-function displayPath(path, cwd) {
-  const inside = relative2(cwd, path);
-  return within(inside) ? inside : path;
+function displayPath(path2, cwd) {
+  const inside = relative2(cwd, path2);
+  return within(inside) ? inside : path2;
 }
 
 // src/tools/primitives.ts
-import { open as open2, mkdir as mkdir2, writeFile, readFile, stat } from "fs/promises";
+import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat } from "fs/promises";
 import { dirname as dirname3, resolve as resolve3 } from "path";
 
 // src/tools/process.ts
@@ -93,8 +98,8 @@ var errorCode = (error, fallback) => {
   return typeof code === "string" && /^[A-Za-z0-9_]+$/.test(code) ? code : fallback;
 };
 async function readFileTool(args, context) {
-  const path = resolve3(context.cwd, args.path);
-  const shown = displayPath(path, context.cwd);
+  const path2 = resolve3(context.cwd, args.path);
+  const shown = displayPath(path2, context.cwd);
   const offset = args.offset ?? 1;
   const last = args.limit === void 0 ? offset + READ_DEFAULT_LIMIT - 1 : offset + args.limit - 1;
   const budget = context.maxOutputBytes - READ_FOOTER_RESERVE;
@@ -102,7 +107,7 @@ async function readFileTool(args, context) {
   const failed = (code, message) => ({ ...errorResult(code, message), host: { summary: shown, status: "error", path: shown } });
   let handle;
   try {
-    handle = await open2(path, "r");
+    handle = await open2(path2, "r");
   } catch (error) {
     const code = errorCode(error, "file_error");
     return failed(code, code === "ENOENT" ? `${shown} does not exist` : `cannot read ${shown}: ${code}`);

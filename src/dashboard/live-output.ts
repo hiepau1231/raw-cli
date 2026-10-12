@@ -20,7 +20,7 @@ export class LiveOutput {
     for (const name of readdirSync(root).slice(0, 1000)) {
       const pid = /^(\d+)-/.exec(name)?.[1]; if (!pid) continue;
       try { process.kill(Number(pid), 0); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") rmSync(join(root, name), { recursive: true, force: true }); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") removeSpool(join(root, name)); }
     }
     this.directory = mkdtempSync(join(root, `${process.pid}-`));
   }
@@ -59,4 +59,10 @@ export class LiveOutput {
   removeSegment(id: string): void { const item = this.segments.get(id); if (item) { rmSync(item.path, { force: true }); this.segments.delete(id); } }
   finish(operationId: string): void { for (const [id, item] of this.segments) if (item.view.operationId === operationId) this.removeSegment(id); this.sizes.delete(operationId); }
   close(): void { this.segments.clear(); this.sizes.clear(); rmSync(this.directory, { recursive: true, force: true }); }
+}
+
+/** Removes an old spool folder; one whose file Windows still holds open is left for the next start's sweep. */
+export function removeSpool(path: string, remove: typeof rmSync = rmSync): void {
+  try { remove(path, { recursive: true, force: true }); }
+  catch (error) { if (!["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; }
 }

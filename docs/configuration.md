@@ -6,7 +6,7 @@ Raw names each runnable configuration an **agent**. `models.<alias>` defines an 
 
 ## File and selection
 
-Raw reads one strict JSON file from $XDG_CONFIG_HOME/raw/config.json or ~/.config/raw/config.json. --config PATH replaces that file. An absent implicit file is allowed; an absent explicit file is an error. Duplicate and unknown fields fail validation.
+Raw reads one strict JSON file from $XDG_CONFIG_HOME/raw/config.json or ~/.config/raw/config.json. --config PATH replaces that file. An absent implicit file is allowed; an absent explicit file is an error. Duplicate and unknown fields fail validation. A leading UTF-8 byte order mark, which some Windows editors add, is accepted here and in the other JSON files Raw reads.
 
 The optional root `ui` object configures terminal presentation independently of agents and models. It is allowed in canonical and alternate config files. `density` accepts `compact`, `normal`, or `verbose`; `reasoning` accepts `hidden`, `summary`, or `full`; `color` accepts `auto`, `always`, or `never`; `icons` accepts `auto`, `unicode`, or `ascii`; `theme` accepts `terminal`, `dark`, or `light`. An optional `palette` maps documented semantic roles to basic ANSI color names. Flags `--display`, `--reasoning`, `--color`, `--icons`, and `--theme` override these fields. See [terminal output](terminal-output.md) for appearance, stream behavior and the complete palette contract.
 

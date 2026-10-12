@@ -23,6 +23,7 @@ import { SessionOperationError, terminalOperationStates, type OperationIntent, t
 import type { SessionMetrics } from "./metrics.js";
 import type { RequestOverride } from "../request-controls.js";
 import { userAttachments, type HistoryAttachment, type QueuedInputView } from "./view.js";
+import { fsyncDirectory } from "../platform/fs.js";
 
 export interface SessionStoreOptions {
   env?: NodeJS.ProcessEnv;
@@ -735,7 +736,7 @@ export class SessionStore {
   }
 
   initializeAgent(sessionId: string, owner: SessionOwner, identity: AgentIdentity): StoredAgentState {
-    const canonical = realpathSync(resolve(identity.cwd));
+    const canonical = realpathSync.native(resolve(identity.cwd));
     const toolDigest = digest(JSON.stringify(identity.toolDefinitions));
     const sourceDigest = identity.toolSourceDigest ?? toolDigest;
     const skillSnapshot = snapshotSkills(identity.selectedSkills ?? []);
@@ -967,8 +968,7 @@ export class SessionStore {
     writeFileSync(absolutePath, json, { encoding: "utf8", flag: "wx", mode: 0o600 });
     const file = openSync(absolutePath, "r");
     try { fsyncSync(file); } finally { closeSync(file); }
-    const dir = openSync(directory, "r");
-    try { fsyncSync(dir); } finally { closeSync(dir); }
+    fsyncDirectory(directory);
     return { id, relativePath, byteLength };
   }
 
@@ -1486,7 +1486,7 @@ export class SessionStore {
   }
 
   createSession(options: CreateSessionOptions): SessionSummary {
-    const canonical = realpathSync(resolve(options.cwd));
+    const canonical = realpathSync.native(resolve(options.cwd));
     const timestamp = this.now();
     if (!Number.isSafeInteger(timestamp)) throw new Error("invalid session clock");
     const id = randomUUID();
@@ -1515,7 +1515,7 @@ export class SessionStore {
   listSessions(options: ListOptions = {}): Page<SessionSummary> {
     recoverProcessHosts(this.database, this.now());
     const limit = boundedLimit(options.limit);
-    const cwd = options.cwd === undefined ? undefined : realpathSync(resolve(options.cwd));
+    const cwd = options.cwd === undefined ? undefined : realpathSync.native(resolve(options.cwd));
     const scope = `${this.storeId}:${cwd ?? "*"}:${options.title ?? ""}`;
     const before = options.before === undefined ? undefined : cursorData(options.before, "sessions", scope);
     const workspaceId = cwd === undefined ? undefined : this.database.prepare("SELECT id FROM workspaces WHERE canonical_path = ?").get(cwd)?.id;

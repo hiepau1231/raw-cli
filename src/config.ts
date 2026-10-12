@@ -19,6 +19,7 @@ import { createPackageResolutionContext, resolvePackageAgentBinding, resolvePack
   resolvePackageSelections, validatePackageAgentBinding, type PackageAsset } from "./packages/resolve-agent.js";
 import { parseSelectionReference } from "./packages/references.js";
 import { parseUiDocument, resolveUiOptions, validateUiFlag, type UiOptions, type Density, type ReasoningDisplay, type ColorDisplay, type IconsDisplay, type ThemeName } from "./terminal/options.js";
+import { stripBom } from "./platform/fs.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -218,7 +219,7 @@ function parseConfigDocument(options: LoadConfigOptions, validateAgents: boolean
   const path = configFilePath(options);
   let source: string;
   try {
-    source = readFileSync(path, "utf8");
+    source = stripBom(readFileSync(path, "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT" && !options.configPath && !options.flags?.configPath) {
       return { path, data: {}, exists: false };

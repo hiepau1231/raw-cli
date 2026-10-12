@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, link, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, open, unlink } from "node:fs/promises";
 import { dirname, join, parse, relative, resolve, sep } from "node:path";
 import { errorResult, indexedResult, indexedResultFits, type IndexedResult } from "./results.js";
 import type { ToolResult } from "./types.js";
+import { renameWithRetry } from "../platform/fs.js";
 
 const PATCH_BYTES = 1024 * 1024;
 const SOURCE_BYTES = 16 * 1024 * 1024;
@@ -314,7 +315,7 @@ export async function applyStagedFilePatch(staged: StagedFilePatch, options: Pat
           await link(temporary, destination);
           destinationCreated = true;
           if (change.destination) await unlink(change.path);
-        } else await rename(temporary, destination);
+        } else await renameWithRetry(temporary, destination);
         await notify(options, { path: destination, kind: change.destination ? "renamed" : change.kind === "add" ? "added" : "modified",
           ...(change.destination ? { oldPath: change.path } : {}), ...(source ? { before: source.bytes } : {}), after: after! });
       }

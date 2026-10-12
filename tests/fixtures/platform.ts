@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, win32 } from "node:path";
 
@@ -46,4 +47,15 @@ export function launch(command: string, args: readonly string[], platform: NodeJ
     return [process.execPath, [win32.join(win32.dirname(win32.dirname(command)), "@tlelabs", "raw", "dist", "raw.js"), ...args]];
   }
   return [command, [...args]];
+}
+
+/** The 8.3 short form of an existing Windows path (the long form when 8.3 names are disabled on its volume). */
+export function shortPath(path: string): string {
+  const script = "$f = New-Object -ComObject Scripting.FileSystemObject; "
+    + "if ((Get-Item -LiteralPath $env:RAW_TEST_PATH).PSIsContainer) { $f.GetFolder($env:RAW_TEST_PATH).ShortPath } "
+    + "else { $f.GetFile($env:RAW_TEST_PATH).ShortPath }";
+  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    { encoding: "utf8", env: { ...process.env, RAW_TEST_PATH: path }, windowsHide: true });
+  if (result.status !== 0) throw new Error(`shortPath failed: ${result.stderr}`);
+  return result.stdout.trim();
 }

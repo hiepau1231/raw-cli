@@ -1,8 +1,11 @@
 import { parseDocument } from "yaml";
+import { stripBom } from "../platform/fs.js";
 
 export interface ParsedSkillMarkdown { name: string; description: string; markdown: string; version?: string }
 
-export function parseSkillMarkdown(source: string, folder: string, label = "SKILL.md"): ParsedSkillMarkdown {
+export function parseSkillMarkdown(text: string, folder: string, label = "SKILL.md"): ParsedSkillMarkdown {
+  // Windows editors save CRLF; the parsed body always uses LF.
+  const source = stripBom(text).replaceAll("\r\n", "\n");
   if (!source.startsWith("---\n")) throw new Error(`${label}: missing YAML frontmatter`);
   const close = source.indexOf("\n---\n", 4);
   if (close < 0) throw new Error(`${label}: unclosed YAML frontmatter`);

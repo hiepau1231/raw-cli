@@ -220,3 +220,16 @@ test("older history and workspace pages seek into their composite indexes", () =
     assert.match(listSql, /workspace_id\s*=/);
   } finally { store.close(); }
 });
+
+test("a value over the inline limit is stored as a payload file and reads back whole", () => {
+  const { store } = fixture();
+  try {
+    const session = store.createSession({ cwd: process.cwd(), title: "large" });
+    const text = "é𝄞x".repeat(25_000);
+    const owner = store.claimSession(session.id);
+    store.appendOwnedHistory(session.id, owner, "tool", { text });
+    store.releaseSession(session.id, owner);
+    assert.ok(store.storageStats().payloadFiles > 0);
+    assert.equal(store.getSessionHistory({ sessionId: session.id }).items[0]?.payload.text, text);
+  } finally { store.close(); }
+});

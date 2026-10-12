@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import type { ToolManifest } from "./contract.js";
+import { exists, renameWithRetry } from "../../platform/fs.js";
 
 interface OwnedFile { path: string; bytes: Buffer; mode: number }
 
@@ -83,10 +84,9 @@ export async function selectedToolSnapshot(id: string, folder: string, manifest:
       await mkdir(dirname(target), { recursive: true, mode: 0o700 });
       await writeFile(target, file.bytes, { mode: file.mode, flag: "wx" });
     }
-    try { await rename(stage, snapshotPath); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error;
-    }
+    // Another process may publish the same snapshot first; Windows reports that as EPERM, not EEXIST.
+    try { await renameWithRetry(stage, snapshotPath, { keepExisting: true }); }
+    catch (error) { if (!await exists(snapshotPath)) throw error; }
   } finally { await rm(stage, { recursive: true, force: true }); }
   const installed = await ownedFiles(snapshotPath, await realpath(snapshotPath));
   if (hashFiles(id, installed, manifest, false) !== fullDigest) throw new Error(`selected tool snapshot was modified: ${id}`);

@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { configFilePath, readConfigDocument, validateEffectiveConfigData } from "../config.js";
 import { packPackage } from "./archive.js";
@@ -9,6 +8,7 @@ import { createPackageResolutionContext, resolvePackageAgentBinding, resolvePack
   resolvePackageSelections } from "./resolve-agent.js";
 import { mutateConfig, type ConfigEditOptions } from "../management/config.js";
 import { forkPackage, installPackage, linkPackage, listInstalledPackages, removePackage, updatePackage } from "./store.js";
+import { readJsonText } from "../platform/fs.js";
 
 function args(argv: readonly string[]): { words: string[]; options: Record<string, string> } {
   const words: string[] = [];
@@ -82,7 +82,7 @@ export async function runPackageCli(argv: readonly string[]): Promise<boolean> {
     if (words[1] !== "add") throw new Error("agent requires add NAME");
     exact(words, 3);
     allowedOptions(options, ["--from", "--model", "--inputs"]);
-    const inputs = options["--inputs"] === undefined ? {} : JSON.parse(await readFile(resolve(options["--inputs"]), "utf8")) as Record<string, unknown>;
+    const inputs = options["--inputs"] === undefined ? {} : JSON.parse(await readJsonText(resolve(options["--inputs"]))) as Record<string, unknown>;
     result = await addPackageAgent({ configPath, name: words[2]!, from: required(options, "--from"),
       model: required(options, "--model"), inputs });
   } else {

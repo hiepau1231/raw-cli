@@ -15,7 +15,9 @@ export interface WorkspaceListing { items: WorkspaceItem[]; home: string; curren
 export interface BrowseEntry { name: string; path: string; symlink?: true }
 export interface BrowseListing { path: string; parent: string | null; home: string; entries: BrowseEntry[]; truncated: boolean }
 
-export function homeDirectory(env: NodeJS.ProcessEnv): string {
+/** On Windows, HOME is often a Git Bash or MSYS value such as /c/Users/name; USERPROFILE is the real one. */
+export function homeDirectory(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") return env.USERPROFILE || homedir();
   return env.HOME || env.USERPROFILE || homedir();
 }
 

@@ -7,7 +7,7 @@ import { constants as fsConstants } from "fs";
 // src/tools/file-patch.ts
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 import { constants } from "fs";
-import { chmod, link, lstat, mkdir, open, rename, unlink } from "fs/promises";
+import { chmod, link, lstat, mkdir, open, unlink } from "fs/promises";
 import { dirname as dirname2, join as join2, parse, relative, resolve as resolve2, sep } from "path";
 
 // src/tools/types.ts
@@ -36,10 +36,10 @@ function sweep(root) {
     const cutoff = Date.now() - SPILL_RETENTION_MS;
     for (const name of readdirSync(root)) {
       if (!name.startsWith(PREFIX)) continue;
-      const path = join(root, name);
-      if (path === directory) continue;
+      const path2 = join(root, name);
+      if (path2 === directory) continue;
       try {
-        if (statSync(path).mtimeMs < cutoff) rmSync(path, { recursive: true, force: true });
+        if (statSync(path2).mtimeMs < cutoff) rmSync(path2, { recursive: true, force: true });
       } catch {
       }
     }
@@ -82,10 +82,10 @@ var OutputSpill = class {
     const buffer = typeof data === "string" ? Buffer.from(data) : data;
     try {
       if (this.fd === void 0) {
-        const path = join(spillDirectory(), `${this.label}-${randomUUID().slice(0, 8)}.log`);
-        this.fd = openSync(path, "wx", 384);
-        this.path = path;
-        this.entry = { path, bytes: 0 };
+        const path2 = join(spillDirectory(), `${this.label}-${randomUUID().slice(0, 8)}.log`);
+        this.fd = openSync(path2, "wx", 384);
+        this.path = path2;
+        this.entry = { path: path2, bytes: 0 };
         saved.push(this.entry);
       }
       const room = SPILL_MAX_BYTES - this.bytes;
@@ -109,8 +109,8 @@ var OutputSpill = class {
     this.fd = void 0;
   }
 };
-function savedLabel(path, capped = false) {
-  return path && capped ? `${path} (first ${SPILL_MAX_BYTES} bytes only)` : path;
+function savedLabel(path2, capped = false) {
+  return path2 && capped ? `${path2} (first ${SPILL_MAX_BYTES} bytes only)` : path2;
 }
 
 // src/tools/results.ts
@@ -142,6 +142,11 @@ function utf8Suffix(value, limit) {
 function errorResult(code, message) {
   return { isError: true, code, content: [{ type: "text", text: message }] };
 }
+
+// src/platform/fs.ts
+import { closeSync as closeSync2, fsyncSync, openSync as openSync2 } from "fs";
+import { access, readFile, rename } from "fs/promises";
+import path from "path";
 
 // src/tools/file-patch.ts
 var PATCH_BYTES = 1024 * 1024;
@@ -177,7 +182,7 @@ var ENTRY_DIFF_BYTES = 8 * 1024;
 var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
 
 // src/tools/primitives.ts
-import { open as open2, mkdir as mkdir2, writeFile, readFile, stat } from "fs/promises";
+import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat } from "fs/promises";
 import { dirname as dirname3, resolve as resolve3 } from "path";
 
 // src/tools/process.ts

@@ -14,3 +14,12 @@ test("duplicate keys, bad names and missing metadata fail with local diagnostics
   assert.throws(() => parseSkillMarkdown("---\nname: Bad_Name\ndescription: Review\n---\n# Body", "code-review"), /name/i);
   assert.throws(() => parseSkillMarkdown("# Body", "code-review"), /frontmatter|SKILL.md/i);
 });
+
+test("a CRLF or BOM SKILL.md parses exactly like the LF one", () => {
+  const lf = "---\nname: code-review\ndescription: Review code.\nmetadata:\n  version: \"1.2\"\n---\n# Review\n\nRead changes.\n";
+  const expected = parseSkillMarkdown(lf, "code-review");
+  assert.deepEqual(parseSkillMarkdown(lf.replaceAll("\n", "\r\n"), "code-review"), expected);
+  assert.deepEqual(parseSkillMarkdown(`\uFEFF${lf.replaceAll("\n", "\r\n")}`, "code-review"), expected);
+  assert.equal(expected.markdown, "# Review\n\nRead changes.\n");
+  assert.equal(expected.version, "1.2");
+});

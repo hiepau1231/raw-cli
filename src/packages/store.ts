@@ -8,6 +8,7 @@ import { loadPackageManifest, type LoadedPackageManifest } from "./manifest.js";
 import { withPackageWriteLock } from "./lock.js";
 import type { RawPackageManifest, ComponentKind } from "./contract.js";
 import { applyPackageInputs, parseInputSchema } from "./inputs.js";
+import { readJsonText, renameWithRetry, stripBom } from "../platform/fs.js";
 
 export interface PackageStoreOptions { configPath: string; dataHome?: string; env?: NodeJS.ProcessEnv }
 export interface PackageEntry {
@@ -39,7 +40,7 @@ function readIndex(options: PackageStoreOptions): PackageIndex {
   const path = indexPath(options);
   if (!existsSync(path)) return emptyIndex();
   let parsed: unknown;
-  try { parsed = JSON.parse(readFileSync(path, "utf8")); }
+  try { parsed = JSON.parse(stripBom(readFileSync(path, "utf8"))); }
   catch { throw new Error(`invalid package lock: ${path}`); }
   if (!parsed || typeof parsed !== "object" || (parsed as PackageIndex).schema_version !== 1
     || !(parsed as PackageIndex).installations || typeof (parsed as PackageIndex).installations !== "object") {
@@ -54,7 +55,7 @@ async function writeIndex(options: PackageStoreOptions, index: PackageIndex): Pr
   const staged = `${target}.tmp-${randomUUID()}`;
   try {
     await writeFile(staged, JSON.stringify(index, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-    await rename(staged, target);
+    await renameWithRetry(staged, target);
   } catch (error) { await rm(staged, { force: true }); throw error; }
 }
 
@@ -142,7 +143,7 @@ export async function installPackage(options: InstallPackageOptions): Promise<Pa
 
 export function packageReferences(options: PackageStoreOptions, alias: string): string[] {
   let document: unknown;
-  try { document = JSON.parse(readFileSync(resolve(options.configPath), "utf8")); }
+  try { document = JSON.parse(stripBom(readFileSync(resolve(options.configPath), "utf8"))); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   if (!document || typeof document !== "object") return [];
   const root = document as Record<string, unknown>;
@@ -184,14 +185,14 @@ async function validateAffectedBindings(options: PackageStoreOptions, alias: str
     }
   }
   let document: { agents?: Record<string, { from?: string; inputs?: Record<string, unknown> }> };
-  try { document = JSON.parse(readFileSync(resolve(options.configPath), "utf8")) as typeof document; }
+  try { document = JSON.parse(stripBom(readFileSync(resolve(options.configPath), "utf8"))) as typeof document; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
   for (const [name, binding] of Object.entries(document.agents ?? {})) {
     const match = new RegExp(`^pkg/${alias}/agents/([a-z][a-z0-9_-]*)$`).exec(binding.from ?? "");
     if (!match) continue;
     const path = manifest.exports.agents?.[match[1]!];
     if (!path) continue;
-    const agent = JSON.parse(await readFile(join(packageRoot, path), "utf8")) as {
+    const agent = JSON.parse(await readJsonText(join(packageRoot, path))) as {
       vars?: unknown; tools?: { use?: unknown };
     };
     const definitions: unknown[] = [agent];
@@ -200,17 +201,17 @@ async function validateAffectedBindings(options: PackageStoreOptions, alias: str
       const varName = /^#vars\/([a-z][a-z0-9_-]*)$/.exec(reference)?.[1];
       const varPath = varName ? manifest.exports.vars?.[varName] : undefined;
       if (!varPath) continue;
-      const variable = JSON.parse(await readFile(join(packageRoot, varPath), "utf8")) as { source?: { name?: unknown } };
+      const variable = JSON.parse(await readJsonText(join(packageRoot, varPath))) as { source?: { name?: unknown } };
       definitions.push(variable);
       const providerName = typeof variable.source?.name === "string" ? variable.source.name : undefined;
       const providerPath = providerName ? manifest.exports.var_providers?.[providerName] : undefined;
-      if (providerPath) definitions.push(JSON.parse(await readFile(join(packageRoot, providerPath), "utf8")));
+      if (providerPath) definitions.push(JSON.parse(await readJsonText(join(packageRoot, providerPath))));
     }
     if (Array.isArray(agent.tools?.use)) for (const item of agent.tools.use) {
       if (typeof item !== "string") continue;
       const server = /^mcp\/([a-z][a-z0-9_-]*)\//.exec(item)?.[1];
       const serverPath = server ? manifest.exports.mcp?.[server] : undefined;
-      if (serverPath) definitions.push(JSON.parse(await readFile(join(packageRoot, serverPath), "utf8")));
+      if (serverPath) definitions.push(JSON.parse(await readJsonText(join(packageRoot, serverPath))));
     }
     const used = new Set<string>();
     const scan = (value: unknown): void => {
@@ -247,7 +248,7 @@ async function validateAffectedBindings(options: PackageStoreOptions, alias: str
     if (!match) continue;
     const path = manifest.exports[kind]?.[match[1]!];
     if (!path) continue;
-    const definition = JSON.parse(await readFile(join(packageRoot, path), "utf8")) as unknown;
+    const definition = JSON.parse(await readJsonText(join(packageRoot, path))) as unknown;
     const used = new Set<string>();
     const walk = (item: unknown): void => {
       if (!item || typeof item !== "object") return;

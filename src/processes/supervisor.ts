@@ -32,7 +32,7 @@ export class ProcessSupervisor {
   get hostToken(): string { return this.token; }
   private now() { return (this.options.now ?? Date.now)(); }
   assertStoreBinding(store: SessionStore): void {
-    if (!this.options.store || this.options.store.storeId !== store.storeId || realpathSync(this.options.store.path) !== realpathSync(store.path))
+    if (!this.options.store || this.options.store.storeId !== store.storeId || realpathSync.native(this.options.store.path) !== realpathSync.native(store.path))
       throw new ProcessError("process_store_mismatch", "persisted agents require a supervisor bound to the same session store");
   }
   forSession(sessionId: string): ProcessContext {

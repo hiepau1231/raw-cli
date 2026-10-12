@@ -1,6 +1,6 @@
 import { readFile, lstat, readdir, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { join, posix, relative, resolve } from "node:path";
+import { join, posix, relative, resolve, sep } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
 import { getNodeValue, parseTree, type Node as JsonNode, type ParseError } from "jsonc-parser";
 import semver from "semver";
@@ -9,6 +9,7 @@ import { componentKinds, deepFreeze, packagePath, type RawPackageManifest } from
 import { parseInputSchema } from "./inputs.js";
 import { parseComponentReference } from "./references.js";
 import { parseHookManifest } from "../hooks/manifest.js";
+import { readJsonText, stripBom } from "../platform/fs.js";
 
 const ajv = new Ajv2020.default({ strict: true, allErrors: true });
 const validate = ajv.compile(schema);
@@ -28,7 +29,7 @@ function rejectDuplicateKeys(node: JsonNode): void {
 export function parsePackageManifest(source: string): RawPackageManifest {
   if (Buffer.byteLength(source) > 1024 * 1024) throw new Error("package manifest is too large");
   const errors: ParseError[] = [];
-  const tree = parseTree(source, errors, { disallowComments: true, allowTrailingComma: false });
+  const tree = parseTree(stripBom(source), errors, { disallowComments: true, allowTrailingComma: false });
   if (!tree || errors.length) throw new Error("invalid package manifest JSON");
   rejectDuplicateKeys(tree);
   const data: unknown = getNodeValue(tree);
@@ -67,7 +68,7 @@ export async function loadPackageManifest(root: string): Promise<LoadedPackageMa
     }
     if (!info.isFile()) throw new Error(`unsupported package file type: ${path}`);
     const real = await realpath(absolutePath);
-    const rel = relative(absolute, real);
+    const rel = relative(absolute, real).split(sep).join("/");
     if (rel !== path) throw new Error(`package path escapes root: ${path}`);
     const lowercase = path.toLowerCase();
     if (folded.has(lowercase) && folded.get(lowercase) !== path) throw new Error(`case-conflicting package path: ${path}`);
@@ -126,7 +127,7 @@ export async function loadPackageManifest(root: string): Promise<LoadedPackageMa
   };
   for (const path of Object.values(manifest.exports.agents ?? {})) {
     let agent: Record<string, unknown>;
-    try { agent = JSON.parse(await readFile(join(absolute, path), "utf8")) as Record<string, unknown>; }
+    try { agent = JSON.parse(await readJsonText(join(absolute, path))) as Record<string, unknown>; }
     catch { throw new Error(`invalid exported agent JSON: ${path}`); }
     if (!agent || typeof agent !== "object" || Array.isArray(agent)) throw new Error(`invalid exported agent: ${path}`);
     const tools = (agent.tools as { use?: unknown } | undefined)?.use;
@@ -160,7 +161,7 @@ export async function loadPackageManifest(root: string): Promise<LoadedPackageMa
     }
   }
   for (const path of Object.values(manifest.exports.vars ?? {})) {
-    const variable = JSON.parse(await readFile(join(absolute, path), "utf8")) as { source?: { kind?: string; name?: unknown; path?: unknown } };
+    const variable = JSON.parse(await readJsonText(join(absolute, path))) as { source?: { kind?: string; name?: unknown; path?: unknown } };
     if (variable.source?.kind === "provider" && typeof variable.source.name === "string"
       && variable.source.name !== "system.time" && !manifest.exports.var_providers?.[variable.source.name]) {
       throw new Error(`unresolved exported variable provider: ${variable.source.name}`);
