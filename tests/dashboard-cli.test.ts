@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 import test from "node:test";
 import { parseDashboardArgs, openDashboardBrowser } from "../src/dashboard/cli.js";
+import { posixOnly } from "./fixtures/platform.js";
 
 test("dashboard flags keep loopback and reject duplicate/unknown/invalid options", () => {
   assert.deepEqual(parseDashboardArgs(["--port", "0", "--no-open", "--agent", "raw"]), { port: 0, noOpen: true, agent: "raw" });
@@ -19,7 +20,7 @@ test("browser opener failure is reported without requiring a shell", async () =>
   assert.equal(result, false);
 });
 
-test("installed-style CLI prints a usable URL without opening and SIGINT closes the listener", async () => {
+test("installed-style CLI prints a usable URL without opening and SIGINT closes the listener", { skip: posixOnly("signals") }, async () => {
   const root = mkdtempSync(join(tmpdir(), "raw-dashboard-cli-"));
   const child = spawn(process.execPath, [join(process.cwd(), "dist/raw.js"), "dashboard", "--port", "0", "--no-open"], {
     cwd: root, env: { ...process.env, XDG_CONFIG_HOME: join(root, "config"), XDG_STATE_HOME: join(root, "state"), XDG_DATA_HOME: join(root, "data") },

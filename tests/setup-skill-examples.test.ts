@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, cpSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter } from "node:path";
 import { test } from "node:test";
 import { loadConfig } from "../src/config.js";
 import { loadSelectedSkills } from "../src/skills/loader.js";
@@ -133,13 +133,15 @@ test("configure_raw canonical candidate validation accepts sessions and rejects 
     const candidate = join(root, "candidate.json");
     const document = { default_agent: "raw", models: { lab: { provider: "custom", method: "openai-chat-completions", model_id: "fixture", base_url: "http://127.0.0.1:9999/v1" } }, agents: { raw: { model: "lab", tools: { use: [] } } }, sessions: { retention_days: 30 } };
     writeFileSync(candidate, JSON.stringify(document));
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-    const good = spawnSync("bash", [script, candidate], { env, encoding: "utf8" });
+    const env = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` };
+    // Windows runs the documented Bash snippet with Git Bash, not a bare "bash" that may be WSL's launcher.
+    const shell = process.platform === "win32" ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe") : "bash";
+    const good = spawnSync(shell, [script, candidate], { env, encoding: "utf8" });
     assert.equal(good.status, 0, good.stderr);
     assert.deepEqual(JSON.parse(readFileSync(candidate, "utf8")), document);
     const invalid = structuredClone(document); invalid.models.lab.base_url = "not-a-url";
     writeFileSync(candidate, JSON.stringify(invalid));
-    const bad = spawnSync("bash", [script, candidate], { env, encoding: "utf8" });
+    const bad = spawnSync(shell, [script, candidate], { env, encoding: "utf8" });
     assert.notEqual(bad.status, 0);
     assert.deepEqual(JSON.parse(readFileSync(candidate, "utf8")), invalid);
   } finally { rmSync(root, { recursive: true, force: true }); }

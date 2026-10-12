@@ -12,6 +12,17 @@ no Playwright or frontend build tool.
 
 The current schema-isolation and edit→resume→unchanged-resume contract has a separate [Milestone A local qualification record](evidence/milestone-a-session-continuity.md). Package-sharing qualification follows in Milestone B.
 
+## Windows CI
+
+`.github/workflows/ci.yml` runs `npm run check`, `npm run test:overhead` and
+`npm run test:package` on ubuntu-latest, macos-latest and windows-latest with
+Node 22.13.0 and 24. A test may skip on Windows only through `posixOnly` in
+`tests/fixtures/platform.ts`, for a mechanism Windows does not have: a Python
+pty, POSIX signals delivered to a child, or POSIX permission bits. Features Raw
+supports on Windows are never skipped. To rerun a few files on windows-latest,
+dispatch the workflow with `tests` set to a space-separated list, for example
+`gh workflow run ci.yml --ref <branch> -f tests="tests/cli.test.ts tests/package.test.ts"`.
+
 ## Terminal output redesign qualification
 
 On 2026-09-26, the implementation at source commit `9ede7835eb749d6311a00449a8edb2f784979910` passed `npm run check` (368/368) and `npm run test:package` (2/2) locally. The packed consumer exercised a highlighted PTY answer and read preview, byte-exact redirected output, installed docs/skills/tools, MCP, ACP and public imports. A fixed no-network gallery was inspected at 40/80/120 columns with light/dark/terminal themes and ASCII/Unicode icons. [Terminal output evidence](evidence/terminal-output.md) records the artifact hash, commands, representative transcript, and limits. The user's global installation and state were not modified.

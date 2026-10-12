@@ -12,6 +12,7 @@ import { openSessionStore } from "../src/sessions/store.js";
 import { createTestToolRegistry } from "./fixtures/registry.js";
 import { testConfig } from "./fixtures/config.js";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
+import { posixOnly } from "./fixtures/platform.js";
 
 function answer(text: string) { return { frames: [openAiFrame({ content: text }, "stop"), openAiDone] }; }
 function fixture() {
@@ -261,7 +262,7 @@ test("provider failure offers the saved session and a later request resumes it",
   } finally { await provider.close(); }
 });
 
-test("SIGINT keeps REPL ownership; SIGTERM releases it after a later prompt", async () => {
+test("SIGINT keeps REPL ownership; SIGTERM releases it after a later prompt", { skip: posixOnly("signals") }, async () => {
   const { a, env } = fixture();
   const provider = await startMockProvider([{ hold: true }, answer("after-cancel"), answer("after-term")]);
   const config = testConfig("openai", "fixture", provider.url);

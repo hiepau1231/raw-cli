@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { packPackage, validatePackageArchive, unpackPackage } from "../src/packages/archive.js";
 import { TextReader, Uint8ArrayWriter, ZipWriter } from "@zip.js/zip.js";
+import { posixOnly } from "./fixtures/platform.js";
 
 test("identical package bytes produce identical archives across source mtimes", async () => {
   const root = mkdtempSync(join(tmpdir(), "raw-pack-source-"));
@@ -26,7 +27,7 @@ test("identical package bytes produce identical archives across source mtimes", 
   const extracted = mkdtempSync(join(tmpdir(), "raw-pack-extracted-"));
   await unpackPackage(a, extracted);
   assert.equal(readFileSync(join(extracted, "skills", "review", "SKILL.md"), "utf8"), readFileSync(skill, "utf8"));
-  assert.equal(statSync(join(extracted, "skills", "review", "SKILL.md")).mode & 0o111, 0o111);
+  if (!posixOnly("modes")) assert.equal(statSync(join(extracted, "skills", "review", "SKILL.md")).mode & 0o111, 0o111);
 });
 
 test("corrupt archives fail validation before extraction", async () => {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
+import { launch } from "./fixtures/platform.js";
 
 const done = (text: string) => ({ frames: [openAiFrame({ content: text }, "stop"), openAiDone] });
 const call = (name: string, args: unknown, id: string) => ({ frames: [openAiFrame({ tool_calls: [{
@@ -12,7 +13,7 @@ const call = (name: string, args: unknown, id: string) => ({ frames: [openAiFram
 }] }, "tool_calls"), openAiDone] });
 
 async function run(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
-  const child = spawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(...launch(bin, args), { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
   child.stdin.end();
   let stdout = "";
   let stderr = "";
@@ -51,14 +52,14 @@ test("packed forks and copied agent execute outside the checkout with isolated s
     call("project_note", {}, "note-b"), done("agent b"), done("agent resumed"),
   ]);
   try {
-    const pack = spawnSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", root], { cwd: repo, encoding: "utf8" });
+    const pack = spawnSync(...launch("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", root]), { cwd: repo, encoding: "utf8" });
     assert.equal(pack.status, 0, pack.stderr);
     const archive = join(root, (JSON.parse(pack.stdout) as Array<{ filename: string }>)[0]!.filename);
     const consumer = join(root, "consumer");
     await mkdir(consumer);
     await writeFile(join(consumer, "package.json"), '{"name":"portable-consumer","private":true,"type":"module"}\n');
-    const install = spawnSync("npm", ["install", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts",
-      "--no-audit", "--no-fund", archive], { cwd: consumer, encoding: "utf8" });
+    const install = spawnSync(...launch("npm", ["install", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts",
+      "--no-audit", "--no-fund", archive]), { cwd: consumer, encoding: "utf8" });
     assert.equal(install.status, 0, install.stderr);
     const bin = join(consumer, "node_modules", ".bin", "raw");
     const packageRoot = join(consumer, "node_modules", "@tlelabs", "raw");

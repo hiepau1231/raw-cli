@@ -21,6 +21,7 @@ import { setSpillTotalBytesForTests, SPILL_TOTAL_BYTES } from "../src/tools/spil
 import type { ToolResult } from "../src/tools/types.js";
 import { createTestToolRegistry } from "./fixtures/registry.js";
 import { anthropicFrame, startMockProvider } from "./fixtures/mock-provider.js";
+import { posixOnly } from "./fixtures/platform.js";
 
 const noise = (bytes: number) => randomBytes(Math.ceil(bytes / 2)).toString("hex").slice(0, bytes);
 const stop = (text: string): ProviderTurn => ({ text, toolCalls: [], finishReason: "stop" });
@@ -195,7 +196,9 @@ test("3: a result is cleared only with a secured, byte-identical copy", () => {
   assert.equal(outcome.cleared.length, 7);
   const path = (callId: string) => outcome.cleared.find((item) => item.callId === callId)!.path;
   // A new copy holds exactly what the context held; a usable full output is named instead.
-  for (const callId of ["plain", "deleted", "mismatched", "capped", "unreadable", "folder"] as const) {
+  // Windows has no unreadable mode: chmod only sets the read-only bit, so that file stays usable and is named.
+  const unreadableWorks = !posixOnly("modes");
+  for (const callId of ["plain", "deleted", "mismatched", "capped", ...(unreadableWorks ? ["unreadable"] as const : []), "folder"] as const) {
     assert.notEqual(path(callId), valid);
     assert.equal(readFileSync(path(callId), "utf8"), texts[callId], callId);
   }
@@ -207,7 +210,8 @@ test("3: a result is cleared only with a secured, byte-identical copy", () => {
   assert.equal(resultText((stub as Extract<ModelMessage, { role: "tool" }>).result),
     `[Old tool result cleared: probe {"out":"plain"}, ${Buffer.byteLength(texts.plain)} bytes; full output: ${path("plain")} (saved copy, normally kept 7 days; may be removed earlier when saved outputs exceed their disk limit)]`);
   assert.deepEqual(outcome.messages.filter((message) => message.role !== "tool"), messages.filter((message) => message.role !== "tool"));
-  assert.notEqual(path("unreadable"), unreadable);
+  if (unreadableWorks) assert.notEqual(path("unreadable"), unreadable);
+  else assert.equal(path("unreadable"), unreadable);
   assert.notEqual(path("folder"), directory);
   // Without room for a copy, nothing is cleared.
   setSpillTotalBytesForTests(1000);

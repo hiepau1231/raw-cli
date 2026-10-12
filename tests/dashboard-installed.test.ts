@@ -9,9 +9,10 @@ import test from "node:test";
 import { chromium, expect } from "@playwright/test";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
 import { makePng } from "./fixtures/images.js";
+import { launch, posixOnly } from "./fixtures/platform.js";
 
 async function command(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
-  const child = spawn(bin, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], signal: AbortSignal.timeout(90_000) });
+  const child = spawn(...launch(bin, args), { cwd, env, stdio: ["ignore", "pipe", "pipe"], signal: AbortSignal.timeout(90_000) });
   let stdout = "", stderr = ""; child.stdout.on("data", part => { stdout += String(part); }); child.stderr.on("data", part => { stderr += String(part); });
   const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
   assert.equal(code, 0, `${bin} ${args[0]}: ${stderr}`); return { stdout, stderr };
@@ -69,7 +70,7 @@ test("packed dashboard configures, reconnects, updates a package, then installed
     await writeFile(join(source, "tools/echo/helper.mjs"), 'export const value="v1";\n');
     await writeFile(join(source, "tools/echo/index.mjs"), `import {value} from './helper.mjs'; import {appendFileSync,existsSync} from 'node:fs'; import {join} from 'node:path';
       export async function handler(args,context){appendFileSync(join(context.cwd,'effects.txt'),value+'\\n'); while(!existsSync(join(context.cwd,'release'))) await new Promise(r=>setTimeout(r,20)); return {isError:false,content:[{type:'text',text:value}]};}\n`);
-    host = spawn(bin, ["dashboard", "--port", "0", "--no-open"], { cwd: workspace, env, stdio: ["ignore", "pipe", "pipe"] });
+    host = spawn(...launch(bin, ["dashboard", "--port", "0", "--no-open"]), { cwd: workspace, env, stdio: ["ignore", "pipe", "pipe"] });
     host.stdout!.on("data", part => { stdout += String(part); }); host.stderr!.on("data", part => { stderr += String(part); });
     closed = new Promise((resolve, reject) => { host!.once("close", resolve); host!.once("error", reject); });
     await expect.poll(() => (stdout + stderr).match(/http:\/\/127\.0\.0\.1:\d+\/#token=[A-Za-z0-9_-]+/)?.[0], { timeout: 15_000 }).toBeTruthy();
@@ -123,7 +124,8 @@ test("packed dashboard configures, reconnects, updates a package, then installed
     await expect(page.getByText("Image turn answer", { exact: true })).toBeVisible();
     await page.reload(); await expect(page.getByTestId("user-message").last().locator("img")).toBeVisible();
     assert.deepEqual(errors, []); assert.deepEqual(external, []); await browser.close(); browser = undefined;
-    host.kill("SIGTERM"); assert.equal(await closed, 0); host = undefined;
+    // Windows has no SIGTERM handler to run: kill() terminates the dashboard, so only POSIX checks the clean exit code.
+    host.kill("SIGTERM"); const exitCode = await closed; if (!posixOnly("signals")) assert.equal(exitCode, 0); host = undefined;
     const resumed = await command(bin, ["--resume", id, "Continue in CLI"], workspace, env); assert.equal(resumed.stdout, "CLI continued\n"); assert.match(resumed.stderr, new RegExp(id));
     assert.equal(await readFile(join(workspace, "hook-effects.txt"), "utf8"), "notice\nnotice\nnotice\nnotice\n"); // three dashboard turns (the third is the image turn) and the CLI turn
     const requests = provider.requests.map(item => item.body as { prompt_cache_key: string; messages: unknown[]; tools: unknown[] });

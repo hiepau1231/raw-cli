@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { openSessionStore, sessionStorePath } from "../src/sessions/store.js";
 import { initializeSessionSchema } from "../src/sessions/schema.js";
 import { runSessionMaintenance } from "../src/sessions/maintenance.js";
+import { posixOnly } from "./fixtures/platform.js";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "raw-sessions-"));
@@ -50,8 +51,10 @@ test("one private global DB and deterministic 1001-session keyset pages", () => 
     const indexes = store.database.prepare("SELECT name FROM sqlite_master WHERE type='index'").all().map((row) => String(row.name));
     assert.ok(indexes.some((name) => name.includes("workspace_updated")));
     assert.ok(indexes.some((name) => name.includes("sessions_updated")));
-    assert.equal(statSync(join(root, "raw")).mode & 0o777, 0o700);
-    assert.equal(statSync(join(root, "raw", "sessions.sqlite")).mode & 0o777, 0o600);
+    if (!posixOnly("modes")) {
+      assert.equal(statSync(join(root, "raw")).mode & 0o777, 0o700);
+      assert.equal(statSync(join(root, "raw", "sessions.sqlite")).mode & 0o777, 0o600);
+    }
   } finally { store.close(); }
 });
 
@@ -110,8 +113,10 @@ for (const legacyVersion of [2, 4, 999, "unversioned"] as const) {
       runSessionMaintenance(first);
       assert.deepEqual(readFileSync(legacy), originalDb);
       assert.equal(readFileSync(payload, "utf8"), "legacy payload");
-      assert.equal(statSync(expected).mode & 0o777, 0o600);
-      assert.equal(statSync(join(root, "raw", "stores", "storage-v6")).mode & 0o777, 0o700);
+      if (!posixOnly("modes")) {
+        assert.equal(statSync(expected).mode & 0o777, 0o600);
+        assert.equal(statSync(join(root, "raw", "stores", "storage-v6")).mode & 0o777, 0o700);
+      }
     } finally { first.close(); second.close(); }
     const third = openSessionStore(options);
     try { assert.equal(third.listSessions({ cwd: root }).items[0]?.title, "fresh"); }

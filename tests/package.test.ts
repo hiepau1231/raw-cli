@@ -8,9 +8,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
 import { parseSkillMarkdown } from "../src/skills/frontmatter.js";
+import { launch, posixOnly } from "./fixtures/platform.js";
 
 async function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, keepStdin = false) {
-  const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+  const [file, argv] = launch(command, args);
+  const child = spawn(file, argv, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
   if (!keepStdin) child.stdin.end();
   let stdout = "";
   let stderr = "";
@@ -24,13 +26,13 @@ test("T-08d: packed consumer executes installed CLI task/MCP/ACP and imports lib
   const repo = process.cwd();
   const root = await mkdtemp(join(tmpdir(), "raw-installed-"));
   try {
-  const pack = spawnSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", root], { cwd: repo, encoding: "utf8" });
+  const pack = spawnSync(...launch("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", root]), { cwd: repo, encoding: "utf8" });
   assert.equal(pack.status, 0, pack.stderr);
   const tarball = join(root, (JSON.parse(pack.stdout) as Array<{ filename: string }>)[0]!.filename);
   const consumer = join(root, "consumer");
   await mkdir(consumer);
   await writeFile(join(consumer, "package.json"), '{"name":"raw-consumer","private":true,"type":"module"}\n');
-  const install = spawnSync("npm", ["install", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund", tarball],
+  const install = spawnSync(...launch("npm", ["install", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund", tarball]),
     { cwd: consumer, encoding: "utf8" });
   assert.equal(install.status, 0, install.stderr);
   const bin = join(consumer, "node_modules", ".bin", "raw");
@@ -203,11 +205,13 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
     assert.doesNotMatch(JSON.stringify(varsProvider.requests), /installed-use-value-7321/);
   } finally { await varsProvider.close(); }
 
+  // The terminal run needs Python's pty, which is Unix-only; Windows checks only the piped run.
+  const ptyRun = !posixOnly("pty");
   const terminalProvider = await startMockProvider([
-    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "terminal-read", type: "function", function: {
+    ...(ptyRun ? [{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "terminal-read", type: "function", function: {
       name: "read_file", arguments: '{"path":"installed-preview.ts"}',
     } }] }, "tool_calls"), openAiDone] },
-    { frames: [openAiFrame({ content: "# Installed result\n\n```ts\nconst installedPreview = 7;\n```" }, "stop"), openAiDone] },
+    { frames: [openAiFrame({ content: "# Installed result\n\n```ts\nconst installedPreview = 7;\n```" }, "stop"), openAiDone] }] : []),
     { frames: [openAiFrame({ content: "# Pipe result\n\n```ts\nconst piped = true;\n```" }, "stop"), openAiDone] },
   ]);
   try {
@@ -215,21 +219,23 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
     const terminalConfig = testConfig("openai", "fixture", terminalProvider.url);
     const terminalEnv = { ...env, TERM: "xterm-256color", NO_COLOR: "",
       RAW_TEST_PTY_COLUMNS: "80", RAW_TEST_PTY_ROWS: "24" };
-    const tty = await run("python3", [join(repo, "tests", "fixtures", "pty-bridge.py"), bin,
-      "--config", terminalConfig, "--theme", "dark", "--icons", "unicode", "installed terminal"], consumer, terminalEnv, true);
-    assert.equal(tty.code, 0, tty.stdout + tty.stderr);
-    assert.match(tty.stdout, /↳ Read/);
-    const ttyPlain = tty.stdout.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
-    assert.match(ttyPlain, /const installedPreview = 7;/);
-    assert.match(tty.stdout, /Installed result/);
-    assert.match(tty.stdout, /\u001b\[(?:3[0-7]|9[0-7])mconst/);
-    assert.match(tty.stdout, /Context/);
-    assert.match(tty.stdout, /raw --resume [0-9a-f-]+ "query"/);
+    if (ptyRun) {
+      const tty = await run("python3", [join(repo, "tests", "fixtures", "pty-bridge.py"), bin,
+        "--config", terminalConfig, "--theme", "dark", "--icons", "unicode", "installed terminal"], consumer, terminalEnv, true);
+      assert.equal(tty.code, 0, tty.stdout + tty.stderr);
+      assert.match(tty.stdout, /↳ Read/);
+      const ttyPlain = tty.stdout.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
+      assert.match(ttyPlain, /const installedPreview = 7;/);
+      assert.match(tty.stdout, /Installed result/);
+      assert.match(tty.stdout, /\u001b\[(?:3[0-7]|9[0-7])mconst/);
+      assert.match(tty.stdout, /Context/);
+      assert.match(tty.stdout, /raw --resume [0-9a-f-]+ "query"/);
+    }
     const pipe = await run(bin, ["--config", terminalConfig, "--color", "always", "--icons", "ascii", "pipe"], consumer, terminalEnv);
     assert.equal(pipe.code, 0, pipe.stderr);
     assert.equal(pipe.stdout, "# Pipe result\n\n```ts\nconst piped = true;\n```\n");
     assert.doesNotMatch(pipe.stdout + pipe.stderr, /\u001b\[/);
-    assert.equal(terminalProvider.requests.length, 3);
+    assert.equal(terminalProvider.requests.length, ptyRun ? 3 : 1);
   } finally { await terminalProvider.close(); }
 
   const starterProvider = await startMockProvider([
@@ -247,7 +253,7 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
     const starter = JSON.parse(starterSource);
     assert.equal(starter.default_agent, "raw");
     assert.deepEqual(starter.agents.raw.skills.use, skillIds.map((id) => `builtin/${id}`));
-    assert.equal((await stat(starterPath)).mode & 0o777, 0o600);
+    if (!posixOnly("modes")) assert.equal((await stat(starterPath)).mode & 0o777, 0o600);
     starter.models.local.provider = "openai";
     starter.models.local.model_id = "fixture";
     starter.models.local.base_url = starterProvider.url;
@@ -349,7 +355,7 @@ catch (error) { process.stderr.write(String(error)); process.exitCode = 2; }`], 
     assert.ok((JSON.parse(stats.stdout) as { databaseBytes: number }).databaseBytes > 0);
 
     const parentScript = `import { createAcpClient, BUILTIN_TOOL_DEFINITIONS } from "@tlelabs/raw";
-const options = { command: ${JSON.stringify(bin)}, args: ${JSON.stringify(["--acp", "--stdio", ...args])} };
+const options = { command: ${JSON.stringify(launch(bin, [])[0])}, args: ${JSON.stringify([...launch(bin, [])[1], "--acp", "--stdio", ...args])} };
 let id;
 const first = await createAcpClient(options);
 try { id = await first.newSession(process.cwd()); const answer = await first.prompt(id, "ACP installed");

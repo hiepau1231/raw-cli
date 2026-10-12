@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { parseCliArgs } from "../src/config.js";
+import { posixOnly } from "./fixtures/platform.js";
 const bin = resolve("dist/raw.js");
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "raw-vars-cli-")); const path = join(dir, "config.json");
@@ -39,7 +40,7 @@ test("config init ships a raw agent with selected clock and both variable tools"
   for (const tool of ["builtin/list_vars", "builtin/read_var"]) assert.ok(init.agents.raw.tools.use.includes(tool));
 });
 
-test("vars get cancellation terminates a running executable and exits 130", async () => {
+test("vars get cancellation terminates a running executable and exits 130", { skip: posixOnly("signals") }, async () => {
   const f = fixture(); const marker = join(f.dir, "started"); const script = join(f.dir, "wait.mjs");
   writeFileSync(script, `import {writeFileSync} from 'node:fs';for await(const x of process.stdin){};writeFileSync(${JSON.stringify(marker)},'ready');process.on('SIGTERM',()=>{});setInterval(()=>{},100);`);
   const doc = JSON.parse(readFileSync(f.path, "utf8")); doc.var_providers = { wait: { command: process.execPath, args: [script] } };

@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { getEncoding } from "js-tiktoken";
 import { DEFAULT_SYSTEM_PROMPT } from "../src/llm/prompt.js";
 import { BUILTIN_TOOL_DEFINITIONS } from "../src/tools/registry.js";
@@ -22,7 +23,7 @@ export function countOverhead() {
   };
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const report = countOverhead();
   process.stdout.write(JSON.stringify(report, null, 2) + "\n");
   if (report.promptTokens > 50 || report.definitions.length !== 3) process.exitCode = 1;

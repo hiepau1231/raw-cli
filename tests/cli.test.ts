@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
+import { posixOnly } from "./fixtures/platform.js";
 
 process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "raw-cli-test-config-"));
 process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), "raw-cli-test-state-"));
@@ -125,7 +126,7 @@ test("CLI shows rejected write argument keys without printing the payload", asyn
   } finally { await fixture.close(); }
 });
 
-test("TTY starts tool activity on a new line after unfinished assistant text", async () => {
+test("TTY starts tool activity on a new line after unfinished assistant text", { skip: posixOnly("pty") }, async () => {
   const fixture = await startMockProvider([
     { frames: [
       openAiFrame({ content: "I will inspect the repo." }),
@@ -171,7 +172,7 @@ test("tool result preview retains the exit status and bounds body to 2000 charac
   } finally { await fixture.close(); }
 });
 
-test("TTY renders thinking in dim color while keeping the answer separate", async () => {
+test("TTY renders thinking in dim color while keeping the answer separate", { skip: posixOnly("pty") }, async () => {
   const fixture = await startMockProvider([{ frames: [
     openAiFrame({ reasoning_content: "Checking context." }),
     openAiFrame({ content: "ready" }, "stop"), openAiDone,
@@ -248,7 +249,7 @@ test("conditional Bash ask leaves safe headless commands automatic and gates rm 
   } finally { await fixture.close(); }
 });
 
-test("explicit agent ask prompts once in a TTY and -y does not bypass it", async () => {
+test("explicit agent ask prompts once in a TTY and -y does not bypass it", { skip: posixOnly("pty") }, async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-ask-tty-"));
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "write", type: "function",
@@ -301,7 +302,7 @@ test("T-08 review: piped REPL executes a tool without approval", async () => {
   } finally { child.kill("SIGKILL"); await fixture.close(); }
 });
 
-test("T-08 review: SIGINT during MCP startup reaps owned stdio child", async () => {
+test("T-08 review: SIGINT during MCP startup reaps owned stdio child", { skip: posixOnly("signals") }, async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-startup-cancel-"));
   const pidFile = join(root, "mcp.pid");
   const started = join(root, "mcp-started");
@@ -337,7 +338,7 @@ test("T-08 review: SIGINT during MCP startup reaps owned stdio child", async () 
   } finally { child.kill("SIGKILL"); if (mcpPid) { try { process.kill(mcpPid, "SIGKILL"); } catch { /* already reaped */ } } }
 });
 
-test("T-08b: real PTY executes a write without a permission prompt", async () => {
+test("T-08b: real PTY executes a write without a permission prompt", { skip: posixOnly("pty") }, async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-pty-auto-"));
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "write", type: "function", function: {
@@ -355,7 +356,7 @@ test("T-08b: real PTY executes a write without a permission prompt", async () =>
   } finally { child.kill("SIGTERM"); await fixture.close(); }
 });
 
-test("T-08 review: queued REPL command follows an automatic tool call", async () => {
+test("T-08 review: queued REPL command follows an automatic tool call", { skip: posixOnly("pty") }, async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-pty-queued-tool-"));
   const fixture = await startMockProvider([
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "write", type: "function", function: {
@@ -376,7 +377,7 @@ test("T-08 review: queued REPL command follows an automatic tool call", async ()
   } finally { child.kill("SIGTERM"); await fixture.close(); }
 });
 
-test("T-08b: Ctrl-C during an active PTY tool aborts it and exits 130", async () => {
+test("T-08b: Ctrl-C during an active PTY tool aborts it and exits 130", { skip: posixOnly("pty") }, async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-pty-cancel-"));
   const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
     name: "bash", arguments: JSON.stringify({ command: `sleep 0.5; printf late > ${join(root, "marker")}` }),
@@ -394,7 +395,7 @@ test("T-08b: Ctrl-C during an active PTY tool aborts it and exits 130", async ()
   } finally { child.kill("SIGTERM"); await fixture.close(); }
 });
 
-test("T-08b: REPL Ctrl-C aborts active work, then Ctrl-C while idle exits", async () => {
+test("T-08b: REPL Ctrl-C aborts active work, then Ctrl-C while idle exits", { skip: posixOnly("pty") }, async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-repl-cancel-"));
   const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
     name: "bash", arguments: JSON.stringify({ command: `sleep 1.5; printf late > ${join(root, "marker")}` }),
@@ -442,7 +443,7 @@ test("T-08b: EOF during an active piped REPL turn aborts owned Bash", async () =
   } finally { child.kill("SIGKILL"); await fixture.close(); }
 });
 
-test("T-08b: idle PTY EOF closes REPL cleanly", async () => {
+test("T-08b: idle PTY EOF closes REPL cleanly", { skip: posixOnly("pty") }, async () => {
   const { child, output } = ptyRaw(["--config", testConfig("ollama"), "--interactive"], process.env);
   try {
     await waitFor(output, "❯ ");

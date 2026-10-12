@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
 import { testConfig } from "./fixtures/config.js";
 import { terminalScreen } from "./fixtures/terminal-screen.js";
+import { posixOnly } from "./fixtures/platform.js";
 
 async function run(args: string[], env: NodeJS.ProcessEnv, pty: boolean) {
   const command = pty ? "python3" : process.execPath;
@@ -21,7 +22,7 @@ async function run(args: string[], env: NodeJS.ProcessEnv, pty: boolean) {
   return { code, stdout, stderr };
 }
 
-test("shared PTY shows header, tool activity and highlighted streamed code", async () => {
+test("shared PTY shows header, tool activity and highlighted streamed code", { skip: posixOnly("pty") }, async () => {
   const cwd = mkdtempSync(join(tmpdir(), "raw-terminal-cli-"));
   writeFileSync(join(cwd, "sample.ts"), "const answer = 42;\n");
   const provider = await startMockProvider([
@@ -62,7 +63,7 @@ test("redirected stdout stays byte-exact assistant Markdown without terminal esc
   } finally { await provider.close(); }
 });
 
-test("compact and verbose flags change successful tool detail on a shared terminal", async () => {
+test("compact and verbose flags change successful tool detail on a shared terminal", { skip: posixOnly("pty") }, async () => {
   const root = mkdtempSync(join(tmpdir(), "raw-terminal-density-"));
   writeFileSync(join(root, "snippet.ts"), "const densityProbe = 7;\n");
   const call = { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "read", type: "function", function: {
@@ -134,7 +135,7 @@ test("changing only UI settings on resume preserves the OpenAI cache key and too
   } finally { await provider.close(); }
 });
 
-test("compact shared-terminal header is one line and resume identifies the active session", async () => {
+test("compact shared-terminal header is one line and resume identifies the active session", { skip: posixOnly("pty") }, async () => {
   const root = mkdtempSync(join(tmpdir(), "raw-terminal-header-"));
   const provider = await startMockProvider([
     { frames: [openAiFrame({ content: "first", "finish_reason": "stop" }, "stop"), openAiDone] },

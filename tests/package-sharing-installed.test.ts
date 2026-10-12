@@ -7,9 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
+import { launch } from "./fixtures/platform.js";
 
 async function run(command: string, args: readonly string[], cwd: string, env: NodeJS.ProcessEnv) {
-  const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(...launch(command, args), { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "";
   child.stdout.setEncoding("utf8").on("data", (part: string) => { stdout += part; });
   child.stderr.setEncoding("utf8").on("data", (part: string) => { stderr += part; });
@@ -26,13 +27,13 @@ function cacheKey(path: string, id: string): string {
 test("packed recipient installs mixed and standalone packages without author source or readable legacy state", async () => {
   const repo = process.cwd(), root = await mkdtemp(join(tmpdir(), "raw-package-installed-"));
   try {
-    const pack = spawnSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", root], { cwd: repo, encoding: "utf8" });
+    const pack = spawnSync(...launch("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", root]), { cwd: repo, encoding: "utf8" });
     assert.equal(pack.status, 0, pack.stderr);
     const tarball = join(root, (JSON.parse(pack.stdout) as Array<{ filename: string }>)[0]!.filename);
     const consumer = join(root, "consumer"); await mkdir(consumer);
     await writeFile(join(consumer, "package.json"), '{"name":"raw-recipient","private":true,"type":"module"}\n');
-    const install = spawnSync("npm", ["install", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts",
-      "--no-audit", "--no-fund", tarball], { cwd: consumer, encoding: "utf8" });
+    const install = spawnSync(...launch("npm", ["install", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts",
+      "--no-audit", "--no-fund", tarball]), { cwd: consumer, encoding: "utf8" });
     assert.equal(install.status, 0, install.stderr);
     const bin = join(consumer, "node_modules", ".bin", "raw");
     const examples = join(consumer, "node_modules", "@tlelabs", "raw", "examples", "packages");

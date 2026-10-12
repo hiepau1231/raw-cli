@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createTestToolRegistry } from "./fixtures/registry.js";
+import { fileURLToPath } from "node:url";
 
 const context = (cwd: string, maxOutputBytes = 8192) => ({ cwd, maxOutputBytes, autoApprove: true });
 
@@ -73,7 +74,7 @@ test("abort kills owned shell descendants and leaves unrelated processes running
   const other = spawn(process.execPath, ["-e", "setTimeout(() => require('node:fs').writeFileSync(process.argv[1], 'ok'), 900)", unrelated], { stdio: "ignore" });
   const otherExited = new Promise((resolve) => other.once("exit", resolve));
   const controller = new AbortController();
-  const task = createTestToolRegistry().dispatch("bash", { command: `node ${JSON.stringify(new URL("./fixtures/process-tree.cjs", import.meta.url).pathname)} ${JSON.stringify(marker)}` }, { ...context(cwd), signal: controller.signal });
+  const task = createTestToolRegistry().dispatch("bash", { command: `node ${JSON.stringify(fileURLToPath(new URL("./fixtures/process-tree.cjs", import.meta.url)))} ${JSON.stringify(marker)}` }, { ...context(cwd), signal: controller.signal });
   let ownedPid = 0;
   for (let i = 0; i < 100; i++) {
     try { ownedPid = Number(await readFile(marker + ".ready", "utf8")); break; }
@@ -112,7 +113,7 @@ test("timeout settles even when an escaped descendant holds inherited output pip
   const timersBefore = process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
   try {
     const result = await createTestToolRegistry().dispatch("bash", {
-      command: `node ${JSON.stringify(new URL("./fixtures/escaped-pipes.cjs", import.meta.url).pathname)} ${JSON.stringify(pidFile)}`,
+      command: `node ${JSON.stringify(fileURLToPath(new URL("./fixtures/escaped-pipes.cjs", import.meta.url)))} ${JSON.stringify(pidFile)}`,
       timeout: 300,
     }, context(cwd));
     assert.equal(result.host?.status, "timeout");

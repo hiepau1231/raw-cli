@@ -6,6 +6,7 @@ import test from "node:test";
 import { readManagedConfig, mutateConfig, saveConfigText, initializeConfig } from "../src/management/config.js";
 import { createStarterConfig } from "../src/management/starter.js";
 import { editAgent, editModel } from "../src/management/agents.js";
+import { posixOnly } from "./fixtures/platform.js";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "raw-management-"));
@@ -26,7 +27,7 @@ test("revision-aware edits preserve unrelated secrets, supported fields and orde
     assert.deepEqual((after.data!.agents as typeof f.data.agents).two, f.data.agents.two);
     assert.deepEqual((after.data!.agents as typeof f.data.agents).one.tools.use, f.data.agents.one.tools.use);
     assert.deepEqual(after.data!.models, f.data.models);
-    assert.equal(statSync(f.path).mode & 0o777, 0o600);
+    if (!posixOnly("modes")) assert.equal(statSync(f.path).mode & 0o777, 0o600);
     await assert.rejects(editAgent({ ...f.options, expectedRevision: before.revision }, { action: "patch", name: "two", value: { max_steps: 9 } }), /conflict/i);
     assert.equal(readFileSync(f.path, "utf8"), after.source);
   } finally { f.cleanup(); }

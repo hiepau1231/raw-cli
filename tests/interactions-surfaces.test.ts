@@ -39,6 +39,7 @@ import { randomUUID } from "node:crypto";
 import { createAcpClient } from "../src/acp/client.js";
 import { dashboardFixture } from "./fixtures/dashboard.js";
 import { openAiDone, openAiFrame } from "./fixtures/mock-provider.js";
+import { posixOnly } from "./fixtures/platform.js";
 const askCall = { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "ask", type: "function", function: {
   name: "ask_user", arguments: JSON.stringify({ question: "Your answer" }),
 } }] }, "tool_calls"), openAiDone] };
@@ -104,7 +105,7 @@ test("selected Ask works on dashboard while its operation remains busy", async (
   } finally { await fixture.close(); }
 });
 
-for (const mode of ["answered", "cancelled", "headless"] as const) test(`CLI selected Ask ${mode} through the real input surface`, async () => {
+for (const mode of ["answered", "cancelled", "headless"] as const) test(`CLI selected Ask ${mode} through the real input surface`, { skip: mode !== "headless" && posixOnly("pty") }, async () => {
   const fixture = await dashboardFixture({ agent: { tools: { use: ["builtin/ask_user"] } }, responses: [askCall, done] });
   const args = ["--import", import.meta.resolve("tsx"), join(process.cwd(), "bin/raw.ts"), "--config", fixture.configPath, "-y", "ask me"];
   const child = mode === "headless" ? spawn(process.execPath, args, { cwd: fixture.root, env: fixture.env }) :

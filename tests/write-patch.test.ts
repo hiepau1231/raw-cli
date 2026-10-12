@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { applyFilePatch, applyStagedFilePatch, describePatchEffects, parseFilePatch, stageFilePatch, validateFilePatchSyntax } from "../src/tools/file-patch.js";
 import type { ToolResult } from "../src/tools/types.js";
+import { posixOnly } from "./fixtures/platform.js";
 
 const patch = (body: string) => `*** Begin Patch\n${body}\n*** End Patch`;
 const cwd = async () => realpath(await mkdtemp(join(tmpdir(), "raw-patch-")));
@@ -59,7 +60,7 @@ test("preserves BOM mixed separators permissions and final newline state", async
   await chmod(join(root, "a"), 0o751);
   assert.equal((await run(root, "*** Update File: a\n@@\n one\n-two\n+new\n+extra\n last\n*** End of File")).isError, false);
   assert.equal(await readFile(join(root, "a"), "utf8"), "\uFEFFone\r\nnew\r\nextra\r\nlast");
-  assert.equal((await stat(join(root, "a"))).mode & 0o777, 0o751);
+  if (!posixOnly("modes")) assert.equal((await stat(join(root, "a"))).mode & 0o777, 0o751);
   assert.equal((await run(root, "*** Add File: no-eol\n+x\n*** No newline at end of file\n*** Add File: empty")).isError, false);
   assert.equal(await readFile(join(root, "no-eol"), "utf8"), "x");
   assert.equal((await readFile(join(root, "empty"))).length, 0);
