@@ -12,7 +12,7 @@ import type { DashboardContext } from "./server.js";
 import type { LiveOutput } from "./live-output.js";
 import type { SessionSnapshot } from "./sessions.js";
 import type { SessionOperation } from "../sessions/operations.js";
-import type { HistoryView } from "../sessions/view.js";
+import type { HistoryView, QueuedInputView } from "../sessions/view.js";
 import type { VisibleToolCall, VisibleToolResult } from "../sessions/visible.js";
 import type { SessionMetrics } from "../sessions/metrics.js";
 import type { RunEvent } from "../agent.js";
@@ -34,6 +34,8 @@ export interface DashboardEventData {
   compaction: Extract<RunEvent, { type: "compact_start" | "compact_end" | "compact_error" | "compact_warning" }>;
   approval: Approval & { status: "pending" | "allowed" | "denied" | "expired" | "cancelled" };
   ownership: { ownership: "idle" | "here" | "elsewhere" };
+  /** The session's waiting messages, the full list (docs/dashboard-api.md). */
+  inputs: { items: QueuedInputView[] };
   host_error: { message: string };
   /** A committed or live panel state: the full document (at most 64 KiB), keyed by the full panel id (§13.1). */
   panel: { panel: string; owner: string; revision: number; closed: boolean; live: boolean; document: PanelDocument;
@@ -182,6 +184,12 @@ export class SessionStreams {
       return;
     }
     if (message.type === "host_error") { this.publish(sessionId, "host_error", { message: message.message }, operationId); return; }
+    if (message.type === "inputs") {
+      // A delivered message's history record goes out before the list that no longer has it.
+      this.syncHistory(sessionId);
+      this.publish(sessionId, "inputs", { items: message.items });
+      return;
+    }
     const event = message.event;
     if (event.type === "text_delta" || event.type === "reasoning_delta") {
       const kind = event.type === "text_delta" ? "assistant" : "reasoning";

@@ -86,6 +86,8 @@ export type RunEvent = (
   | { type: "run_end"; result: RunResult }
   /** The user message is in the conversation: the agent received it (docs/chat-design.md §5). */
   | { type: "input_committed" }
+  /** A message queued while this turn runs changed state at a delivery point (docs/sessions.md). */
+  | { type: "queued_input"; id: string; state: "delivering" | "delivered" | "blocked" | "queued" }
   | ({ type: "panel_update" } & PanelLiveEvent)
   | { type: "hook_event"; id: string; event: HookReceipt["event"]; outcome: HookReceipt["outcome"];
       durationMs: number; message?: string; code?: string }
@@ -141,6 +143,8 @@ export interface AgentOptions {
   processes?: ProcessSupervisor;
   whitelist?: readonly string[];
   compact?: Readonly<CompactSettings>;
+  /** Deliver the session's queued messages at each step boundary of a turn (dashboard operations; docs/sessions.md). */
+  deliverQueuedInputs?: boolean;
   persistence?: { store: SessionStore; sessionId: string; surface: HistorySurface; owner?: SessionOwner; ownership?: "agent" | "host"; operationId?: string };
 }
 
@@ -152,7 +156,7 @@ const MAX_OUTPUT_CONTINUATIONS = 8;
 const OUTPUT_LIMIT_NOTICE = "[Raw output limit notice] Your previous response was cut off at the output token limit. Continue exactly where it stopped, without repeating what you already wrote.";
 
 export class AgentSession {
-  private readonly options: Required<Pick<AgentOptions, "provider" | "registry" | "cwd" | "system" | "maxSteps" | "maxOutputBytes" | "requestTimeoutMs" | "autoApprove">> & Pick<AgentOptions, "approve" | "whitelist" | "compact" | "hooks" | "interactions" | "processes">;
+  private readonly options: Required<Pick<AgentOptions, "provider" | "registry" | "cwd" | "system" | "maxSteps" | "maxOutputBytes" | "requestTimeoutMs" | "autoApprove">> & Pick<AgentOptions, "approve" | "whitelist" | "compact" | "hooks" | "interactions" | "processes" | "deliverQueuedInputs">;
   private messages: ModelMessage[] = [];
   private currentState: AgentState = "idle";
   private controller: AbortController | undefined;
@@ -228,6 +232,7 @@ export class AgentSession {
       ...(options.interactions ? { interactions: options.interactions } : {}),
       ...(options.whitelist !== undefined ? { whitelist: [...options.whitelist] } : {}),
       ...(options.compact !== undefined ? { compact: { ...options.compact } } : {}),
+      ...(options.deliverQueuedInputs ? { deliverQueuedInputs: true } : {}),
     };
     this.schemaView = Object.freeze(this.options.registry.definitions(this.options.whitelist));
     this.options.hooks?.validateTools(this.options.registry, this.schemaView.map(tool => tool.name));
@@ -383,11 +388,13 @@ export class AgentSession {
   }
 
   private commitMessage(message: ModelMessage, metadata: AgentMetadata = {}, display: readonly VisibleRecord[] = [], consumeOperation = false,
-    panels?: PanelWrites, consumeNotes?: readonly number[]): void {
+    panels?: PanelWrites, consumeNotes?: readonly number[], consumeQueued?: string): void {
     const anchor = message.role === "assistant" ? this.anchorFor(message) : undefined;
+    const operationId = this.persistence?.operationId;
     this.durable((store, sessionId, owner) => store.appendAgentMessage(sessionId, owner, message, anchor ? { ...metadata, anchor } : metadata,
       display.map((item) => ({ ...item, payload: this.visiblePayload(item.payload) })),
-      consumeOperation ? this.persistence?.operationId : undefined, panels, consumeNotes));
+      consumeOperation ? operationId : undefined, panels, consumeNotes,
+      consumeQueued === undefined ? undefined : { id: consumeQueued, ...(operationId ? { operationId } : {}) }));
     this.messages.push(structuredClone(message));
     if (anchor) { this.anchor = anchor; this.reported = undefined; }
   }
@@ -1176,6 +1183,39 @@ export class AgentSession {
     const hookRequest = () => ({ cwd: this.options.cwd, agent_id: this.options.provider.modelConfig.agentName,
       ...(this.persistence ? { session_id: this.persistence.sessionId } : {}),
       ...(this.currentTurnId ? { turn_id: this.currentTurnId } : {}) });
+    // Messages the user queued while this turn runs join it at a step boundary, oldest first, each its own user message
+    // through UserPromptSubmit (docs/sessions.md). Called only where the next thing is a model request.
+    const deliverQueued = async (): Promise<void> => {
+      if (!this.options.deliverQueuedInputs || !this.persistence?.operationId) return;
+      for (;;) {
+        if (controller.signal.aborted) return;
+        const queued = this.durable((store, sessionId, owner) => store.claimQueuedInput(sessionId, owner));
+        if (!queued) return;
+        emit({ type: "queued_input", id: queued.id, state: "delivering" });
+        const hook = await this.options.hooks?.run("UserPromptSubmit", { ...hookRequest(), input: queued.input },
+          { signal: controller.signal, onReceipt: (receipt) => this.hookReceipt(receipt, emit) });
+        if (controller.signal.aborted) {
+          // Not delivered: back in the queue, where ending the turn pauses it.
+          this.durable((store, sessionId, owner) => store.releaseQueuedInput(sessionId, owner, queued.id, "queued"));
+          emit({ type: "queued_input", id: queued.id, state: "queued" });
+          return;
+        }
+        if (hook?.blocked) {
+          this.durable((store, sessionId, owner) => store.releaseQueuedInput(sessionId, owner, queued.id, "blocked",
+            hook.reason ?? (hook.blocked === "denied" ? "A hook refused this message" : "A hook failed")));
+          emit({ type: "queued_input", id: queued.id, state: "blocked" });
+          continue;
+        }
+        const notes = this.persistence.store.pendingNotes(this.persistence.sessionId);
+        const noteText = notes.map((note) => note.text).join("\n");
+        const modelInput: UserInput = !notes.length ? queued.input
+          : typeof queued.input === "string" ? `${noteText}\n\n${queued.input}` : [{ type: "text", text: noteText }, ...queued.input];
+        this.commitMessage({ role: "user", content: structuredClone(modelInput) }, {},
+          [{ kind: "user", payload: { input: structuredClone(queued.input), queued: true } }], false, undefined,
+          notes.map((note) => note.sequence), queued.id);
+        emit({ type: "queued_input", id: queued.id, state: "delivered" });
+      }
+    };
     const finish = async (result: RunResult): Promise<RunResult> => {
       if (!ended) {
         ended = true;
@@ -1284,6 +1324,7 @@ export class AgentSession {
       if (firstTask) this.originalTask = structuredClone(input);
       // A chat still carrying a placeholder title is named from its first message, even when that turn predates this fix.
       this.durable((store, sessionId, owner) => store.setTitleFromPrompt(sessionId, owner, renderUserInput(input)));
+      await deliverQueued();
       while (steps < this.options.maxSteps) {
         if (controller.signal.aborted) return finish(interrupted());
         let requestEstimate = 0;
@@ -1437,6 +1478,7 @@ export class AgentSession {
           if (turn.truncated && continuations < MAX_OUTPUT_CONTINUATIONS && steps < this.options.maxSteps) {
             continuations++;
             this.commitMessage({ role: "user", content: OUTPUT_LIMIT_NOTICE });
+            await deliverQueued();
             continue;
           }
           return finish({ status: "completed", steps, text: continuedText });
@@ -1498,6 +1540,7 @@ export class AgentSession {
             return finish(interrupted());
           }
         }
+        await deliverQueued();
       }
       return finish({ status: "max_steps", steps, code: "max_steps" });
     } catch (error) {

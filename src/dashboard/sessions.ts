@@ -18,8 +18,8 @@ import { loadSelectedSkills } from "../skills/loader.js";
 import type { UserBlock } from "../llm/types.js";
 import { readManagedConfig } from "../management/config.js";
 import { SessionOperations, type AttachSessionRuntime, type SessionOperation } from "../sessions/operations.js";
-import { terminalOperationStates, type OperationIntent } from "../sessions/operation-types.js";
-import { projectHistoryItem, userAttachmentBlocks, type HistoryView } from "../sessions/view.js";
+import { SessionOperationError, terminalOperationStates, type OperationIntent } from "../sessions/operation-types.js";
+import { projectHistoryItem, userAttachmentBlocks, type HistoryView, type QueuedInputView } from "../sessions/view.js";
 import type { Page, SessionSummary } from "../sessions/store.js";
 import type { SessionMetrics } from "../sessions/metrics.js";
 import { Approvals, type Approval } from "./approvals.js";
@@ -39,6 +39,8 @@ export interface SessionSnapshot {
   context: { summary?: string; messageCount: number }; live: LiveSegment[]; approvals: Approval[];
   /** The session's saved agent and its committed panels; authoritative for the dashboard's panel state (§13.1). */
   agent: string | null; panels: PanelStackItem[]; commands?: CommandRecord[]; commandsOmitted?: number; interactions?: InteractionRequest[];
+  /** Messages waiting for the agent, oldest first (docs/dashboard-api.md). */
+  inputs: QueuedInputView[];
 }
 export function workspacePath(value: unknown, base: string): string {
   const input = textField(value, "cwd", 4096);
@@ -135,6 +137,47 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
     // A waiting sidebar form is durable even before the ordinary tool-result transaction.
     return { ...item, interaction, ...(interaction.state === "pending" ? { document: interaction.document } : {}) };
   });
+  /**
+   * A turn's request override, file references and staged attachments, as blocks, shared by `POST /operations` and
+   * `POST /inputs`. `replayed` runs after each await: a duplicate accepted meanwhile returns its receipt instead, so the
+   * staged items are consumed once.
+   */
+  const prepareTurn = async <T>(sessionId: string, intent: OperationIntent, body: Record<string, unknown>, ids: string[], files: string[],
+    replayed: () => T | undefined): Promise<{ replay: T } | { blocks?: UserBlock[]; override?: RequestOverride }> => {
+    let override: RequestOverride | undefined;
+    if (body.request !== undefined) {
+      try { override = parseRequestOverride(body.request, await agentControls(intent.agentName)); }
+      catch (error) { if (error instanceof RequestOverrideError) throw new DashboardError(422, "invalid_request_option", error.message); throw error; }
+      if (override.effort === undefined && override.serviceTier === undefined) override = undefined;
+      const replay = replayed(); if (replay !== undefined) return { replay };
+    }
+    if (!ids.length && !files.length) return override ? { override } : {};
+    const staged = staging.resolve(sessionId, ids); const session = requireSession(sessionId);
+    const links: UserBlock[] = [];
+    for (const file of files) links.push(await workspaceFileLink(session.cwd, file));
+    const blocks: UserBlock[] = [{ type: "text", text: intent.input! }, ...links, ...staged.map((item) => staging.kinds.list().find((kind) => kind.id === item.kind)!.toBlock(item))];
+    // No await separates this check from the caller's submit, so a concurrent duplicate cannot consume staged items.
+    const replay = replayed(); if (replay !== undefined) return { replay };
+    return { blocks, ...(override ? { override } : {}) };
+  };
+  /**
+   * Where a sent message went, by its request id: waiting (`queued`), delivered into a running turn (`delivered`), or a
+   * turn (`operation`, started directly or from the queue). With `intent`, a different body under the same id is a conflict.
+   */
+  const inputReceipt = (sessionId: string, clientRequestId: string, intent?: OperationIntent):
+    { operation: SessionOperation } | { queued: QueuedInputView } | { delivered: { operationId: string; historySequence: number } } | undefined => {
+    const row = store.findQueuedInput(sessionId, clientRequestId);
+    if (row) {
+      if (intent && store.requestHash(intent) !== row.requestHash) throw new SessionOperationError("conflict", "client request ID conflicts with an earlier submitted intent");
+      if (row.state === "deleted") throw new DashboardError(409, "deleted", "This message was deleted before it was sent");
+      if (row.state === "delivered") return { delivered: { operationId: row.operationId!, historySequence: row.historySequence! } };
+      if (row.state === "taken") return { operation: store.getOperation(row.operationId!)! };
+      return { queued: store.queuedInputView(sessionId, row.id)! };
+    }
+    if (!store.findOperation(sessionId, clientRequestId)) return undefined;
+    // `submit` returns the existing receipt, or answers `conflict` for a different body.
+    return { operation: intent ? operations.submit(intent) : store.findOperation(sessionId, clientRequestId)! };
+  };
   const snapshot = (id: string, loaded?: LoadedDeclarations): SessionSnapshot => {
     store.recoverInteractions();
     const session = requireSession(id); const historyWatermark = store.historyWatermark(id);
@@ -145,7 +188,7 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
       ownership: streams.ownership(id), operations: receipts, ...metrics(id), context: store.getContextSummary(id),
       live: output.list(new Set(receipts.filter((op) => !terminalOperationStates.has(op.state)).map((op) => op.id))), approvals: approvals.list(id),
       agent: session.agentName ?? null, commands: commands.items, ...(commands.omitted ? { commandsOmitted: commands.omitted } : {}), interactions: store.pendingInteractions(id),
-      panels: withInteractions(id, buildPanelStack(declarationsFor(session.agentName, loaded), store.listSessionPanels(id))) };
+      inputs: store.queuedInputs(id), panels: withInteractions(id, buildPanelStack(declarationsFor(session.agentName, loaded), store.listSessionPanels(id))) };
   };
   streams = new SessionStreams(context, output, snapshot, knownForSession);
   const unsubscribe = operations.subscribe((message) => streams.observe(message));
@@ -341,6 +384,38 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
       if (store.sessionIsBusy(id)) throw new DashboardError(409, "session_busy", "Wait for the active operation to finish");
       return reply({ operationId: operations.submit(intent).id }, 202);
     }
+    const inputRoute = /^\/api\/sessions\/([^/]+)\/inputs(?:\/([^/]+))?$/.exec(path);
+    if (inputRoute) {
+      const id = decodeURIComponent(inputRoute[1]!); requireSession(id);
+      if (inputRoute[2] === undefined && method === "GET") {
+        store.recoverOperations(); const key = url.searchParams.get("clientRequestId");
+        if (key === null) return reply({ items: store.queuedInputs(id) });
+        const found = inputReceipt(id, key); if (!found) throw new DashboardError(404, "not_found", "No receipt exists for this request");
+        return reply(found);
+      }
+      if (inputRoute[2] === undefined && method === "POST") {
+        const body = await context.readJson(request);
+        const clientRequestId = textField(body.clientRequestId, "clientRequestId", 128);
+        if (body.mode !== "queue") throw new DashboardError(400, "invalid_mode", "mode must be queue");
+        const intent: OperationIntent = { sessionId: id, clientRequestId, kind: "turn", agentName: textField(body.agent, "agent"),
+          configPath: context.configPath, input: textField(body.input, "input", 1024 * 1024) };
+        const ids = stringList(body.attachments, "attachments", 8); const files = stringList(body.files, "files", 20);
+        // A replayed request id resolves before staged attachments are read: they were consumed by the first request.
+        const prior = inputReceipt(id, clientRequestId, intent); if (prior) return reply(prior, 202);
+        const prepared = await prepareTurn(id, intent, body, ids, files, () => inputReceipt(id, clientRequestId, intent));
+        if ("replay" in prepared) return reply(prepared.replay, 202);
+        const sent = operations.enqueue(intent, { mode: "queue", ...(prepared.blocks ? { blocks: prepared.blocks } : {}),
+          ...(prepared.override ? { request: prepared.override } : {}) });
+        staging.release(ids);
+        return reply(sent, 202);
+      }
+      if (inputRoute[2] !== undefined && method === "DELETE") {
+        store.deleteQueuedInput(id, decodeURIComponent(inputRoute[2]));
+        operations.publishInputs(id);
+        response.writeHead(204, { "Cache-Control": "no-store" }); response.end();
+        return true;
+      }
+    }
     const sessionRoute = /^\/api\/sessions\/([^/]+)(?:\/(history|operations|metrics|events|output))?$/.exec(path);
     if (sessionRoute) {
       const id = decodeURIComponent(sessionRoute[1]!); const action = sessionRoute[2]; requireSession(id);
@@ -382,21 +457,9 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
           if (body.kind === "compact" && body.request !== undefined) throw new DashboardError(400, "invalid_input", "compact does not accept request overrides");
           // A replayed request id returns the existing receipt and never re-reads staged items or validates a new override.
           if (body.kind !== "turn" || store.findOperation(id, clientRequestId)) return reply(operations.submit(intent), 202);
-          let override: RequestOverride | undefined;
-          if (body.request !== undefined) {
-            try { override = parseRequestOverride(body.request, await agentControls(intent.agentName)); }
-            catch (error) { if (error instanceof RequestOverrideError) throw new DashboardError(422, "invalid_request_option", error.message); throw error; }
-            if (override.effort === undefined && override.serviceTier === undefined) override = undefined;
-            if (store.findOperation(id, clientRequestId)) return reply(operations.submit(intent), 202);
-          }
-          if (!ids.length && !files.length) return reply(operations.submit(intent, undefined, override), 202);
-          const staged = staging.resolve(id, ids); const session = requireSession(id);
-          const links: UserBlock[] = [];
-          for (const file of files) links.push(await workspaceFileLink(session.cwd, file));
-          const blocks: UserBlock[] = [{ type: "text", text: intent.input! }, ...links, ...staged.map((item) => staging.kinds.list().find((kind) => kind.id === item.kind)!.toBlock(item))];
-          // No await separates this check from submit, so a concurrent duplicate cannot consume staged items.
-          if (store.findOperation(id, clientRequestId)) return reply(operations.submit(intent), 202);
-          const accepted = operations.submit(intent, blocks, override); staging.release(ids);
+          const prepared = await prepareTurn(id, intent, body, ids, files, () => store.findOperation(id, clientRequestId) ? operations.submit(intent) : undefined);
+          if ("replay" in prepared) return reply(prepared.replay, 202);
+          const accepted = operations.submit(intent, prepared.blocks, prepared.override); staging.release(ids);
           return reply(accepted, 202);
         }
       }

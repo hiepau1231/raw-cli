@@ -189,6 +189,30 @@ export function initializeSessionSchema(database: DatabaseSync): void {
       created_at INTEGER NOT NULL,
       PRIMARY KEY (session_id, sequence)
     )`);
+    // Messages sent while a turn runs (docs/sessions.md). Final rows keep only the receipt (id, request id, state, where
+    // the message went), so a replay resolves for the session's lifetime. Created like session_pending_notes: no version bump.
+    database.exec(`CREATE TABLE IF NOT EXISTS session_queued_inputs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL,
+      client_request_id TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      state TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      agent_name TEXT NOT NULL,
+      config_path TEXT NOT NULL,
+      input_text TEXT,
+      blocks_json TEXT,
+      attachments_json TEXT,
+      request_json TEXT,
+      reason TEXT,
+      operation_id TEXT,
+      history_sequence INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(session_id, client_request_id)
+    ); CREATE INDEX IF NOT EXISTS session_queued_inputs_open ON session_queued_inputs(session_id, state, sequence);
+    CREATE INDEX IF NOT EXISTS session_queued_inputs_waiting ON session_queued_inputs(session_id) WHERE state IN ('queued', 'delivering')`);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");

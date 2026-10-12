@@ -68,6 +68,8 @@ export function reduceEvent(
   switch (event.type) {
     case "commands":
       return { ...state, commands: event.data.items, commandsOmitted: event.data.omitted ?? 0 };
+    case "inputs":
+      return { ...state, inputs: event.data.items };
     case "history": {
       const ids = new Set(event.data.items.map((item) => item.id));
       const tools = { ...state.tools };

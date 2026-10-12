@@ -3,7 +3,10 @@ import test from "node:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { dashboardFixture } from "./fixtures/dashboard.js";
+import { dashboardFixture, eventStream } from "./fixtures/dashboard.js";
+import { makePng } from "./fixtures/images.js";
+import { startDashboard } from "../src/dashboard/server.js";
+import type { HistoryView, QueuedInputView } from "../src/sessions/view.js";
 import { openAiFrame, openAiDone } from "./fixtures/mock-provider.js";
 import type { SessionSummary } from "../src/sessions/store.js";
 import type { SessionOperation } from "../src/sessions/operations.js";
@@ -222,4 +225,154 @@ test("an expired dead writer does not permanently block deleting an idle session
     assert.equal((await f.api(`/sessions/${session.id}`)).status, 404);
     assert.equal(f.provider.requests.length, 0);
   } finally { await f.close(); }
+});
+
+async function until(check: () => boolean | Promise<boolean>, what: string): Promise<void> {
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+type InputReply = { operation?: SessionOperation; queued?: QueuedInputView; delivered?: { operationId: string; historySequence: number } };
+
+test("POST /inputs starts a turn when idle, queues while it runs and resolves every replay", async () => {
+  let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
+  const f = await dashboardFixture({ agent: { tools: { use: ["builtin/bash"] } }, responses: [
+    { gate: held, frames: [openAiFrame({ tool_calls: [{ index: 0, id: "effect", type: "function", function: { name: "bash",
+      arguments: JSON.stringify({ command: "printf x" }) } }] }, "tool_calls"), openAiDone] },
+    { frames: [openAiFrame({ content: "done" }, "stop"), openAiDone] },
+  ] });
+  try {
+    const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root, agent: "raw" });
+    const inputs = `/sessions/${session.id}/inputs`;
+    const stream = await eventStream(f.server, session.id);
+    try {
+      assert.equal((await stream.next()).type, "snapshot");
+      const started = await f.json<InputReply>(inputs, "POST", { clientRequestId: "first", agent: "raw", input: "start", mode: "queue" });
+      assert.ok(started.operation && !started.queued);
+      await until(() => f.provider.requests.length === 1, "the first request");
+      const uploaded = await fetch(`${f.server.url}/api/sessions/${session.id}/attachments`, { method: "POST", body: new Uint8Array(makePng()),
+        headers: { Authorization: `Bearer ${f.server.token}`, "Content-Type": "image/png", "X-Raw-Filename": "shot.png" } });
+      const { id: staged } = await uploaded.json() as { id: string };
+      const body = { clientRequestId: "later", agent: "raw", input: "queued text", attachments: [staged], mode: "queue" };
+      const queued = await f.json<InputReply>(inputs, "POST", body);
+      assert.equal(queued.queued?.state, "queued"); assert.deepEqual(queued.queued?.attachments?.map((item) => item.name), ["shot.png"]);
+      for (;;) {
+        const event = await stream.next();
+        if (event.type !== "inputs") continue;
+        assert.deepEqual((event.data.items as QueuedInputView[]).map((item) => [item.clientRequestId, item.state]), [["later", "queued"]]);
+        break;
+      }
+      // The staged image now belongs to the queued message; a replay never reads staging again.
+      assert.equal((await f.json<InputReply>(inputs, "POST", body)).queued?.id, queued.queued!.id);
+      assert.equal((await f.api(inputs, "POST", { ...body, input: "different" })).status, 409);
+      release();
+      assert.equal((await f.wait(started.operation!.id)).state, "completed");
+      const messages = (f.provider.requests[1]!.body as { messages: Array<{ role: string; content: unknown }> }).messages;
+      assert.deepEqual(messages.slice(-2).map((message) => message.role), ["tool", "user"]);
+      assert.match(JSON.stringify(messages.at(-1)!.content), /queued text/);
+      const delivered = await f.json<InputReply>(inputs, "POST", body);
+      assert.equal(delivered.delivered?.operationId, started.operation!.id);
+      const history = await f.json<{ items: HistoryView[] }>(`/sessions/${session.id}/history`);
+      const record = history.items.find((item) => item.kind === "user" && item.text === "queued text")!;
+      assert.equal(delivered.delivered?.historySequence, record.sequence); assert.equal(record.queued, true);
+      assert.deepEqual(await f.json(`${inputs}?clientRequestId=later`), delivered);
+      assert.equal((await f.json<InputReply>(`${inputs}?clientRequestId=first`)).operation?.id, started.operation!.id);
+      assert.equal((await f.api(`${inputs}?clientRequestId=unknown`)).status, 404);
+      const refused = await f.api(`${inputs}/${queued.queued!.id}`, "DELETE");
+      assert.equal(refused.status, 409); assert.equal((await refused.json() as { error: { code: string } }).error.code, "already_sent");
+      assert.deepEqual((await f.json<SessionSnapshot>(`/sessions/${session.id}`)).inputs, []);
+      assert.equal(f.provider.requests.length, 2);
+    } finally { stream.close(); }
+  } finally { await f.close(); }
+});
+
+test("leftover messages start the next turn; after Stop they wait, paused, and can be deleted", async () => {
+  let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
+  const f = await dashboardFixture({ responses: [
+    { gate: held, frames: [openAiFrame({ content: "first answer" }, "stop"), openAiDone] },
+    { frames: [openAiFrame({ content: "second answer" }, "stop"), openAiDone] },
+    { hold: true },
+  ] });
+  try {
+    const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root, agent: "raw" });
+    const inputs = `/sessions/${session.id}/inputs`;
+    const send = (key: string, input: string) => f.json<InputReply>(inputs, "POST", { clientRequestId: key, agent: "raw", input, mode: "queue" });
+    const first = await send("a", "first");
+    await until(() => f.provider.requests.length === 1, "the first request");
+    assert.ok((await send("b", "second")).queued);
+    release();
+    assert.equal((await f.wait(first.operation!.id)).state, "completed");
+    let next: SessionOperation | undefined;
+    await until(async () => { const response = await f.api(`/sessions/${session.id}/operations?clientRequestId=b`);
+      if (response.ok) next = await response.json() as SessionOperation; return !!next; }, "the next turn");
+    assert.equal((await f.wait(next!.id)).state, "completed");
+    const messages = (f.provider.requests[1]!.body as { messages: Array<{ role: string; content: unknown }> }).messages;
+    assert.deepEqual([messages.at(-1)?.role, messages.at(-1)?.content], ["user", "second"]);
+    assert.equal((await send("b", "second")).operation?.id, next!.id);
+    const third = await send("c", "third");
+    await until(() => f.provider.requests.length === 3, "the third request");
+    const waiting = await send("d", "fourth");
+    await f.json(`/operations/${third.operation!.id}/cancel`, "POST");
+    assert.equal((await f.wait(third.operation!.id)).state, "cancelled");
+    assert.deepEqual((await f.json<SessionSnapshot>(`/sessions/${session.id}`)).inputs.map((item) => [item.clientRequestId, item.state]), [["d", "paused"]]);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(f.provider.requests.length, 3);
+    assert.equal((await f.api(`/sessions/${session.id}/operations?clientRequestId=d`)).status, 404);
+    assert.equal((await f.api(`${inputs}/${waiting.queued!.id}`, "DELETE")).status, 204);
+    assert.deepEqual((await f.json<SessionSnapshot>(`/sessions/${session.id}`)).inputs, []);
+    assert.equal((await f.api(`${inputs}/unknown`, "DELETE")).status, 404);
+  } finally { await f.close(); }
+});
+
+test("a session queues at most 20 messages, and a session owned elsewhere queues none", async () => {
+  const f = await dashboardFixture({ responses: [{ hold: true }] });
+  try {
+    const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root, agent: "raw" });
+    const send = (key: string) => f.api(`/sessions/${session.id}/inputs`, "POST", { clientRequestId: key, agent: "raw", input: key, mode: "queue" });
+    const running = await (await send("run")).json() as InputReply;
+    await until(() => f.provider.requests.length === 1, "the request");
+    for (let index = 0; index < 20; index++) assert.equal((await send(`q${index}`)).status, 202);
+    const full = await send("q20");
+    assert.equal(full.status, 409); assert.equal((await full.json() as { error: { code: string } }).error.code, "queue_full");
+    await f.json(`/operations/${running.operation!.id}/cancel`, "POST"); await f.wait(running.operation!.id);
+    const owner = f.server.context.store!.claimSession(session.id);
+    try {
+      const busy = await send("elsewhere");
+      assert.equal(busy.status, 409); assert.equal((await busy.json() as { error: { code: string } }).error.code, "busy");
+    } finally { f.server.context.store!.releaseSession(session.id, owner); }
+  } finally { await f.close(); }
+});
+
+test("after a restart, 201 delivered messages still resolve their replays and waiting ones are listed paused", async () => {
+  const f = await dashboardFixture();
+  let restarted: Awaited<ReturnType<typeof startDashboard>> | undefined;
+  try {
+    const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root, agent: "raw" });
+    const store = f.server.context.store!; const owner = store.claimSession(session.id);
+    const intent = (key: string) => ({ sessionId: session.id, clientRequestId: key, kind: "turn" as const, agentName: "raw",
+      configPath: f.configPath, input: `message ${key}`, mode: "queue" as const });
+    for (let index = 0; index < 201; index++) {
+      store.enqueueInput(session.id, owner, intent(`m${index}`));
+      const claimed = store.claimQueuedInput(session.id, owner)!;
+      store.appendAgentMessage(session.id, owner, { role: "user", content: claimed.input }, {},
+        [{ kind: "user", payload: { input: claimed.input, queued: true } }], undefined, undefined, undefined, { id: claimed.id, operationId: "op" });
+    }
+    store.enqueueInput(session.id, owner, intent("open"));
+    store.releaseSession(session.id, owner);
+    await f.server.close();
+    restarted = await startDashboard({ port: 0, cwd: f.root, configPath: f.configPath, env: f.env });
+    const api = (path: string, method = "GET", body?: unknown) => fetch(`${restarted!.url}/api${path}`, { method,
+      headers: { Authorization: `Bearer ${restarted!.token}`, ...(body ? { "Content-Type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const replay = await api(`/sessions/${session.id}/inputs`, "POST", { clientRequestId: "m0", agent: "raw", input: "message m0", attachments: ["consumed"], mode: "queue" });
+    assert.equal(replay.status, 202);
+    assert.deepEqual(await replay.json(), { delivered: { operationId: "op", historySequence: 1 } });
+    const snapshot = await (await api(`/sessions/${session.id}`)).json() as SessionSnapshot;
+    assert.deepEqual(snapshot.inputs.map((item) => [item.clientRequestId, item.state]), [["open", "paused"]]);
+    const waiting = await api(`/sessions/${session.id}/inputs`, "POST", { clientRequestId: "open", agent: "raw", input: "message open", attachments: ["consumed"], mode: "queue" });
+    assert.equal(((await waiting.json()) as InputReply).queued?.state, "paused");
+    assert.equal(f.provider.requests.length, 0);
+    assert.equal(restarted.context.store!.historyWatermark(session.id), 201);
+  } finally { await restarted?.close(); await f.close(); }
 });

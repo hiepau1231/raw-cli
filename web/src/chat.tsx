@@ -345,10 +345,11 @@ export function Chat({
   }, []);
   const checkReceipt = async (key: string) => {
     try {
-      const op = await api<SessionOperation>(
-        `/sessions/${id}/operations?clientRequestId=${encodeURIComponent(key)}`,
+      // Resolves a message wherever it went: a turn, a queued message, or one delivered into a running turn.
+      const found = await api<{ operation?: SessionOperation }>(
+        `/sessions/${id}/inputs?clientRequestId=${encodeURIComponent(key)}`,
       );
-      receipt(op);
+      if (found.operation) receipt(found.operation);
       setOutgoing((old) => (old?.clientRequestId === key ? { ...old, status: "sent" } : old));
       setUnconfirmed(undefined);
       setError("");

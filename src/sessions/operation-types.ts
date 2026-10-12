@@ -26,7 +26,8 @@ export interface SessionOperation extends OperationIntent {
 }
 export const terminalOperationStates: ReadonlySet<OperationState> = new Set(["completed", "max_steps", "cancelled", "error", "interrupted"]);
 export class SessionOperationError extends Error {
-  constructor(readonly code: "conflict" | "busy" | "not_found" | "invalid_input" | "closed" | "agent_mismatch", message: string) {
+  constructor(readonly code: "conflict" | "busy" | "not_found" | "invalid_input" | "closed" | "agent_mismatch"
+    | "queue_full" | "already_sent" | "deleted", message: string) {
     super(message); this.name = "SessionOperationError";
   }
 }

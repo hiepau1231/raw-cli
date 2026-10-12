@@ -34,7 +34,7 @@ export const attachSessionRuntime: AttachSessionRuntime = async (options) => {
     const agent = createAgent({ ...runtimeAgentOptions(runtime, tools, provider, session.cwd),
       ...(options.approve ? { approve: options.approve } : {}),
       ...(options.processes ? { processes: options.processes } : {}),
-      ...(options.interactions ? { interactions: options.interactions } : {}),
+      ...(options.interactions ? { interactions: options.interactions } : {}), deliverQueuedInputs: true,
       persistence: { store, sessionId: session.id, surface: "web", owner, ownership: "host", operationId: operation.id } });
     await agent.start(agent.transcript.length ? "resume" : "create", undefined, signal);
     return { agent, modelConfig, compact: runtime.compact, compactOptions,

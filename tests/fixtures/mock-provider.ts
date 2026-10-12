@@ -2,7 +2,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 
 export interface CapturedRequest { url: string; headers: IncomingMessage["headers"]; body: unknown }
 export interface MockResponse { status?: number; frames?: string[]; body?: unknown; hold?: boolean; keepOpen?: boolean;
-  headers?: Record<string, string>; frameDelayMs?: number }
+  headers?: Record<string, string>; frameDelayMs?: number;
+  /** The response is written once this settles, so a test can act while the request is in flight. */
+  gate?: Promise<unknown> }
 
 export async function startMockProvider(responses: MockResponse[]) {
   const requests: CapturedRequest[] = [];
@@ -16,6 +18,7 @@ export async function startMockProvider(responses: MockResponse[]) {
     requests.push({ url: req.url ?? "", headers: req.headers, body });
     const response = responses[requests.length - 1] ?? { status: 500, body: { error: "unexpected request" } };
     if (response.hold) return;
+    if (response.gate) await response.gate;
     if (response.frames) {
       res.writeHead(response.status ?? 200, { "content-type": "text/event-stream", ...response.headers });
       for (const frame of response.frames) {

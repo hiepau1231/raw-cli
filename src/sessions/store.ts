@@ -21,6 +21,8 @@ import { validateStoredAgentState } from "./restore.js";
 import { locateSessionStore } from "./location.js";
 import { SessionOperationError, terminalOperationStates, type OperationIntent, type OperationState, type SessionOperation } from "./operation-types.js";
 import type { SessionMetrics } from "./metrics.js";
+import type { RequestOverride } from "../request-controls.js";
+import { userAttachments, type HistoryAttachment, type QueuedInputView } from "./view.js";
 
 export interface SessionStoreOptions {
   env?: NodeJS.ProcessEnv;
@@ -82,6 +84,16 @@ function workspaceActivityRow(row: Record<string, unknown>): WorkspaceActivity {
 }
 
 export interface SessionOwner { token: string; generation: number }
+/** At most this many messages wait in one session's queue (open rows: queued, delivering, paused, blocked). */
+export const MAX_QUEUED_INPUTS = 20;
+/** A turn intent sent while another turn runs, with its process-built blocks and request override. */
+export type QueuedIntent = OperationIntent & { blocks?: UserInput; request?: RequestOverride; mode: "queue" | "interrupt" };
+/** Where a queued message is now; final states keep only this receipt. */
+export interface QueuedInputReceipt {
+  id: string; clientRequestId: string; requestHash: string;
+  state: QueuedInputView["state"] | "delivered" | "taken" | "deleted";
+  operationId?: string; historySequence?: number;
+}
 export interface AgentIdentity {
   cwd: string;
   configPath?: string;
@@ -294,7 +306,8 @@ export class SessionStore {
       && (Number(row.lease_until) > this.now() || this.ownerAlive(String(row.owner_token)));
   }
 
-  acceptOperation(intent: OperationIntent): { operation: SessionOperation; owner?: SessionOwner } {
+  /** Validates an intent; its normalized form's hash identifies the request when it is replayed. */
+  private normalizeIntent(intent: OperationIntent): { normalized: OperationIntent; requestHash: string } {
     if (![intent.sessionId, intent.clientRequestId, intent.agentName, intent.configPath].every((value) => typeof value === "string" && value.trim())
       || intent.clientRequestId.length > 128 || !["turn", "compact", "panel_action"].includes(intent.kind)
       || (intent.kind === "turn" ? typeof intent.input !== "string" || !intent.input.trim() : intent.input !== undefined)
@@ -308,7 +321,13 @@ export class SessionStore {
       ...(intent.action === undefined ? {} : { action: { panel: intent.action.panel, action: intent.action.action,
         ...(intent.action.viewInstanceId === undefined ? {} : { viewInstanceId: intent.action.viewInstanceId }),
         ...(intent.action.block === undefined ? {} : { block: intent.action.block }), ...(intent.action.item === undefined ? {} : { item: intent.action.item }) } }) };
-    const requestHash = digest(JSON.stringify(normalized));
+    return { normalized, requestHash: digest(JSON.stringify(normalized)) };
+  }
+
+  requestHash(intent: OperationIntent): string { return this.normalizeIntent(intent).requestHash; }
+
+  acceptOperation(intent: OperationIntent): { operation: SessionOperation; owner?: SessionOwner } {
+    const { normalized, requestHash } = this.normalizeIntent(intent);
     return this.transaction(() => {
       const existing = this.database.prepare("SELECT * FROM session_operations WHERE session_id = ? AND client_request_id = ?")
         .get(intent.sessionId, intent.clientRequestId);
@@ -384,24 +403,69 @@ export class SessionStore {
     return rows.map((row) => this.operationRow(row));
   }
 
+  /**
+   * Moves an operation to `state`, fenced by its owner. An operation that ends this way pauses the session's waiting
+   * messages, with `pauseReason` when given: only a hand-off (`handOff`) starts the next turn from the queue.
+   */
   updateOperation(id: string, owner: SessionOwner, state: OperationState,
-    details: Pick<SessionOperation, "result" | "error" | "metrics"> = {}): SessionOperation {
+    details: Pick<SessionOperation, "result" | "error" | "metrics"> = {}, pauseReason?: string): SessionOperation {
     return this.transaction(() => {
-      const operation = this.getOperation(id);
-      if (!operation) throw new SessionOperationError("not_found", "operation not found");
-      this.ownerRow(operation.sessionId, owner);
-      if (operation.ownerGeneration !== owner.generation) throw new Error("operation ownership lost");
-      if (terminalOperationStates.has(operation.state)) throw new Error("operation already ended");
-      const allowed: Partial<Record<OperationState, readonly OperationState[]>> = {
-        accepted: ["starting", "cancelled", "error"], starting: ["running", "compacting", "cancelled", "error"],
-        running: ["completed", "max_steps", "cancelled", "error"], compacting: ["completed", "cancelled", "error"],
-      };
-      if (!allowed[operation.state]?.includes(state)) throw new Error(`invalid operation transition: ${operation.state} -> ${state}`);
-      const next = { ...operation, ...details, state, updatedAt: this.now() };
-      this.database.prepare("UPDATE session_operations SET state = ?, updated_at = ?, payload_json = ? WHERE id = ?")
-        .run(state, next.updatedAt, JSON.stringify(next), id);
+      const next = this.writeOperationState(id, owner, state, details);
+      if (terminalOperationStates.has(state)) this.pauseOpenInputs(next.sessionId, pauseReason);
       return next;
     });
+  }
+
+  private writeOperationState(id: string, owner: SessionOwner, state: OperationState,
+    details: Pick<SessionOperation, "result" | "error" | "metrics">): SessionOperation {
+    const operation = this.getOperation(id);
+    if (!operation) throw new SessionOperationError("not_found", "operation not found");
+    this.ownerRow(operation.sessionId, owner);
+    if (operation.ownerGeneration !== owner.generation) throw new Error("operation ownership lost");
+    if (terminalOperationStates.has(operation.state)) throw new Error("operation already ended");
+    const allowed: Partial<Record<OperationState, readonly OperationState[]>> = {
+      accepted: ["starting", "cancelled", "error"], starting: ["running", "compacting", "cancelled", "error"],
+      running: ["completed", "max_steps", "cancelled", "error"], compacting: ["completed", "cancelled", "error"],
+    };
+    if (!allowed[operation.state]?.includes(state)) throw new Error(`invalid operation transition: ${operation.state} -> ${state}`);
+    const next = { ...operation, ...details, state, updatedAt: this.now() };
+    this.database.prepare("UPDATE session_operations SET state = ?, updated_at = ?, payload_json = ? WHERE id = ?")
+      .run(state, next.updatedAt, JSON.stringify(next), id);
+    return next;
+  }
+
+  /**
+   * Ends `previous` and starts the queued message `inputId` as the next turn in one transaction. The lease moves to a new
+   * owner generation of this process without being released, so no other process can claim the session in between.
+   */
+  handOff(previous: { id: string; owner: SessionOwner; state: OperationState; details?: Pick<SessionOperation, "result" | "error" | "metrics"> },
+    inputId: string): { previous: SessionOperation; operation: SessionOperation; owner: SessionOwner; input: UserInput; request?: RequestOverride } {
+    const handed = this.transaction(() => {
+      const ended = this.writeOperationState(previous.id, previous.owner, previous.state, previous.details ?? {});
+      const row = this.database.prepare("SELECT * FROM session_queued_inputs WHERE id = ? AND session_id = ? AND state = 'queued'")
+        .get(inputId, ended.sessionId);
+      if (!row) throw new Error("the queued message is no longer waiting");
+      const owner = { token: `${process.pid}-${randomUUID()}`, generation: previous.owner.generation + 1 };
+      const moved = this.database.prepare(`UPDATE sessions SET owner_token = ?, owner_generation = ?, lease_until = ?
+        WHERE id = ? AND owner_token = ? AND owner_generation = ?`)
+        .run(owner.token, owner.generation, this.now() + 15_000, ended.sessionId, previous.owner.token, previous.owner.generation);
+      if (moved.changes !== 1) throw new Error("session ownership lost");
+      const operation: SessionOperation = { sessionId: ended.sessionId, clientRequestId: String(row.client_request_id), kind: "turn",
+        agentName: String(row.agent_name), configPath: String(row.config_path), input: String(row.input_text),
+        id: randomUUID(), state: "accepted", ownerGeneration: owner.generation, acceptedAt: this.now(), updatedAt: this.now() };
+      this.database.prepare(`INSERT INTO session_operations(id, session_id, client_request_id, request_hash,
+        owner_generation, state, accepted_at, updated_at, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(operation.id, operation.sessionId, operation.clientRequestId, String(row.request_hash), owner.generation, operation.state,
+          operation.acceptedAt, operation.updatedAt, JSON.stringify(operation));
+      const input = this.queuedInput(row);
+      const request = row.request_json === null ? undefined : JSON.parse(String(row.request_json)) as RequestOverride;
+      const blocks = row.blocks_json !== null;
+      this.finalizeQueued(inputId, "taken", { operationId: operation.id });
+      return { previous: ended, operation, owner, input, ...(request ? { request } : {}), blocks };
+    });
+    if (handed.blocks) { try { this.reclaimUnreferencedPayloads(); } catch { /* Idle maintenance retries reclamation. */ } }
+    const { blocks: _blocks, ...result } = handed;
+    return result;
   }
 
   recoverOperations(): number {
@@ -416,8 +480,12 @@ export class SessionStore {
         if (owned) continue;
         this.database.prepare("UPDATE session_operations SET state = 'interrupted', updated_at = ? WHERE id = ?")
           .run(this.now(), String(row.id));
+        this.pauseOpenInputs(String(row.session_id));
         count++;
       }
+      // Messages wait only while their session is held; any left in a released session wait for the user.
+      this.database.prepare(`UPDATE session_queued_inputs SET state = 'paused', updated_at = ? WHERE state IN ('queued', 'delivering')
+        AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = session_queued_inputs.session_id AND s.owner_token IS NULL)`).run(this.now());
       return count;
     });
   }
@@ -1023,10 +1091,12 @@ export class SessionStore {
   }
 
   appendAgentMessage(sessionId: string, owner: SessionOwner, message: ModelMessage, metadata: AgentMetadata = {},
-    display: readonly VisibleRecord[] = [], operationId?: string, panels?: PanelWrites, consumeNotes?: readonly number[]): void {
+    display: readonly VisibleRecord[] = [], operationId?: string, panels?: PanelWrites, consumeNotes?: readonly number[],
+    consumeQueued?: { id: string; operationId?: string }): void {
     this.ownerRow(sessionId, owner);
     const staged = this.stageStored(message, owner);
     const visible = display.map((item) => ({ item, stored: this.stageStored(item.payload, owner) }));
+    let releasedBlocks = false;
     this.transaction(() => {
       this.ownerRow(sessionId, owner);
       const position = Number(this.database.prepare("SELECT coalesce(max(position), -1) + 1 AS next FROM model_context WHERE session_id = ?").get(sessionId)?.next);
@@ -1039,11 +1109,22 @@ export class SessionStore {
       this.addPayloadReference(staged);
       this.database.prepare("INSERT INTO model_context(session_id, position, payload_json) VALUES (?, ?, ?)")
         .run(sessionId, position, staged.encoded);
+      let firstSequence: number | undefined;
       for (const { item, stored } of visible) {
         const sequence = Number(this.database.prepare("SELECT coalesce(max(sequence), 0) + 1 AS next FROM history WHERE session_id = ?").get(sessionId)?.next);
+        firstSequence ??= sequence;
         this.addPayloadReference(stored);
         this.database.prepare("INSERT INTO history(session_id, sequence, created_at, kind, payload_json, status) VALUES (?, ?, ?, ?, ?, ?)")
           .run(sessionId, sequence, this.now(), item.kind, stored.encoded, item.status ?? "complete");
+      }
+      if (consumeQueued) {
+        // The message and its delivery receipt commit together: a queued message reaches the model at most once.
+        const row = this.database.prepare("SELECT blocks_json FROM session_queued_inputs WHERE id = ? AND session_id = ? AND state = 'delivering'")
+          .get(consumeQueued.id, sessionId);
+        if (!row || message.role !== "user") throw new Error("queued message is no longer being delivered");
+        releasedBlocks = row.blocks_json !== null;
+        this.finalizeQueued(consumeQueued.id, "delivered", { ...(consumeQueued.operationId ? { operationId: consumeQueued.operationId } : {}),
+          ...(firstSequence !== undefined ? { historySequence: firstSequence } : {}) });
       }
       if (panels) this.writePanels(sessionId, panels);
       for (const sequence of consumeNotes ?? []) this.database.prepare("DELETE FROM session_pending_notes WHERE session_id = ? AND sequence = ?").run(sessionId, sequence);
@@ -1052,6 +1133,121 @@ export class SessionStore {
       this.renewSession(sessionId, owner);
     });
     this.discardDuplicateStages([staged, ...visible.map((item) => item.stored)]);
+    if (releasedBlocks) { try { this.reclaimUnreferencedPayloads(); } catch { /* Idle maintenance retries reclamation. */ } }
+  }
+
+  /** A message sent while a turn runs; resolving its request id again returns the same row. */
+  enqueueInput(sessionId: string, owner: SessionOwner, queued: QueuedIntent): QueuedInputView {
+    const { blocks, request, mode, ...intent } = queued;
+    if (intent.sessionId !== sessionId || intent.kind !== "turn" || (mode !== "queue" && mode !== "interrupt")) {
+      throw new SessionOperationError("invalid_input", "invalid queued message");
+    }
+    const { normalized, requestHash } = this.normalizeIntent(intent);
+    this.ownerRow(sessionId, owner);
+    const staged = blocks === undefined ? undefined : this.stageStored(blocks, owner);
+    const attachments: HistoryAttachment[] = userAttachments(blocks);
+    try {
+      return this.transaction(() => {
+        this.ownerRow(sessionId, owner);
+        const existing = this.database.prepare("SELECT * FROM session_queued_inputs WHERE session_id = ? AND client_request_id = ?")
+          .get(sessionId, normalized.clientRequestId);
+        if (existing) {
+          if (existing.request_hash !== requestHash) throw new SessionOperationError("conflict", "client request ID conflicts with an earlier submitted intent");
+          return this.queuedView(existing);
+        }
+        if (this.findOperation(sessionId, normalized.clientRequestId)) throw new SessionOperationError("conflict", "client request ID already started a turn");
+        const open = Number(this.database.prepare(`SELECT count(*) AS n FROM session_queued_inputs WHERE session_id = ?
+          AND state IN ('queued', 'delivering', 'paused', 'blocked')`).get(sessionId)?.n);
+        if (open >= MAX_QUEUED_INPUTS) throw new SessionOperationError("queue_full", `At most ${MAX_QUEUED_INPUTS} messages can wait; delete one or wait for the agent`);
+        if (staged) this.addPayloadReference(staged);
+        const sequence = Number(this.database.prepare("SELECT coalesce(max(sequence), 0) + 1 AS next FROM session_queued_inputs WHERE session_id = ?").get(sessionId)?.next);
+        const id = randomUUID();
+        this.database.prepare(`INSERT INTO session_queued_inputs(id, session_id, sequence, client_request_id, request_hash, state, mode,
+          agent_name, config_path, input_text, blocks_json, attachments_json, request_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(id, sessionId, sequence, normalized.clientRequestId, requestHash, mode, normalized.agentName, normalized.configPath,
+            normalized.input!, staged?.encoded ?? null, attachments.length ? JSON.stringify(attachments) : null,
+            request === undefined ? null : JSON.stringify(request), this.now(), this.now());
+        return this.queuedView(this.database.prepare("SELECT * FROM session_queued_inputs WHERE id = ?").get(id)!);
+      });
+    } finally { if (staged) this.discardDuplicateStages([staged]); }
+  }
+
+  private queuedView(row: DbRow): QueuedInputView {
+    const attachments = row.attachments_json === null ? [] : JSON.parse(String(row.attachments_json)) as HistoryAttachment[];
+    return { id: String(row.id), clientRequestId: String(row.client_request_id), text: String(row.input_text ?? ""),
+      ...(attachments.length ? { attachments } : {}), state: row.state as QueuedInputView["state"], mode: row.mode as QueuedInputView["mode"],
+      agent: String(row.agent_name), ...(row.reason === null ? {} : { reason: String(row.reason) }), createdAt: Number(row.created_at) };
+  }
+
+  private queuedInput(row: DbRow): UserInput {
+    return row.blocks_json === null ? String(row.input_text) : this.decodeStored(String(row.blocks_json)) as UserInput;
+  }
+
+  /** The session's waiting messages, oldest first; delivered, taken and deleted ones are receipts only and not listed. */
+  queuedInputs(sessionId: string): QueuedInputView[] {
+    return this.database.prepare(`SELECT * FROM session_queued_inputs WHERE session_id = ?
+      AND state IN ('queued', 'delivering', 'paused', 'blocked') ORDER BY sequence`).all(sessionId).map((row) => this.queuedView(row));
+  }
+
+  findQueuedInput(sessionId: string, clientRequestId: string): QueuedInputReceipt | undefined {
+    const row = this.database.prepare("SELECT * FROM session_queued_inputs WHERE session_id = ? AND client_request_id = ?").get(sessionId, clientRequestId);
+    if (!row) return undefined;
+    return { id: String(row.id), clientRequestId, requestHash: String(row.request_hash), state: row.state as QueuedInputReceipt["state"],
+      ...(row.operation_id === null ? {} : { operationId: String(row.operation_id) }),
+      ...(row.history_sequence === null ? {} : { historySequence: Number(row.history_sequence) }) };
+  }
+
+  queuedInputView(sessionId: string, id: string): QueuedInputView | undefined {
+    const row = this.database.prepare("SELECT * FROM session_queued_inputs WHERE id = ? AND session_id = ?").get(id, sessionId);
+    return row ? this.queuedView(row) : undefined;
+  }
+
+  /** Takes the oldest waiting message for delivery, under the session lease. */
+  claimQueuedInput(sessionId: string, owner: SessionOwner): { id: string; clientRequestId: string; input: UserInput } | undefined {
+    return this.transaction(() => {
+      this.ownerRow(sessionId, owner);
+      const row = this.database.prepare("SELECT * FROM session_queued_inputs WHERE session_id = ? AND state = 'queued' ORDER BY sequence LIMIT 1").get(sessionId);
+      if (!row) return undefined;
+      this.database.prepare("UPDATE session_queued_inputs SET state = 'delivering', updated_at = ? WHERE id = ?").run(this.now(), String(row.id));
+      return { id: String(row.id), clientRequestId: String(row.client_request_id), input: this.queuedInput(row) };
+    });
+  }
+
+  /** Ends a delivery that did not commit: back to `queued` (the turn was stopped) or `blocked` (a hook refused it). */
+  releaseQueuedInput(sessionId: string, owner: SessionOwner, id: string, state: "queued" | "blocked", reason?: string): void {
+    this.transaction(() => {
+      this.ownerRow(sessionId, owner);
+      this.database.prepare("UPDATE session_queued_inputs SET state = ?, reason = ?, updated_at = ? WHERE id = ? AND session_id = ? AND state = 'delivering'")
+        .run(state, reason ?? null, this.now(), id, sessionId);
+    });
+  }
+
+  /** Deletes a message that has not been sent; one the agent already took answers `already_sent`. */
+  deleteQueuedInput(sessionId: string, id: string): void {
+    const released = this.transaction(() => {
+      const row = this.database.prepare("SELECT state, blocks_json FROM session_queued_inputs WHERE id = ? AND session_id = ?").get(id, sessionId);
+      if (!row) throw new SessionOperationError("not_found", "Queued message not found");
+      if (row.state === "deleted") return false;
+      if (!["queued", "paused", "blocked"].includes(String(row.state))) throw new SessionOperationError("already_sent", "The agent already took this message");
+      this.finalizeQueued(id, "deleted");
+      return row.blocks_json !== null;
+    });
+    if (released) { try { this.reclaimUnreferencedPayloads(); } catch { /* Idle maintenance retries reclamation. */ } }
+  }
+
+  private pauseOpenInputs(sessionId: string, reason?: string): void {
+    this.database.prepare(`UPDATE session_queued_inputs SET state = 'paused', reason = ?, updated_at = ?
+      WHERE session_id = ? AND state IN ('queued', 'delivering')`).run(reason ?? null, this.now(), sessionId);
+  }
+
+  /** Moves a queued message to a final state: only its receipt stays, and its blocks are released (the model context holds its own copy). */
+  private finalizeQueued(id: string, state: "delivered" | "taken" | "deleted", target: { operationId?: string; historySequence?: number } = {}): void {
+    const row = this.database.prepare("SELECT blocks_json FROM session_queued_inputs WHERE id = ?").get(id);
+    if (row && row.blocks_json !== null) this.dropPayloadReference(String(row.blocks_json));
+    this.database.prepare(`UPDATE session_queued_inputs SET state = ?, operation_id = ?, history_sequence = ?, input_text = NULL,
+      blocks_json = NULL, attachments_json = NULL, request_json = NULL, reason = NULL, updated_at = ? WHERE id = ?`)
+      .run(state, target.operationId ?? null, target.historySequence ?? null, this.now(), id);
   }
 
   /** Notes about panel actions the user ran, oldest first, not yet delivered to the model. */
@@ -1356,6 +1552,9 @@ export class SessionStore {
       }
       for (const item of this.database.prepare("SELECT payload_json FROM model_context WHERE session_id = ?").all(id)) {
         this.dropPayloadReference(String(item.payload_json));
+      }
+      for (const item of this.database.prepare("SELECT blocks_json FROM session_queued_inputs WHERE session_id = ? AND blocks_json IS NOT NULL").all(id)) {
+        this.dropPayloadReference(String(item.blocks_json));
       }
       this.database.prepare("DELETE FROM sessions WHERE id = ?").run(id);
       return true;

@@ -18,6 +18,23 @@ function attachmentView(block: UserBlock, index: number): HistoryAttachment {
   if (block.type === "resource_link") return { index, kind: "file", name: block.name, mimeType: block.mimeType ?? null, byteSize: block.size ?? null };
   return { index, kind: "unknown", name: "attachment", mimeType: null, byteSize: null };
 }
+/** Metadata of each non-text block of a user input, in order. */
+export function userAttachments(input: unknown): HistoryAttachment[] {
+  return userAttachmentBlocks(input).map(attachmentView);
+}
+/** A message waiting in a session's queue (docs/sessions.md); never its bytes. */
+export interface QueuedInputView {
+  id: string;
+  clientRequestId: string;
+  text: string;
+  attachments?: HistoryAttachment[];
+  /** `delivering`: the agent is taking it now; `paused`: waiting for you after Stop or an error; `blocked`: a hook refused it. */
+  state: "queued" | "delivering" | "paused" | "blocked";
+  mode: "queue" | "interrupt";
+  agent: string;
+  reason?: string;
+  createdAt: number;
+}
 export interface HistoryView {
   interactionRequestId?: string;
   interactionResponseId?: string;
@@ -29,6 +46,8 @@ export interface HistoryView {
   status: string;
   text?: string;
   attachments?: HistoryAttachment[];
+  /** A user message that was queued while its turn ran and delivered at a step boundary. */
+  queued?: boolean;
   turnId?: string;
   operationId?: string;
   callId?: string;
@@ -64,6 +83,7 @@ export function projectHistoryItem(item: HistoryItem): HistoryView {
       const attachments = userAttachmentBlocks(payload.input).map(attachmentView);
       if (attachments.length) view.attachments = attachments;
     } else view.text = typeof payload.input === "string" ? payload.input : String(payload.text ?? "");
+    if (payload.queued === true) view.queued = true;
   }
   else if (["assistant", "reasoning", "status", "runtime_transition", "skill_notice"].includes(item.kind)) {
     view.text = String(object(update.content).text ?? payload.text ?? "");

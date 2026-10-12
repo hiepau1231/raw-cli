@@ -10,7 +10,8 @@ import type { UserInput } from "../llm/types.js";
 import { measureSession, type SessionMetrics } from "./metrics.js";
 import { approvalTimeoutMs, SessionOperationError, terminalOperationStates, type OperationIntent, type OperationState, type SessionOperation } from "./operation-types.js";
 import { attachSessionRuntime } from "./runtime.js";
-import type { SessionOwner, SessionStore, SessionSummary } from "./store.js";
+import type { QueuedIntent, SessionOwner, SessionStore, SessionSummary } from "./store.js";
+import type { QueuedInputView } from "./view.js";
 
 
 export type { OperationIntent, OperationState, SessionOperation } from "./operation-types.js";
@@ -35,8 +36,12 @@ export type OperationEvent = { sessionId: string; operationId: string } & (
   | { type: "operation"; operation: SessionOperation }
   | { type: "event"; event: RunEvent }
   | { type: "host_error"; message: string }
+  /** The session's waiting messages changed; `items` is the full list. */
+  | { type: "inputs"; items: QueuedInputView[] }
 );
 interface ActiveOperation {
+  sessionId: string;
+  owner: SessionOwner;
   /** Structured turn input for this process only; the persisted operation keeps the text. */
   blocks?: UserInput;
   /** Per-turn request override for this process only; never persisted. */
@@ -77,10 +82,52 @@ export class SessionOperations {
     this.options.store.recoverOperations();
     const { operation, owner } = this.options.store.acceptOperation(intent);
     if (!owner) return operation;
+    this.launch(operation, owner, blocks, request);
+    return structuredClone(operation);
+  }
+
+  /**
+   * Sends a turn message: it starts a turn when the session is idle, and waits in the session's queue while a turn of
+   * this process runs (docs/sessions.md). A session held by another process answers `busy`.
+   */
+  enqueue(intent: OperationIntent, options: { blocks?: UserInput; request?: RequestOverride; mode: QueuedIntent["mode"] }):
+    { operation: SessionOperation } | { queued: QueuedInputView } {
+    if (this.closed) throw new SessionOperationError("closed", "session operations are closed");
+    this.options.store.recoverOperations();
+    const holder = this.holder(intent.sessionId);
+    if (holder) {
+      try {
+        const queued = this.options.store.enqueueInput(intent.sessionId, holder.owner, { ...intent, mode: options.mode,
+          ...(options.blocks ? { blocks: options.blocks } : {}), ...(options.request ? { request: options.request } : {}) });
+        this.publishInputs(intent.sessionId, holder.operationId);
+        return { queued };
+      } catch (error) {
+        // The turn ended between the lookup and the write: the session is free, so this message starts the next turn.
+        if (!(error instanceof Error && error.message === "session ownership lost")) throw error;
+      }
+    }
+    return { operation: this.submit(intent, options.blocks, options.request) };
+  }
+
+  /** The operation of this process that holds the session's lease now, if any. */
+  private holder(sessionId: string): { operationId: string; owner: SessionOwner } | undefined {
+    let found: { operationId: string; owner: SessionOwner } | undefined;
+    for (const [operationId, active] of this.active) {
+      if (active.sessionId === sessionId && (!found || active.owner.generation > found.owner.generation)) found = { operationId, owner: active.owner };
+    }
+    return found;
+  }
+
+  publishInputs(sessionId: string, operationId = ""): void {
+    this.publish({ type: "inputs", sessionId, operationId, items: this.options.store.queuedInputs(sessionId) });
+  }
+
+  private launch(operation: SessionOperation, owner: SessionOwner, blocks?: UserInput, request?: RequestOverride): void {
     const controller = new AbortController();
     let resolveDone!: (operation: SessionOperation) => void;
     let rejectDone!: (error: unknown) => void;
-    const active: ActiveOperation = { ...(blocks ? { blocks } : {}), ...(request ? { request } : {}), controller, done: new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject; }) };
+    const active: ActiveOperation = { sessionId: operation.sessionId, owner, ...(blocks ? { blocks } : {}), ...(request ? { request } : {}),
+      controller, done: new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject; }) };
     // A detached HTTP client is not responsible for consuming a terminal persistence error.
     void active.done.catch(() => {});
     this.active.set(operation.id, active);
@@ -94,7 +141,6 @@ export class SessionOperations {
         clearInterval(heartbeat); this.active.delete(operation.id);
       });
     });
-    return structuredClone(operation);
   }
 
   private async execute(operation: SessionOperation, owner: SessionOwner, active: ActiveOperation): Promise<SessionOperation> {
@@ -117,6 +163,7 @@ export class SessionOperations {
         this.publish({ type: "operation", sessionId: operation.sessionId, operationId: operation.id, operation });
         return;
       }
+      if (event.type === "queued_input") { this.publishInputs(operation.sessionId, operation.id); return; }
       if (event.type === "tool_start") startedTools++;
       if (event.type === "tool_result" && (event.display?.failed ?? event.result.isError)) failedTools++;
       this.publish({ type: "event", sessionId: operation.sessionId, operationId: operation.id, event });
@@ -162,12 +209,26 @@ export class SessionOperations {
     } catch (cause) {
       state = "error"; error = { code: "cleanup_error", message: cause instanceof Error ? cause.message : String(cause) };
     }
+    const details = { ...(result ? { result } : {}), ...(error ? { error } : {}), ...(metrics ? { metrics } : {}) };
+    // A completed turn hands the session to the oldest waiting message; any other ending, or a Stop that arrived during
+    // cleanup, pauses them all.
+    let pauseReason: string | undefined;
+    const next = state === "completed" && !this.closed && !active.controller.signal.aborted
+      ? store.queuedInputs(operation.sessionId).find((item) => item.state === "queued") : undefined;
+    if (next) {
+      try {
+        const handed = store.handOff({ id: operation.id, owner, state, details }, next.id);
+        this.publish({ type: "operation", sessionId: operation.sessionId, operationId: operation.id, operation: handed.previous });
+        this.launch(handed.operation, handed.owner, typeof handed.input === "string" ? undefined : handed.input, handed.request);
+        this.publishInputs(operation.sessionId, handed.operation.id);
+        return handed.previous;
+      } catch (cause) { pauseReason = `The next turn could not start: ${cause instanceof Error ? cause.message : String(cause)}`; }
+    }
     try {
-      const terminal = store.updateOperation(operation.id, owner, state, {
-        ...(result ? { result } : {}), ...(error ? { error } : {}), ...(metrics ? { metrics } : {}),
-      });
+      const terminal = store.updateOperation(operation.id, owner, state, details, pauseReason);
       store.releaseSession(operation.sessionId, owner);
       this.publish({ type: "operation", sessionId: operation.sessionId, operationId: operation.id, operation: terminal });
+      if (store.queuedInputs(operation.sessionId).length) this.publishInputs(operation.sessionId, operation.id);
       return terminal;
     } catch (cause) {
       this.publish({ type: "host_error", sessionId: operation.sessionId, operationId: operation.id, message: String(cause) });
