@@ -10,6 +10,7 @@ export const POSIX_ONLY = {
   pty: "Python pty is Unix-only",
   signals: "POSIX signals are not delivered to child processes on Windows",
   modes: "POSIX permission bits are not enforced on Windows",
+  fifo: "POSIX named pipes (mkfifo) do not exist on Windows",
 } as const;
 
 /** The `skip` option for a test of a POSIX-only mechanism. */

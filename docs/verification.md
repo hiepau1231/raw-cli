@@ -18,7 +18,8 @@ The current schema-isolation and edit→resume→unchanged-resume contract has a
 `npm run test:package` on ubuntu-latest, macos-latest and windows-latest with
 Node 22.13.0 and 24. A test may skip on Windows only through `posixOnly` in
 `tests/fixtures/platform.ts`, for a mechanism Windows does not have: a Python
-pty, POSIX signals delivered to a child, or POSIX permission bits. Features Raw
+pty, POSIX signals delivered to a child, POSIX permission bits, or a POSIX
+named pipe (FIFO). Features Raw
 supports on Windows are never skipped. To rerun a few files on windows-latest,
 dispatch the workflow with `tests` set to a space-separated list, for example
 `gh workflow run ci.yml --ref <branch> -f tests="tests/cli.test.ts tests/package.test.ts"`.

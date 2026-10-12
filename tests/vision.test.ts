@@ -12,6 +12,7 @@ import { createProvider } from "../src/llm/client.js";
 import { createAgent } from "../src/agent.js";
 import { connectMcpServers } from "../src/tools/mcp-client.js";
 import { anthropicFrame, googleFrame, openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
+import { posixOnly } from "./fixtures/platform.js";
 
 function pngChunk(type: string, data: Buffer): Buffer {
   const kind = Buffer.from(type);
@@ -101,7 +102,7 @@ test("view_image validates magic and size, resolves cwd, and keeps a >8 KiB nati
   assert.equal((await denied.dispatch("view_image", { path: "large.png" }, context(cwd))).code, "tool_denied");
 });
 
-test("view_image refuses a FIFO without waiting for a writer", { skip: process.platform === "win32" }, async () => {
+test("view_image refuses a FIFO without waiting for a writer", { skip: posixOnly("fifo") }, async () => {
   const cwd = await mkdtemp(join(tmpdir(), "raw-image-fifo-"));
   execFileSync("mkfifo", [join(cwd, "pipe.png")]);
   const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
