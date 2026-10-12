@@ -22,7 +22,8 @@ const versions: { name: string; path?: string }[] = windows
   ? [{ name: "pwsh" }, { name: "5.1", path: systemBinary("WindowsPowerShell\\v1.0\\powershell.exe") }] : [{ name: "pwsh" }];
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const text = (result: ToolResult) => result.content.map((block) => block.type === "text" ? block.text : "").join("");
+// PowerShell ends lines with CRLF on Windows; the assertions read LF.
+const text = (result: ToolResult) => result.content.map((block) => block.type === "text" ? block.text : "").join("").replaceAll("\r\n", "\n");
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 const node = quote(process.execPath);
 

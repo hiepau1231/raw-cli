@@ -12,7 +12,9 @@ test("acknowledged background process survives its start signal and is readable 
   try {
     const signal = new AbortController(); const context = supervisor.forSession("session");
     const job = await context.start({ command: "printf '雪'; sleep 30", cwd: process.cwd(), signal: signal.signal });
-    signal.abort(); await delay(80);
+    signal.abort();
+    // Git Bash on Windows takes longer than a fixed 80 ms to print.
+    for (let n = 0; n < 200 && !context.output(job.id).cursor; n++) await delay(50);
     assert.equal(context.status(job.id).state, "running"); assert.match(context.output(job.id).chunks.map(chunk => chunk.text).join(""), /雪/);
     assert.equal((await context.stop(job.id)).state, "stopped"); assert.equal((await context.stop(job.id)).state, "stopped");
     assert.throws(() => supervisor.forSession("foreign").status(job.id), /not found/);
