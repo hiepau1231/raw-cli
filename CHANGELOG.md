@@ -6,6 +6,41 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-12
+
+- Built-in tools take the single-call shapes models are trained on:
+  `read_file` and `write_file` work on one file, `edit_file` replaces exact
+  text, `bash` runs one command, `process` takes flat arguments, `ask_user`
+  asks one question, and `apply_patch` is available as an opt-in tool. Common
+  argument variants are normalized, and every tool has a readable display.
+- Tool output has a 64 KiB budget that keeps the end of long output and saves
+  the full copy to a file. LLM requests retry transient failures, a request
+  timeout bounds stream silence, and answers cut at the output limit
+  continue.
+- Compaction runs automatically by default, keeps the user's messages and
+  the last steps verbatim, clears old tool results to saved copies first,
+  compacts repeatedly with a thrash guard and degrades instead of failing the
+  turn. Provider-native compaction is available as an opt-in.
+- MCP servers take a per-server `timeout_ms`, and progress notifications keep
+  long calls alive. Approvals wait for people, hooks keep their timeout, and
+  sessions last 30 days.
+- The dashboard chat is redesigned: a single header row, message bubbles,
+  readable tables and code blocks, a work summary line with tool cards, an
+  approval card, and a composer card with a context ring. A side panel shows
+  Overview, Todo, Files changed and Commands, with bundled Inter and
+  JetBrains Mono fonts.
+- Long chats stay fast: off-screen messages skip layout, earlier history
+  loads as you scroll up, and a sent message shows at once.
+- You can send while the agent works: the message is queued and delivered at
+  the next step, or interrupts the current turn.
+- Agents, Library and Settings navigation rows highlight on hover like the
+  chat list. Library entries show icons and counts, and agents show a model
+  subtitle and a default marker. Agents and Library rows open from anywhere
+  on the row, and Library rows fit on one line.
+- Fixes: `@` file search follows `.gitignore` across the whole workspace,
+  images an API would reject become text notes, and a user message after tool
+  results joins their turn for Anthropic and Google.
+
 ## [0.1.3] - 2026-10-10
 
 - The dashboard has a new violet-black and white theme: near-black violet
@@ -43,7 +78,9 @@ First public release.
 - Portable `.rawpkg` packages for sharing agents, tools and skills.
 - Runtime variables from config, environment, files or executable providers.
 
-[Unreleased]: https://github.com/lploc94/raw-cli/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/lploc94/raw-cli/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/lploc94/raw-cli/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/lploc94/raw-cli/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/lploc94/raw-cli/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/lploc94/raw-cli/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/lploc94/raw-cli/releases/tag/v0.1.0
