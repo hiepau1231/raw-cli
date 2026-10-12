@@ -35,7 +35,7 @@ export function fixtureMcpServer(label: string, count = 2, reverse = false, mode
       }
     }
     if (value === "slow") await new Promise((resolve) => setTimeout(resolve, 250));
-    if (value === "timeout") await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (value === "timeout") await new Promise((resolve) => setTimeout(resolve, Number(process.env.MCP_TIMEOUT_MS ?? 1500)));
     if (value === "huge" && mode === "large-result") return { content: [{ type: "text", text: "x".repeat(17 * 1024 * 1024) }] };
     if (value === "image") return { content: [{ type: "image", mimeType: "image/png", data: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString("base64") }] };
     if (value === "jpeg") return { content: [{ type: "image", mimeType: "image/jpeg", data: Buffer.from([255, 216, 255, 217]).toString("base64") }] };

@@ -12,7 +12,7 @@ import { makePng } from "./fixtures/images.js";
 import { launch, posixOnly } from "./fixtures/platform.js";
 
 async function command(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
-  const child = spawn(...launch(bin, args), { cwd, env, stdio: ["ignore", "pipe", "pipe"], signal: AbortSignal.timeout(90_000) });
+  const child = spawn(...launch(bin, args), { cwd, env, stdio: ["ignore", "pipe", "pipe"], signal: AbortSignal.timeout(240_000) });
   let stdout = "", stderr = ""; child.stdout.on("data", part => { stdout += String(part); }); child.stderr.on("data", part => { stderr += String(part); });
   const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
   assert.equal(code, 0, `${bin} ${args[0]}: ${stderr}`); return { stdout, stderr };
@@ -27,7 +27,7 @@ async function sourceHash(repo: string) {
   return hash.digest("hex");
 }
 
-test("packed dashboard configures, reconnects, updates a package, then installed CLI resumes the same ID", { timeout: 150_000 }, async t => {
+test("packed dashboard configures, reconnects, updates a package, then installed CLI resumes the same ID", { timeout: 480_000 }, async t => {
   const repo = process.cwd(), root = await mkdtemp(join(tmpdir(), "raw-dashboard-installed-"));
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("RAW_"))),
     XDG_CONFIG_HOME: join(root, "config"), XDG_DATA_HOME: join(root, "data"), XDG_STATE_HOME: join(root, "state") };

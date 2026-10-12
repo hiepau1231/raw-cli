@@ -48,6 +48,9 @@ export function testRun({ signals = true, platform = process.platform } = {}) {
   const env = { TMPDIR: temp, ...(platform === "win32" ? { TEMP: temp, TMP: temp } : {}),
     XDG_CONFIG_HOME: join(dir, "config"), XDG_STATE_HOME: join(dir, "state"), XDG_DATA_HOME: join(dir, "data") };
   for (const path of new Set(Object.values(env))) mkdirSync(path);
+  // On Windows the suite renders as in Windows Terminal, so its Unicode expectations hold on every OS; the legacy
+  // console's ASCII default is tested with explicit environments (terminal-options, terminal-renderer).
+  if (platform === "win32") env.WT_SESSION = "raw-test";
   let done = false;
   const cleanup = () => {
     if (done) return;

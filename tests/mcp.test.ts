@@ -209,7 +209,10 @@ test("a tool call that keeps reporting progress outlives the request timeout", a
 });
 
 test("T-06c: SDK tool request deadline returns an explicit error and leaves connection usable", async () => {
-  const connection = await connectMcpServers({ servers: { timed: stdio("timed") }, cwd: process.cwd(), timeoutMs: 1000 });
+  // The deadline also bounds startup, which takes seconds through tsx on a loaded Windows runner; the call sleeps longer.
+  const timed = stdio("timed");
+  const connection = await connectMcpServers({ servers: { timed: { ...timed, env: { ...timed.env, MCP_TIMEOUT_MS: "30000" } } },
+    cwd: process.cwd(), timeoutMs: 5000 });
   try {
     const alias = connection.exposed[0]!.alias;
     const context = { cwd: process.cwd(), maxOutputBytes: 8192, autoApprove: true };

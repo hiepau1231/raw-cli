@@ -36,7 +36,9 @@ test("a test run points Node's temp directory into the disposable run on Windows
       if (platform === "win32") {
         assert.equal(run.env.TEMP, run.env.TMPDIR);
         assert.equal(run.env.TMP, run.env.TMPDIR);
+        assert.equal(run.env.WT_SESSION, "raw-test");
       } else {
+        assert.equal("WT_SESSION" in run.env, false);
         assert.equal("TEMP" in run.env, false);
         assert.equal("TMP" in run.env, false);
       }
