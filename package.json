@@ -69,7 +69,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "prepare": "npm run build",
+    "prepare": "node -e \"process.exit(process.env.npm_config_ignore_scripts === 'true' ? 0 : 1)\" || npm run build",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json",
     "test": "npm run build && node scripts/test.mjs",
     "test:phase": "node scripts/test-phase.mjs",

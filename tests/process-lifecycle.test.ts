@@ -67,9 +67,10 @@ test("dashboard process survives runtime teardown and owner deletion cleans it u
     const first = await f.json<{ id: string }>(`/sessions/${session.id}/operations`, "POST", { clientRequestId: "first", kind: "turn", agent: "raw", input: "start" });
     assert.equal((await f.wait(first.id)).state, "completed");
     const context = f.server.context.processes!.forSession(session.id); const job = context.list()[0]!;
-    await new Promise(resolve => setTimeout(resolve, 150));
+    const printed = () => context.output(job.id).chunks.map(chunk => chunk.text).join("");
+    for (let i = 0; i < 200 && !/after-turn/.test(printed()); i++) await new Promise(resolve => setTimeout(resolve, 25));
     assert.equal(context.status(job.id).state, "running");
-    assert.match(context.output(job.id).chunks.map(chunk => chunk.text).join(""), /after-turn/);
+    assert.match(printed(), /after-turn/);
     const second = await f.json<{ id: string }>(`/sessions/${session.id}/operations`, "POST", { clientRequestId: "second", kind: "turn", agent: "raw", input: "continue" });
     assert.equal((await f.wait(second.id)).state, "completed"); assert.equal(context.status(job.id).state, "running");
     const pending = await f.json<{ id: string }>(`/sessions/${session.id}/operations`, "POST", { clientRequestId: "cancel", kind: "turn", agent: "raw", input: "unrelated turn" });
