@@ -320,6 +320,22 @@ test.describe("off-screen entries", () => {
     await streamDone(page);
   });
 
+  test("a long chat opens on its latest message once its entries take their size", async ({ page, raw }) => {
+    await openLong(page, raw);
+    const scroller = page.locator(".conversation-scroll");
+    await frames(page, 10);
+    await sleep(300);
+    expect(await scroller.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(2);
+    await expect(page.locator(".jump-latest")).toHaveCount(0);
+    // Scrolling up still leaves the latest message, and its size changing below does not bring you back.
+    await scroller.evaluate((element) => { element.scrollTop -= 600; });
+    await expect(page.locator(".jump-latest")).toBeVisible();
+    const top = await scroller.evaluate((element) => element.scrollTop);
+    await page.getByTestId("assistant-message").last().evaluate((element) => { element.style.paddingBottom = "400px"; });
+    await frames(page, 4);
+    expect(await scroller.evaluate((element) => element.scrollTop)).toBe(top);
+  });
+
   test("Jump to latest lands on the last message from the top", async ({ page, raw }) => {
     const scroller = await openAll(page, raw);
     await scroller.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });

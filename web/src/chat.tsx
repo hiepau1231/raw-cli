@@ -240,6 +240,9 @@ export function Chat({
   const following = useRef(preferences.follow);
   const [atBottom, setAtBottom] = useState(true);
   const prepending = useRef(false);
+  /** The scroll position at the last scroll event: only scrolling up leaves the latest message. */
+  const lastTop = useRef(0);
+  const conversation = useRef<HTMLDivElement>(null);
   const current = state?.operations.find((op) => !isTerminal(op.state));
   const busy = pending || !!current || state?.ownership === "elsewhere";
   const [confirming, setConfirming] = useState<{ message: string; go: () => void }>();
@@ -328,6 +331,18 @@ export function Chat({
     if (following.current && !prepending.current) scrollToBottom();
     // A message being sent shows before the session changes (docs/chat-design.md §5).
   }, [state, outgoing, scrollToBottom]);
+  // While following, the view stays at the bottom when the content grows after a scroll: an entry replacing its size
+  // estimate, a late font or image (docs/chat-design.md §10).
+  useEffect(() => {
+    const content = conversation.current;
+    if (!content) return;
+    const observer = new ResizeObserver(() => {
+      const element = scroll.current;
+      if (element && following.current && !prepending.current) element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
   const checkReceipt = async (key: string) => {
     try {
       const op = await api<SessionOperation>(
@@ -816,15 +831,20 @@ export function Chat({
             className="conversation-scroll"
             ref={scroll}
             onScroll={() => {
-              if (!scroll.current || prepending.current) return;
+              if (!scroll.current) return;
               const el = scroll.current;
+              const up = el.scrollTop < lastTop.current;
+              lastTop.current = el.scrollTop;
+              if (prepending.current) return;
               const bottom =
                 el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-              following.current = bottom && preferences.follow;
+              // Content growing below moves the bottom away without you; only scrolling up stops following.
+              if (bottom) following.current = preferences.follow;
+              else if (up) following.current = false;
               setAtBottom(bottom);
             }}
           >
-            <div className="conversation">
+            <div className="conversation" ref={conversation}>
               <ErrorMessage>{streamError}</ErrorMessage>
               {(hasEarlier || historyError) && (
                 <HistoryLoader rowRef={loaderRow} loading={historyLoading} error={historyError} onRetry={retryEarlier} />
