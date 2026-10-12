@@ -205,7 +205,8 @@ test("9a: run_in_background starts a managed job through process and returns at 
     const shortId = short.host!.processId!;
     const output = await waitFor(async () => {
       const page = await tools.dispatch("process", { action: "output", id: shortId }, context);
-      return text(page).includes("done") ? page : undefined;
+      // The output can reach "done" before the job's exit is recorded.
+      return text(page).includes("[exited") ? page : undefined;
     });
     assert.match(text(output), /^done\n\n\[next cursor: 5\]\n\[exited · exit 0\]$/);
 
