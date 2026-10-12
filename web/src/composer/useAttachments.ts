@@ -181,6 +181,26 @@ export function useAttachments(sessionId: string, metas: KindMeta[]) {
     setChips((old) => old.filter((chip) => !keys.includes(chip.key)));
   }, []);
 
+  /**
+   * Adds items the server staged for this chat (an edited message's images) as ready chips. `file` is their copy in
+   * this page: a request consumes its staged items, so Retry uploads that copy again.
+   */
+  const addStaged = useCallback(
+    (items: Array<{ id: string; kind: string; name: string; byteSize: number; file?: File | undefined }>) => {
+      const added = items.map((item): Chip => ({ key: nextKey(), type: "upload", kindId: item.kind, name: item.name, size: item.byteSize,
+        status: "ready", serverId: item.id, ...(item.file ? { file: item.file } : {}) }));
+      setChips((old) => [...old, ...added]);
+      for (const chip of added)
+        if (chip.file)
+          void clientKinds
+            .get(chip.kindId)
+            ?.thumbnail?.(chip.file)
+            .then((thumbnail) => thumbnail && patch(chip.key, { thumbnail }))
+            .catch(() => {});
+    },
+    [patch],
+  );
+
   /** Puts back chips taken by a request the server refused; their staged items are still there. */
   const restore = useCallback((back: Chip[]) => {
     setChips((old) => [...old, ...back.filter((chip) => !old.some((entry) => entry.key === chip.key))]);
@@ -195,5 +215,5 @@ export function useAttachments(sessionId: string, metas: KindMeta[]) {
     }),
     [chips],
   );
-  return { chips, ...summary, addFiles, addFileRef, remove, retry, expire, consume, restore };
+  return { chips, ...summary, addFiles, addFileRef, addStaged, remove, retry, expire, consume, restore };
 }

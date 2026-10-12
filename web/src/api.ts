@@ -69,6 +69,15 @@ export async function upload<T>(
   return decode<T>(response);
 }
 /** Fetches authenticated bytes and returns a `data:` URL (the CSP allows `data:` images, not `blob:`). */
+/** Authenticated bytes as a Blob, such as a staged attachment. */
+export async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(`/api${path}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) throw new ApiError(response.status, "request_failed", "Could not load attachment");
+  return response.blob();
+}
 export async function fetchDataUrl(
   path: string,
   signal?: AbortSignal,
@@ -108,6 +117,7 @@ export function blobDataUrl(blob: Blob): Promise<string> {
   });
 }
 async function decode<T>(response: Response): Promise<T> {
+  if (response.status === 204) return undefined as T;
   const data = await response.json();
   if (!response.ok)
     throw new ApiError(

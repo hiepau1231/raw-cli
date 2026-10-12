@@ -24,9 +24,9 @@ import type { Page, SessionSummary } from "../sessions/store.js";
 import type { SessionMetrics } from "../sessions/metrics.js";
 import { Approvals, type Approval } from "./approvals.js";
 import { DashboardError, readBody, textField } from "./errors.js";
-import { AttachmentStaging } from "./attachments.js";
+import { AttachmentStaging, type AttachmentInfo } from "./attachments.js";
 import { sendFullOutput, storedFullOutput } from "./full-results.js";
-import { searchWorkspaceFiles, workspaceFileLink } from "./files.js";
+import { searchWorkspaceFiles, workspaceFileLink, workspaceLinkPath } from "./files.js";
 import { browseDirectory, listWorkspaces } from "./workspaces.js";
 import { LiveOutput, type LiveSegment } from "./live-output.js";
 import { SessionStreams } from "./streams.js";
@@ -243,6 +243,15 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
         return reply(staging.stage(id, { mimeType, name: name.replace(/[\\/\0]/g, "_"), bytes }), 201);
       }
       if (attachmentRoute[2] && method === "DELETE") return reply({ removed: staging.remove(id, decodeURIComponent(attachmentRoute[2])) });
+      if (attachmentRoute[2] && method === "GET") {
+        // The bytes of a staged item, so the composer can keep a copy of an image an edited message brought back.
+        const item = staging.read(id, decodeURIComponent(attachmentRoute[2]));
+        if (!item) throw new DashboardError(404, "not_found", "Attachment not found");
+        response.writeHead(200, { "Content-Type": item.mimeType, "Content-Length": item.bytes.length, "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "no-store", "Content-Disposition": "inline" });
+        response.end(item.bytes);
+        return true;
+      }
     }
     const historyAttachment = /^\/api\/sessions\/([^/]+)\/history\/(\d+)\/attachments\/(\d+)$/.exec(path);
     if (historyAttachment && method === "GET") {
@@ -384,7 +393,7 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
       if (store.sessionIsBusy(id)) throw new DashboardError(409, "session_busy", "Wait for the active operation to finish");
       return reply({ operationId: operations.submit(intent).id }, 202);
     }
-    const inputRoute = /^\/api\/sessions\/([^/]+)\/inputs(?:\/([^/]+)(\/send-now)?)?$/.exec(path);
+    const inputRoute = /^\/api\/sessions\/([^/]+)\/inputs(?:\/([^/]+)(\/send-now|\/edit)?)?$/.exec(path);
     if (inputRoute) {
       const id = decodeURIComponent(inputRoute[1]!); requireSession(id);
       if (inputRoute[2] === undefined && method === "GET") {
@@ -409,7 +418,25 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
         staging.release(ids);
         return reply(sent, 202);
       }
-      if (inputRoute[2] !== undefined && inputRoute[3] && method === "POST") return reply(operations.sendNow(id, decodeURIComponent(inputRoute[2])), 202);
+      if (inputRoute[2] !== undefined && inputRoute[3] === "/send-now" && method === "POST") return reply(operations.sendNow(id, decodeURIComponent(inputRoute[2])), 202);
+      if (inputRoute[2] !== undefined && inputRoute[3] === "/edit" && method === "POST") {
+        // The message comes back as the composer holds it: its text, its files as workspace paths, and its images staged again.
+        let root: string | undefined; try { root = realpathSync(requireSession(id).cwd); } catch { root = undefined; }
+        const staged: AttachmentInfo[] = [];
+        try {
+          const back = store.takeBackQueuedInput(id, decodeURIComponent(inputRoute[2]), (input, blocks) => {
+            const files: string[] = [];
+            for (const block of typeof blocks === "string" ? [] : blocks) {
+              if (block.type === "resource_link") { const file = root && workspaceLinkPath(root, block.uri); if (file) files.push(file); continue; }
+              const found = staging.kinds.content(block);
+              if (found) staged.push(staging.stage(id, { ...found.content, name: (block.type === "image" ? block.name : undefined) ?? "attachment" }));
+            }
+            return { input, files, attachments: staged };
+          });
+          operations.publishInputs(id);
+          return reply(back);
+        } catch (error) { staging.release(staged.map((item) => item.id)); throw error; }
+      }
       if (inputRoute[2] !== undefined && !inputRoute[3] && method === "DELETE") {
         store.deleteQueuedInput(id, decodeURIComponent(inputRoute[2]));
         operations.publishInputs(id);

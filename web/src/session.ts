@@ -22,7 +22,14 @@ export interface ChatState extends SessionSnapshot {
   panelTick: number;
   /** Panels that live frames named but this stack does not list yet (implicit panels); the stack must be refetched until they appear. */
   unknownPanels: string[];
+  /**
+   * Every waiting message the session has reported, also ones a batch of events added and removed before a render, so
+   * a late reply to the request that queued a message never brings back the card of one the agent has since taken.
+   */
+  knownInputs: ReadonlySet<string>;
 }
+const withInputs = (known: ReadonlySet<string> | undefined, items: readonly { id: string }[]): ReadonlySet<string> =>
+  known && items.every((item) => known.has(item.id)) ? known : new Set([...(known ?? []), ...items.map((item) => item.id)]);
 export const isTerminal = (state: string) =>
   ["completed", "max_steps", "cancelled", "error", "interrupted"].includes(
     state,
@@ -34,6 +41,14 @@ export function mergeHistory(
   return [
     ...new Map([...a, ...b].map((item) => [item.id, item])).values(),
   ].sort((x, y) => x.sequence - y.sequence);
+}
+/**
+ * Adds a message the reply to `POST /inputs` says is waiting, unless the session already reported it. Applied as a state
+ * update, after every event received before it, so a card the agent has since taken stays gone.
+ */
+export function addQueuedInput(state: ChatState | undefined, item: ChatState["inputs"][number]): ChatState | undefined {
+  if (!state || state.knownInputs.has(item.id)) return state;
+  return { ...state, inputs: [...state.inputs, item], knownInputs: new Set([...state.knownInputs, item.id]) };
 }
 export function reduceEvent(
   state: ChatState | undefined,
@@ -62,6 +77,7 @@ export function reduceEvent(
       snapshotCount: (state?.snapshotCount ?? 0) + 1,
       panelTick: state?.panelTick ?? 0,
       unknownPanels: [],
+      knownInputs: withInputs(state?.knownInputs, event.data.inputs),
     };
   }
   if (!state) return state;
@@ -69,7 +85,7 @@ export function reduceEvent(
     case "commands":
       return { ...state, commands: event.data.items, commandsOmitted: event.data.omitted ?? 0 };
     case "inputs":
-      return { ...state, inputs: event.data.items };
+      return { ...state, inputs: event.data.items, knownInputs: withInputs(state.knownInputs, event.data.items) };
     case "history": {
       const ids = new Set(event.data.items.map((item) => item.id));
       const tools = { ...state.tools };

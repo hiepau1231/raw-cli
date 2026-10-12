@@ -150,13 +150,13 @@ test.describe("vision agent", () => {
     await chooseImage(page);
     await expect(ready(page, "shot.png")).toBeVisible();
     await message(page).fill("keep this");
-    await page.route("**/api/sessions/*/operations", (route) =>
+    await page.route("**/api/sessions/*/inputs", (route) =>
       route.request().method() === "POST" ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: { code: "boom", message: "nope" } }) }) : route.fallback());
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByText("nope")).toBeVisible();
     await expect(ready(page, "shot.png")).toBeVisible();
     await expect(message(page)).toHaveValue("keep this");
-    await page.unroute("**/api/sessions/*/operations");
+    await page.unroute("**/api/sessions/*/inputs");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByTestId("assistant-message")).toBeVisible();
     expect(requestBody(raw)).toContain(b64);

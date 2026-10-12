@@ -1,7 +1,8 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { test, expect, openChat, compactNow } from "./fixtures.js";
+import { installGate, setGate } from "./prompt-gate.js";
 import { makePng } from "../fixtures/images.js";
 
 // docs/chat-design.md §5: your message shows the moment you send it, and says so when the agent never got it.
@@ -13,28 +14,6 @@ const sendButton = (page: Page) => page.getByRole("button", { name: "Send", exac
 /** The last provider request's newest message: the one this send delivered. */
 const lastBody = (raw: Raw) => JSON.stringify((raw.provider.requests.at(-1)!.body as { messages: unknown[] }).messages.at(-1));
 
-/** What the UserPromptSubmit gate does on its next run: wait, deny, or let the message through. */
-type Gate = { sleepMs?: number; deny?: string };
-const gateFolder = (raw: Raw) => join(dirname(raw.configPath), "hooks", "gate");
-function setGate(raw: Raw, gate: Gate) {
-  writeFileSync(join(gateFolder(raw), "mode.json"), JSON.stringify(gate));
-}
-/** Installs the gate beside the config and selects it for the agent; it reads its mode on every run. */
-function installGate(raw: Raw, gate: Gate) {
-  mkdirSync(gateFolder(raw), { recursive: true });
-  writeFileSync(join(gateFolder(raw), "hook.json"), JSON.stringify({ protocol_version: 2, name: "gate", command: "node",
-    args: ["./gate.mjs"], events: [{ name: "UserPromptSubmit" }] }));
-  writeFileSync(join(gateFolder(raw), "gate.mjs"), `import { readFileSync } from "node:fs";
-process.stdin.resume();
-process.stdin.on("end", () => {
-  const mode = JSON.parse(readFileSync(new URL("./mode.json", import.meta.url), "utf8"));
-  setTimeout(() => process.stdout.write(JSON.stringify(mode.deny ? { decision: "deny", reason: mode.deny } : {})), mode.sleepMs ?? 0);
-});
-`);
-  setGate(raw, gate);
-  (raw.config.agents.raw as Record<string, unknown>).hooks = { use: ["agent/gate"] };
-  writeFileSync(raw.configPath, JSON.stringify(raw.config));
-}
 async function send(page: Page, text: string) {
   await message(page).fill(text);
   await sendButton(page).click();
@@ -101,7 +80,7 @@ test("in a long chat read from the middle, the message you send scrolls into vie
   await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
-  await page.route("**/api/sessions/*/operations", async (route) => {
+  await page.route("**/api/sessions/*/inputs", async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
     await held;
     await route.fallback();
@@ -126,7 +105,7 @@ test("Stop while the turn starts leaves the message not delivered, saying it was
 
 test("a request the server refuses is not sent, and its text returns to the message box", async ({ page, raw }) => {
   await openChat(page, raw);
-  await page.route("**/api/sessions/*/operations", (route) =>
+  await page.route("**/api/sessions/*/inputs", (route) =>
     route.request().method() === "POST"
       ? route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ error: { code: "invalid_request_option", message: "That option is not available" } }) })
       : route.fallback());

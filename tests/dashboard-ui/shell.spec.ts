@@ -144,7 +144,7 @@ test("a lost submit response finds its durable receipt and keeps a later draft",
   raw,
 }) => {
   await openChat(page, raw);
-  await page.route("**/api/sessions/*/operations", async (route) => {
+  await page.route("**/api/sessions/*/inputs", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     await route.fetch();
     await route.abort("failed");
@@ -171,7 +171,7 @@ test("a late accepted response cannot replace completed state or erase a newer d
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/sessions/*/operations", async (route) => {
+  await page.route("**/api/sessions/*/inputs", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     const response = await route.fetch();
     await gate;

@@ -3,6 +3,7 @@ import { test, expect } from "./fixtures.js";
 import { ASK, chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
 import { LIVE_ANSWER, LIVE_REQUEST, longStream, seedLongChat, turnTag } from "./chat-long.js";
 import { probe, startCommits, stopCommits } from "./perf-probe.js";
+import { openAiFrame } from "../fixtures/mock-provider.js";
 
 // docs/chat-design.md §10 on a 60-turn long chat: what typing and streaming re-render, and what they must not lose.
 // After the first stress turn: a streamed answer, the question and its answer.
@@ -151,6 +152,22 @@ test("a streaming answer changes no node before the last message you sent", asyn
   await streamDone(page);
   await expect(kept(page, "answer")).toContainText("Lần kiểm tra 24");
   await expect(page.getByTestId("user-message").last()).toContainText(LIVE_REQUEST);
+});
+
+test.describe("a turn that starts with reasoning", () => {
+  const stream = longStream(LIVE_ANSWER, 600, 10);
+  test.use({ scenario: { ...chatScenario, responses: [...chatScenario.responses.slice(0, 5),
+    { ...stream, frames: [openAiFrame({ reasoning: "Đọc lại các lần kiểm tra trước rồi tổng hợp." }), ...stream.frames!] }] } });
+
+  test("its first Work group changes no node before the message you sent", async ({ page, raw }) => {
+    await openLong(page, raw);
+    await startCommits(page);
+    await startStream(page);
+    const counts = await stopCommits(page);
+    await expect(page.locator(".work-group").last()).toContainText("Working");
+    expect(counts.conversation, "the new turn rendered").toBeGreaterThan(0);
+    expect(counts.beforeLastUser).toBe(0);
+  });
 });
 
 test("an open group, an open tool card and a typed answer survive a streamed turn and a reconnect", async ({ page, raw }) => {

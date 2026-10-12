@@ -8,7 +8,8 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ArrowUp, Square } from "lucide-react";
+import { ArrowUp, ChevronDown, Square, Zap } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { AttachMenu } from "./AttachMenu.js";
 import { SuggestionPopover, optionId } from "./SuggestionPopover.js";
 import { useAutoGrow } from "./useAutoGrow.js";
@@ -26,6 +27,8 @@ export function Composer({
   sendDisabled,
   sendMode,
   stop,
+  onInterrupt,
+  onEditLast,
   providers,
   chips,
   onFiles,
@@ -40,8 +43,15 @@ export function Composer({
   onSend: () => void;
   sendDisabled: boolean;
   sendMode: "enter" | "modifier";
-  /** Present while an owned operation runs; replaces Send. */
+  /** Present while an owned operation runs and the box is empty; replaces Send. */
   stop?: () => void;
+  /**
+   * Present while an owned operation runs: Send then queues, and Interrupt and send (the menu beside Send, or
+   * Ctrl/⌘+Shift+Enter) stops the current step and sends (docs/chat-design.md §8).
+   */
+  onInterrupt?: () => void;
+  /** Up in the empty box edits the last waiting message, when there is one. */
+  onEditLast?: () => void;
   providers: SuggestionProvider[];
   /** Attachment chips, rendered above the message box. */
   chips: ReactNode;
@@ -264,9 +274,21 @@ export function Composer({
               // No matches: Enter falls through so `/unknown` sends verbatim.
             }
           }
-          if (event.key !== "Enter" || event.shiftKey) return;
-          if (sendMode === "modifier" && !event.ctrlKey && !event.metaKey)
+          if (event.key === "ArrowUp" && onEditLast && !draft && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+            event.preventDefault();
+            onEditLast();
             return;
+          }
+          if (event.key !== "Enter") return;
+          const modifier = event.ctrlKey || event.metaKey;
+          // Ctrl/⌘+Shift+Enter interrupts and sends while the agent works; when idle it sends, as Enter does.
+          if (modifier && event.shiftKey) {
+            event.preventDefault();
+            if (!sendDisabled) (onInterrupt ?? onSend)();
+            return;
+          }
+          if (event.shiftKey) return;
+          if (sendMode === "modifier" && !modifier) return;
           event.preventDefault();
           onSend();
         }}
@@ -302,17 +324,62 @@ export function Composer({
             <Square size={12} fill="currentColor" aria-hidden="true" />
           </button>
         ) : (
-          <button type="submit" className="composer-send" aria-label="Send" title="Send" disabled={sendDisabled}>
-            <ArrowUp size={16} aria-hidden="true" />
-          </button>
+          <>
+            <button
+              type="submit"
+              className="composer-send"
+              aria-label="Send"
+              title={onInterrupt ? "Send after the current step" : "Send"}
+              disabled={sendDisabled}
+            >
+              <ArrowUp size={16} aria-hidden="true" />
+            </button>
+            {onInterrupt && (
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild>
+                  <button
+                    type="button"
+                    className="icon-button composer-send-more"
+                    aria-label="More send options"
+                    title="More send options"
+                    disabled={sendDisabled}
+                  >
+                    <ChevronDown size={15} aria-hidden="true" />
+                  </button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    className="menu"
+                    side="top"
+                    align="end"
+                    sideOffset={8}
+                    collisionPadding={8}
+                    onCloseAutoFocus={(event) => {
+                      event.preventDefault();
+                      inputRef.current?.focus();
+                    }}
+                  >
+                    <DropdownMenu.Item className="menu-item" disabled={sendDisabled} onSelect={onInterrupt}>
+                      <Zap size={15} aria-hidden="true" /> Interrupt and send
+                      <kbd className="menu-shortcut">Ctrl/⌘ Shift Enter</kbd>
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            )}
+          </>
         )}
       </div>
     </div>
     {/* How to send, under the card; the message box refers to it (docs/chat-design.md §8). */}
     <p id={hintId} className="composer-hint">
-      {sendMode === "enter"
-        ? "Enter to send · Shift Enter for a new line · / for commands"
-        : "Ctrl/⌘ Enter to send · Enter for a new line · / for commands"}
+      {onInterrupt
+        ? sendMode === "enter"
+          ? "Enter to send after the current step · Ctrl/⌘ Shift Enter to interrupt and send"
+          : "Ctrl/⌘ Enter to send after the current step · Ctrl/⌘ Shift Enter to interrupt and send"
+        : sendMode === "enter"
+          ? "Enter to send · Shift Enter for a new line · / for commands"
+          : "Ctrl/⌘ Enter to send · Enter for a new line · / for commands"}
     </p>
     </>
   );

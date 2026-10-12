@@ -197,7 +197,7 @@ test.describe("openai agent", () => {
   test("a refused submit shows in the composer error area and keeps the choice", async ({ page, raw }) => {
     await openChat(page, raw);
     await choose(page, "End");
-    await page.route("**/api/sessions/*/operations", (route) =>
+    await page.route("**/api/sessions/*/inputs", (route) =>
       route.request().method() === "POST"
         ? route.fulfill({ status: 422, json: { error: { code: "invalid_request_option", message: "effort is not supported" } } })
         : route.continue(),

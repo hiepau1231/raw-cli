@@ -462,6 +462,8 @@ interface TurnProps {
   onOpenPanel: (panel: string) => void;
   /** Your pending message, for the turn that holds it. */
   pending: ReactNode;
+  /** Operations with work in a later turn: their time shows on their last group only. */
+  laterWork: string[];
 }
 const NONE: never[] = [];
 const sameList = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((value, index) => value === b[index]);
@@ -485,9 +487,13 @@ function sameTurn(a: TurnProps, b: TurnProps): boolean {
   return true;
 }
 
+/** A record a Work group shows: reasoning or a tool call, not a tool view or a question card. */
+const isWork = (record: HistoryView) =>
+  !record.interactionRequestId && !(record.toolView ?? record.panelReceipt?.view) && (record.kind === "reasoning" || !!record.callId);
+
 const TurnView = memo(function TurnView({
   records, keys, pairs, approvals: pendingApprovals, interactions, live, views, operations, compactions, panels,
-  priorTools, priorViews, priorCompactions, sessionId, preferences, availabilityRevision, actions, onInsert, onOpenPanel, pending,
+  priorTools, priorViews, priorCompactions, sessionId, preferences, availabilityRevision, actions, onInsert, onOpenPanel, pending, laterWork,
 }: TurnProps) {
   /** Each record's group key in the last committed render, so a group keeps its key when records join it at either end. */
   const groupKeys = useRef<ReadonlyMap<string, string>>(new Map());
@@ -498,6 +504,12 @@ const TurnView = memo(function TurnView({
   let receipts: PanelReceipt[] = [];
   let workActive = false;
   let elapsedMs: number | undefined;
+  /** Whether the open group holds its operation's last work: only that group says Working or how long the operation took. */
+  let workLast = false;
+  const lastWork = new Map<string, number>();
+  records.forEach((item, index) => {
+    if (item.operationId && isWork(item)) lastWork.set(item.operationId, index);
+  });
   const renderedTools = new Set(priorTools);
   const renderedCompact = new Set(priorCompactions);
   const renderedViews = new Set(priorViews);
@@ -559,8 +571,8 @@ const TurnView = memo(function TurnView({
         return { ...pill, label, name: label };
       });
       const count = rows.length - work.filter((entry) => "reasoning" in entry).length;
-      const active = workActive;
-      const elapsed = elapsedMs;
+      const active = workActive && workLast;
+      const elapsed = workLast ? elapsedMs : undefined;
       result.push(
         {
           unit: { ids: workIds, prefix: "work:" },
@@ -588,6 +600,7 @@ const TurnView = memo(function TurnView({
     receipts = [];
     workActive = false;
     elapsedMs = undefined;
+    workLast = false;
   };
   records.forEach((item, index) => {
     if (item.id === PENDING_RECORD) {
@@ -626,6 +639,7 @@ const TurnView = memo(function TurnView({
       );
       elapsedMs ??= operations.find((op) => op.id === item.operationId)
         ?.metrics?.elapsedMs;
+      workLast ||= !item.operationId || (lastWork.get(item.operationId) === index && !laterWork.includes(item.operationId));
       const key = keys[index]!;
       // A call's live record and its history records have different ids; the call names the group across both.
       workIds.push(item.id, ...(item.callId ? [`call:${key}`] : []));
@@ -841,6 +855,12 @@ export const Timeline = memo(function Timeline({
   const seenCompactions = new Set<string>();
   const views = Object.values(state.views);
   const interactions = state.interactions ?? [];
+  // A message delivered while a turn runs splits it; the operation's work after it is its last. Each operation's last
+  // turn with work, so a turn is told only about its own operations and a new operation leaves settled turns alone.
+  const lastWorkTurn = new Map<string, number>();
+  turns.forEach((turn, index) => {
+    for (const record of turn) if (record.operationId && isWork(record)) lastWorkTurn.set(record.operationId, index);
+  });
   return (
     <>
       {turns.map((turn, index) => {
@@ -886,6 +906,7 @@ export const Timeline = memo(function Timeline({
             addCompactions.push(record.compaction.id);
           }
         });
+        const laterWork = [...operationIds].filter((operationId) => lastWorkTurn.get(operationId)! > index).sort();
         for (const id of addViews) seenViews.add(id);
         for (const id of addTools) seenTools.add(id);
         for (const id of addCompactions) seenCompactions.add(id);
@@ -916,6 +937,7 @@ export const Timeline = memo(function Timeline({
           onInsert,
           onOpenPanel,
           pending: pending && segments.has(PENDING_RECORD) ? pending.node : undefined,
+          laterWork: laterWork.length ? laterWork : NONE,
         };
         return <TurnView key={turnKeyList[index]} {...props} />;
       })}

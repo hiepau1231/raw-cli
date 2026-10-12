@@ -1066,6 +1066,62 @@ test.describe("composer", () => {
   });
 });
 
+test.describe("waiting messages", () => {
+  test.use({ scenario: chatScenario });
+  const QUEUED = [
+    { input: "Sau khi sửa xong, chạy lại kiểm tra liên kết cho cả thư mục docs và ghi số liên kết hỏng vào báo cáo, kèm đường dẫn của từng trang có liên kết hỏng để tôi xem lại trước khi gửi." },
+    { input: "Xem thêm script này", files: ["scripts/check-links.mjs"] },
+    { input: "Bỏ qua các liên kết tới localhost." },
+  ];
+  /** Queues messages into the running turn, as the composer does. */
+  const queue = async (raw: Parameters<typeof installChatWorkspace>[0] & { json: <T>(path: string, method?: string, body?: unknown) => Promise<T> }, page: Page, items: Array<{ input: string; files?: string[] }>) => {
+    const sessionId = new URL(page.url()).pathname.split("/").at(-1)!;
+    for (const item of items)
+      await raw.json(`/sessions/${sessionId}/inputs`, "POST", { clientRequestId: crypto.randomUUID(), agent: "raw", mode: "queue", ...item });
+  };
+
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }])
+    test(`at ${viewport.width} px three cards sit above the composer card inside the column, and a fourth scrolls`, async ({ page, raw }) => {
+      installChatWorkspace(raw);
+      await page.setViewportSize(viewport);
+      await seedChat(page, raw, "approval");
+      await queue(raw, page, QUEUED);
+      const cards = page.getByTestId("queued-input");
+      await expect(cards).toHaveCount(3);
+      await expect(cards.nth(0)).toContainText("Sends after the current step");
+      await expect(cards.nth(1).locator(".sent-attachment")).toHaveText("check-links.mjs");
+      const box = (await page.locator(".composer-box").boundingBox())!;
+      const list = page.locator(".queued-inputs");
+      for (const card of await cards.all()) {
+        const at = (await card.boundingBox())!;
+        expect(at.x).toBeGreaterThanOrEqual(box.x - 0.5);
+        expect(at.x + at.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+        expect(at.y + at.height).toBeLessThanOrEqual(box.y);
+        for (const button of await card.getByRole("button").all()) {
+          const target = (await button.boundingBox())!;
+          expect(target.width).toBeGreaterThanOrEqual(32);
+          expect(target.height).toBeGreaterThanOrEqual(32);
+        }
+      }
+      // The long message shows two lines.
+      const text = cards.nth(0).locator(".queued-text");
+      const lineHeight = parseFloat(await text.evaluate((element) => getComputedStyle(element).lineHeight));
+      expect((await text.boundingBox())!.height).toBeLessThanOrEqual(2 * lineHeight + 1);
+      expect(await text.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+      // Three cards show whole; a fourth scrolls, and the conversation keeps at least half the height.
+      expect(await list.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+      await queue(raw, page, [{ input: "Cuối cùng, tóm tắt các thay đổi." }]);
+      await expect(cards).toHaveCount(4);
+      expect(await list.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(1);
+      expect((await page.locator(".conversation-scroll").boundingBox())!.height).toBeGreaterThanOrEqual(viewport.height / 2);
+      for (const theme of ["dark", "light"] as const) {
+        await setTheme(page, theme);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+        await axe(page);
+      }
+    });
+});
+
 test.describe("markdown outside the chat", () => {
   // The chat's typography, table box and code header stay in chat messages; other Markdown keeps its look.
   test("a Library preview keeps its type, table and code block", async ({ page, raw }) => {

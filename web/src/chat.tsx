@@ -18,8 +18,10 @@ import type { DashboardBootstrap } from "../../src/dashboard/contract.js";
 import type { RunResult } from "../../src/agent.js";
 import type { SessionOperation } from "../../src/sessions/operations.js";
 import type { SessionSummary } from "../../src/sessions/store.js";
+import type { QueuedInputView } from "../../src/sessions/view.js";
+import type { AttachmentInfo } from "../../src/dashboard/attachments.js";
 import type { Preferences } from "./preferences.js";
-import { api, ApiError, errorText, upload } from "./api.js";
+import { api, ApiError, errorText, fetchBlob, upload } from "./api.js";
 import { useComposerMeta, useHome } from "./data/queries.js";
 import { shortenPath } from "./workspace/workspace-state.js";
 import { Skeleton, TimelineSkeleton } from "./states.js";
@@ -28,7 +30,7 @@ import { contextCard } from "./composer/context-card.js";
 import { DETAILS_ID } from "./panels/panel-state.js";
 import { RequestControls } from "./composer/RequestControls.js";
 import { useRequestChoice } from "./composer/useRequestChoice.js";
-import { forgetSession, isTerminal, useSession } from "./session.js";
+import { addQueuedInput, forgetSession, isTerminal, useSession } from "./session.js";
 import { PendingMessage, Timeline } from "./timeline.js";
 import { Inspector } from "./inspector.js";
 import { resolveAction } from "../../src/panels/actions.js";
@@ -39,6 +41,7 @@ import { useRouter } from "./router.js";
 import { Composer } from "./composer/Composer.js";
 import { createDraftStore, type DraftStore } from "./composer/draft-store.js";
 import { AttachmentChips } from "./composer/AttachmentChips.js";
+import { QueuedInputs, type QueuedNotice } from "./composer/QueuedInputs.js";
 import { useAttachments, type Chip } from "./composer/useAttachments.js";
 import { fileProvider } from "./composer/files.js";
 import { slashProvider } from "./composer/commands.js";
@@ -59,15 +62,18 @@ function ComposerArea({
   store,
   blocked,
   hasContent,
+  stop,
   ...composer
 }: Omit<ComponentProps<typeof Composer>, "draft" | "onDraft" | "sendDisabled"> & {
   store: DraftStore;
-  /** Send is disabled whatever the draft: no session yet, busy, uploading, no agent, or an unconfirmed request. */
+  /** Send is disabled whatever the draft: no session yet, sending, owned elsewhere, uploading, no agent, or an unconfirmed request. */
   blocked: boolean;
   hasContent: boolean;
 }) {
   const draft = useSyncExternalStore(store.subscribe, store.get);
-  return <Composer {...composer} draft={draft} onDraft={store.set} sendDisabled={blocked || (!draft.trim() && !hasContent)} />;
+  const empty = !draft.trim() && !hasContent;
+  // While the agent works, an empty box offers Stop; a message offers Send, which waits for the current step.
+  return <Composer {...composer} {...(stop && empty ? { stop } : {})} draft={draft} onDraft={store.set} sendDisabled={blocked || empty} />;
 }
 
 /**
@@ -109,6 +115,8 @@ interface Outgoing extends Sent {
   status: "sending" | "sent" | "not_sent" | "not_confirmed";
   error?: string;
 }
+/** Where `POST /inputs` put a message (docs/dashboard-api.md): a turn it started, the queue, or a running turn that took it. */
+type InputReply = { operation?: SessionOperation; queued?: QueuedInputView; delivered?: { operationId: string; historySequence: number } };
 const sentStorageKey = (sessionId: string) => `raw.dashboard.sent.${sessionId}`;
 /** The messages a tab remembers attachments for. */
 const SENT_REMEMBERED = 20;
@@ -203,6 +211,7 @@ export function Chat({
   const [title, setTitle] = useState("");
   const [unconfirmed, setUnconfirmed] = useState<string>();
   const [outgoing, setOutgoing] = useState<Outgoing>();
+  const showQueued = (item: QueuedInputView) => setState((old) => addQueuedInput(old, item));
   const [narrow, setNarrow] = useState(
     () => matchMedia("(max-width:1199px)").matches,
   );
@@ -346,11 +355,13 @@ export function Chat({
   const checkReceipt = async (key: string) => {
     try {
       // Resolves a message wherever it went: a turn, a queued message, or one delivered into a running turn.
-      const found = await api<{ operation?: SessionOperation }>(
+      const found = await api<InputReply>(
         `/sessions/${id}/inputs?clientRequestId=${encodeURIComponent(key)}`,
       );
       if (found.operation) receipt(found.operation);
-      setOutgoing((old) => (old?.clientRequestId === key ? { ...old, status: "sent" } : old));
+      if (found.queued) showQueued(found.queued);
+      // A turn's operation tells where its message is from now on; a waiting or delivered message has its card or bubble.
+      setOutgoing((old) => (old?.clientRequestId === key ? (found.operation ? { ...old, status: "sent" } : undefined) : old));
       setUnconfirmed(undefined);
       setError("");
       try {
@@ -391,7 +402,7 @@ export function Chat({
    * Sends a message as a new request; its bubble shows from this call on (docs/chat-design.md §5). `staged` are the
    * images' staged ids; without them (Retry) the images are uploaded again, since a request consumes its staged items.
    */
-  const deliver = async (sent: Sent, staged: string[] | undefined) => {
+  const deliver = async (sent: Sent, staged: string[] | undefined, mode: "queue" | "interrupt" = "queue") => {
     const clientRequestId = crypto.randomUUID();
     rememberSent(id, clientRequestId, sent);
     setOutgoing({ ...sent, clientRequestId, status: "sending" });
@@ -401,6 +412,13 @@ export function Chat({
       setOutgoing((old) => (old?.clientRequestId === clientRequestId ? { ...old, status, ...(error ? { error } : {}) } : old));
     let attachments = staged;
     if (!attachments) {
+      // An image without a copy in this page cannot be sent again; the message is not sent without it.
+      const lost = sent.images.filter((chip) => !chip.file);
+      if (lost.length) {
+        mark("not_sent", `Attach ${lost.map((chip) => chip.name).join(", ")} again: this page no longer has a copy`);
+        putBack(sent, false);
+        return;
+      }
       try {
         const signal = new AbortController().signal;
         attachments = await Promise.all(
@@ -416,17 +434,25 @@ export function Chat({
       sessionStorage.setItem(`raw.dashboard.pending.${id}`, clientRequestId);
     } catch {}
     try {
-      const op = await api<SessionOperation>(`/sessions/${id}/operations`, "POST", {
+      // The server starts a turn when the session is idle and queues the message while a turn runs, so a turn that ends
+      // while this request travels cannot race it.
+      const reply = await api<InputReply>(`/sessions/${id}/inputs`, "POST", {
         clientRequestId,
-        kind: "turn",
         agent,
         input: sent.input,
+        mode,
         ...(attachments.length ? { attachments } : {}),
         ...(sent.files.length ? { files: sent.files.map((chip) => chip.path) } : {}),
         ...(request.body ? { request: request.body } : {}),
       });
-      receipt(op);
-      mark("sent");
+      if (reply.operation) {
+        receipt(reply.operation);
+        mark("sent");
+      } else {
+        // Its card above the composer holds it now.
+        if (reply.queued) showQueued(reply.queued);
+        setOutgoing((old) => (old?.clientRequestId === clientRequestId ? undefined : old));
+      }
       try {
         sessionStorage.removeItem(`raw.dashboard.pending.${id}`);
       } catch {}
@@ -445,12 +471,13 @@ export function Chat({
       if (cause.code === "unknown_attachment") att.expire();
     }
   };
-  const send = async (kind: "turn" | "compact") => {
+  const send = async (kind: "turn" | "compact", mode: "queue" | "interrupt" = "queue") => {
     const draft = store.get();
     if (
       !state ||
       submitting.current ||
-      busy ||
+      // A turn message waits for the agent; only another process holding the session refuses it.
+      (kind === "compact" ? busy : state.ownership === "elsewhere") ||
       !agent ||
       (kind === "turn" && (att.uploading || (!draft.trim() && !hasContent)))
     )
@@ -471,7 +498,7 @@ export function Chat({
         // The message leaves the box at once; its bubble holds it from here (docs/chat-design.md §5).
         store.set("");
         att.consume([...images, ...files].map((chip) => chip.key));
-        await deliver({ draft, input: text, images, files }, images.map((chip) => chip.serverId!));
+        await deliver({ draft, input: text, images, files }, images.map((chip) => chip.serverId!), mode);
         return;
       }
       const clientRequestId = crypto.randomUUID();
@@ -500,6 +527,79 @@ export function Chat({
       setPending(false);
     }
   };
+  /** Waiting messages with an action in flight or that turned out already sent; their card stays until the action ends. */
+  const [notices, setNotices] = useState<ReadonlyMap<string, { item: QueuedInputView; notice: QueuedNotice }>>(() => new Map());
+  useEffect(() => setNotices(new Map()), [id]);
+  const setNotice = (item: QueuedInputView, notice?: QueuedNotice) =>
+    setNotices((old) => {
+      const next = new Map(old);
+      if (notice) next.set(item.id, { item, notice });
+      else next.delete(item.id);
+      return next;
+    });
+  const dropInput = (inputId: string) =>
+    setState((old) => (old ? { ...old, inputs: old.inputs.filter((entry) => entry.id !== inputId) } : old));
+  /** Runs Edit, Delete or Send now on a waiting message; one the agent took meanwhile says Already sent for a moment. */
+  const onCard = async (item: QueuedInputView, action: () => Promise<void>) => {
+    setNotice(item, "working");
+    try {
+      await action();
+      setNotice(item);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "already_sent") {
+        setNotice(item, "already_sent");
+        setTimeout(() => setNotice(item), 2500);
+        return;
+      }
+      setNotice(item);
+      // A message deleted in another tab is simply gone.
+      if (cause instanceof ApiError && (cause.code === "deleted" || cause.status === 404)) dropInput(item.id);
+      else setError(errorText(cause));
+    }
+  };
+  const inputPath = (item: QueuedInputView) => `/sessions/${id}/inputs/${encodeURIComponent(item.id)}`;
+  /** Puts a waiting message back in the message box, before what is typed there, with its files and its images staged again. */
+  const editInput = (item: QueuedInputView) =>
+    void onCard(item, async () => {
+      const back = await api<{ input: string; files: string[]; attachments: AttachmentInfo[] }>(`${inputPath(item)}/edit`, "POST", {});
+      dropInput(item.id);
+      // A copy of each image in this page, as for an upload, so Retry can send it again after this send consumes it.
+      // Read first: the message comes back whole, so it is never sent without its images.
+      const images = await Promise.all(back.attachments.map(async (staged) => ({ ...staged,
+        file: await fetchBlob(`/sessions/${id}/attachments/${encodeURIComponent(staged.id)}`)
+          .then((blob) => new File([blob], staged.name, { type: staged.mimeType }), () => undefined) })));
+      const typed = store.get();
+      store.set(typed.trim() ? `${back.input}\n\n${typed}` : back.input);
+      for (const path of back.files) att.addFileRef(path);
+      att.addStaged(images);
+      input.current?.focus();
+    });
+  const deleteInput = (item: QueuedInputView) =>
+    void onCard(item, async () => {
+      await api(inputPath(item), "DELETE");
+      dropInput(item.id);
+    });
+  const sendNow = (item: QueuedInputView) =>
+    void onCard(item, async () => {
+      const reply = await api<InputReply>(`${inputPath(item)}/send-now`, "POST", {});
+      following.current = true;
+      setAtBottom(true);
+      if (reply.operation) {
+        receipt(reply.operation);
+        dropInput(item.id);
+        onChanged();
+      } else if (reply.queued) {
+        const queued = reply.queued;
+        setState((old) => (old ? { ...old, inputs: old.inputs.map((entry) => (entry.id === queued.id ? queued : entry)) } : old));
+      }
+    });
+  const queuedItems = useMemo(() => {
+    const items = state?.inputs ?? [];
+    const held = [...notices.values()].map(({ item }) => item).filter((item) => !items.some((entry) => entry.id === item.id));
+    return held.length ? [...items, ...held].sort((a, b) => a.createdAt - b.createdAt) : items;
+  }, [state?.inputs, notices]);
+  const queuedNotices = useMemo(() => new Map([...notices].map(([key, value]) => [key, value.notice])), [notices]);
+  const lastEditable = [...queuedItems].reverse().find((item) => !notices.has(item.id) && item.state !== "delivering");
   /**
    * The latest turn when the agent has not received its message: waiting while it starts, not delivered once it ended.
    * Delivery is the operation's committed position, so a message outside the loaded history still counts as received.
@@ -670,7 +770,7 @@ export function Chat({
     ? "Waiting for approval"
     : state?.interactions?.some(request => request.state === "pending")
       ? "Waiting for your answer"
-    : current?.state === "starting" || current?.state === "accepted" || pending
+    : current?.state === "starting" || current?.state === "accepted" || (pending && !current)
       ? "Preparing"
       : current?.state === "compacting"
         ? "Compacting"
@@ -930,6 +1030,7 @@ export function Chat({
                 </button>
               </div>
             )}
+            <QueuedInputs items={queuedItems} notices={queuedNotices} onEdit={editInput} onDelete={deleteInput} onSendNow={sendNow} />
             <form
               className="composer"
               onSubmit={(event) => {
@@ -941,7 +1042,7 @@ export function Chat({
                 store={store}
                 inputRef={input}
                 onSend={() => void send("turn")}
-                blocked={!state || !!busy || att.uploading || !agent || !!unconfirmed}
+                blocked={!state || pending || state.ownership === "elsewhere" || att.uploading || !agent || !!unconfirmed}
                 hasContent={hasContent}
                 chips={
                   <AttachmentChips
@@ -987,8 +1088,10 @@ export function Chat({
                           (cause) => setError(errorText(cause)),
                         );
                       },
+                      onInterrupt: () => void send("turn", "interrupt"),
                     }
                   : {})}
+                {...(lastEditable ? { onEditLast: () => editInput(lastEditable) } : {})}
               />
             </form>
           </div>

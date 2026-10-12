@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { readdir, realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { UserBlock } from "../llm/types.js";
 import { DashboardError } from "./errors.js";
 
@@ -109,4 +109,11 @@ export async function workspaceFileLink(cwd: string, raw: unknown): Promise<User
   let info; try { info = await stat(real); } catch { throw invalid("That file no longer exists"); }
   if (!info.isFile()) throw invalid("Only files can be referenced");
   return { type: "resource_link", uri: pathToFileURL(real).href, name: basename(real), size: info.size };
+}
+
+/** The workspace-relative path of a `resource_link` built by workspaceFileLink; undefined when it is not inside `root` (a real path). */
+export function workspaceLinkPath(root: string, uri: string): string | undefined {
+  let path: string; try { path = fileURLToPath(uri); } catch { return undefined; }
+  if (path === root || !within(root, path)) return undefined;
+  return relative(root, path).split(sep).join("/");
 }

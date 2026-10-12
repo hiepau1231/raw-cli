@@ -467,3 +467,73 @@ test("POST send-now starts a paused message and answers already_sent for a messa
     assert.equal(again.status, 409); assert.equal((await again.json() as { error: { code: string } }).error.code, "already_sent");
   } finally { await f.close(); }
 });
+
+test("POST edit takes a waiting message back with its workspace files and its images staged again", async () => {
+  const f = await dashboardFixture({ model: { vision: true }, responses: [{ hold: true }] });
+  try {
+    writeFileSync(join(f.root, "notes.md"), "# Notes");
+    const png = makePng();
+    const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root });
+    const inputs = `/sessions/${session.id}/inputs`;
+    await f.json<InputReply>(inputs, "POST", { clientRequestId: "first", agent: "raw", input: "go", mode: "queue" });
+    await until(() => f.provider.requests.length === 1, "the request");
+    const stage = async () => {
+      const response = await fetch(`${f.server.url}/api/sessions/${session.id}/attachments`, { method: "POST", body: new Uint8Array(png),
+        headers: { Authorization: `Bearer ${f.server.token}`, "Content-Type": "image/png", "X-Raw-Filename": "shot.png" } });
+      return (await response.json() as { id: string }).id;
+    };
+    const waiting = await f.json<InputReply>(inputs, "POST", { clientRequestId: "later", agent: "raw", input: "Review for typos",
+      files: ["notes.md"], attachments: [await stage()], mode: "queue" });
+    assert.equal(f.server.context.attachments!.size(), 0);
+    const back = await f.json<{ input: string; files: string[]; attachments: Array<{ id: string; name: string; mimeType: string; byteSize: number }> }>(
+      `${inputs}/${waiting.queued!.id}/edit`, "POST", {});
+    assert.equal(back.input, "Review for typos");
+    assert.deepEqual(back.files, ["notes.md"]);
+    assert.deepEqual(back.attachments.map((item) => [item.name, item.mimeType, item.byteSize]), [["shot.png", "image/png", png.length]]);
+    // The image is staged again under a new id, so sending the message again attaches the same bytes.
+    assert.equal(f.server.context.attachments!.size(), 1);
+    // The composer keeps its own copy of the bytes, read back from staging.
+    const read = await fetch(`${f.server.url}/api/sessions/${session.id}/attachments/${back.attachments[0]!.id}`, { headers: { Authorization: `Bearer ${f.server.token}` } });
+    assert.equal(read.status, 200); assert.equal(read.headers.get("content-type"), "image/png");
+    assert.deepEqual(Buffer.from(await read.arrayBuffer()), png);
+    assert.equal(f.server.context.attachments!.size(), 1);
+    const other = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root });
+    assert.equal((await f.api(`/sessions/${other.id}/attachments/${back.attachments[0]!.id}`)).status, 404);
+    assert.equal((await f.api(`/sessions/${session.id}/attachments/unknown`)).status, 404);
+    assert.deepEqual((await f.json<SessionSnapshot>(`/sessions/${session.id}`)).inputs, []);
+    const again = await f.api(`${inputs}/${waiting.queued!.id}/edit`, "POST", {});
+    assert.equal(again.status, 409); assert.equal((await again.json() as { error: { code: string } }).error.code, "deleted");
+    const resent = await f.json<InputReply>(inputs, "POST", { clientRequestId: "resent", agent: "raw", input: back.input, files: back.files,
+      attachments: back.attachments.map((item) => item.id), mode: "queue" });
+    assert.deepEqual(resent.queued?.attachments?.map((item) => [item.kind, item.name]), [["file", "notes.md"], ["image", "shot.png"]]);
+    // A message the agent took is not edited; nothing is staged for it.
+    const row = f.server.context.store!.findQueuedInput(session.id, "resent")!;
+    f.server.context.store!["database"].prepare("UPDATE session_queued_inputs SET state = 'delivering' WHERE id = ?").run(row.id);
+    const taken = await f.api(`${inputs}/${row.id}/edit`, "POST", {});
+    assert.equal(taken.status, 409); assert.equal((await taken.json() as { error: { code: string } }).error.code, "already_sent");
+    assert.equal(f.server.context.attachments!.size(), 0);
+    assert.equal((await f.api(`${inputs}/unknown/edit`, "POST", {})).status, 404);
+  } finally { await f.close(); }
+});
+
+test("POST edit leaves the message waiting when its images cannot be staged again", async () => {
+  const f = await dashboardFixture({ model: { vision: true }, responses: [{ hold: true }] });
+  try {
+    const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root });
+    const inputs = `/sessions/${session.id}/inputs`;
+    await f.json<InputReply>(inputs, "POST", { clientRequestId: "first", agent: "raw", input: "go", mode: "queue" });
+    await until(() => f.provider.requests.length === 1, "the request");
+    const stage = async () => {
+      const response = await fetch(`${f.server.url}/api/sessions/${session.id}/attachments`, { method: "POST", body: new Uint8Array(makePng()),
+        headers: { Authorization: `Bearer ${f.server.token}`, "Content-Type": "image/png", "X-Raw-Filename": "shot.png" } });
+      return (await response.json() as { id: string }).id;
+    };
+    const waiting = await f.json<InputReply>(inputs, "POST", { clientRequestId: "later", agent: "raw", input: "look", attachments: [await stage()], mode: "queue" });
+    // The composer already holds as many staged items as a chat may.
+    for (let index = 0; index < 8; index++) await stage();
+    const refused = await f.api(`${inputs}/${waiting.queued!.id}/edit`, "POST", {});
+    assert.equal(refused.status, 413);
+    assert.equal(f.server.context.attachments!.size(), 8);
+    assert.deepEqual((await f.json<SessionSnapshot>(`/sessions/${session.id}`)).inputs.map((item) => [item.clientRequestId, item.state]), [["later", "queued"]]);
+  } finally { await f.close(); }
+});

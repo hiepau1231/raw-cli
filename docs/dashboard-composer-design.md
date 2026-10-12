@@ -27,10 +27,12 @@ pick / drop / paste image
                                   -> staging (id, TTL, caps)
   <- {id, mimeType, byteSize}
 type text, `@` file chips
-  POST /sessions/:id/operations
-  {input, attachments[], files[]} -> resolve ids + paths
+  POST /sessions/:id/inputs
+  {input, attachments[], files[],
+   mode}                          -> resolve ids + paths
                                   -> UserBlock[] (text, resource_link, image)
-                                  -> SessionOperations.submit(intent, blocks)
+                                  -> SessionOperations.enqueue(intent, blocks)
+                                     (a turn when idle, else the queue: D15)
                                                                        -> agent.run(blocks)
                                                                        -> nativeUserContent
                                                                        -> adapter wire shape
@@ -104,6 +106,14 @@ Excluded: `reasoning_mode`, token budgets, `/reasoning` and `/tier` commands, pe
 ### D14. Context usage lives in the toolbar
 The context measurement is a ring with the percent in the toolbar, before Send, and its Context card ([chat-design.md](chat-design.md) §8) holds the numbers, Compact now and a link to Details. The footer line under the composer that repeated the same numbers was removed. Compact now, `/compact` and Details' Compact now run the same compact operation with the same disabled reasons.
 
+### D15. Sending while the agent works
+The composer never refuses a message because the agent is busy. Every send goes through `POST /sessions/:id/inputs` ([dashboard-api.md](dashboard-api.md)): the server starts a turn when the session is idle and otherwise queues the message in the session store, delivered after the current step ([sessions.md](sessions.md#messages-sent-while-a-turn-runs)). The server decides, not the browser, so a turn that ends while you click cannot race the message, a reload or a second tab shows the same queue, and a lost response resolves through the same receipt check as a turn.
+
+- **Keys.** Enter (Ctrl/⌘ Enter with that preference) sends, which queues while the agent works; Ctrl/⌘ Shift Enter interrupts and sends, as the menu beside Send does. When idle all of them send. Up in an empty box edits the last waiting message.
+- **Stop or Send.** While your operation runs, an empty box offers Stop and a message offers Send. Stop or an error pauses the queue; nothing starts until you press Send now.
+- **Cards.** Waiting messages are cards above the composer ([chat-design.md](chat-design.md) §8) from the session's `inputs`. Edit takes the message back (`POST /inputs/:id/edit`): the server deletes it and stages its images again, so the chips come back as uploads ready to send, also after a reload. The page reads the staged bytes back (`GET /attachments/:id`) and keeps them as the chip's file, as for an upload: a send consumes its staged items, and Retry uploads that copy again. An image without a copy is never dropped silently; the message is then not sent and asks for the image again. An action on a message the agent took first answers 409 `already_sent`; the card says **Already sent** and then leaves.
+- **Why the queue lives on the server.** A client-only queue would lose messages on reload, show nothing in other tabs, and need its own timing for "after the current step", which only the agent loop knows.
+
 ## Limits
 
 | Item | Value |
@@ -146,3 +156,4 @@ If a step beyond these is needed, the design has regressed; fix the registry rat
 | D12, image flow end to end | `tests/dashboard-ui/attachments.spec.ts`, `tests/dashboard-installed.test.ts` (installed artifact), `tests/dashboard-assets.test.ts` (bundle and CSP) |
 | D13 (server) | `tests/request-controls.test.ts`, `tests/dashboard-request-controls.test.ts` |
 | D13 (web) | `tests/web-request-choice.test.ts`, `tests/dashboard-ui/request-controls.spec.ts` |
+| D15 | `tests/dashboard-ui/send-while-working.spec.ts`, `tests/dashboard-sessions.test.ts` (POST /inputs, edit, send-now), `tests/dashboard-ui/chat-layout.spec.ts` (waiting messages) |

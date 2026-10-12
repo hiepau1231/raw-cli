@@ -107,6 +107,12 @@ export class AttachmentStaging {
       return item;
     });
   }
+  /** A staged item of this session, still there; nothing is consumed. */
+  read(sessionId: string, id: string): StagedAttachment | undefined {
+    this.prune();
+    const item = this.items.get(id);
+    return item && item.sessionId === sessionId ? item : undefined;
+  }
   release(ids: readonly string[]): void { for (const id of ids) this.items.delete(id); }
   size(): number { return this.items.size; }
   clear(): void { this.items.clear(); }

@@ -1276,6 +1276,24 @@ export class SessionStore {
     if (released) { try { this.reclaimUnreferencedPayloads(); } catch { /* Idle maintenance retries reclamation. */ } }
   }
 
+  /**
+   * Takes a waiting, paused or blocked message back to edit it: `use` gets its text and model input, and the message is
+   * deleted in the same transaction, so it is either back with the caller or still waiting, never both or neither.
+   */
+  takeBackQueuedInput<T>(sessionId: string, id: string, use: (text: string, input: UserInput) => T): T {
+    const { result, released } = this.transaction(() => {
+      const row = this.database.prepare("SELECT * FROM session_queued_inputs WHERE id = ? AND session_id = ?").get(id, sessionId);
+      if (!row) throw new SessionOperationError("not_found", "Queued message not found");
+      if (row.state === "deleted") throw new SessionOperationError("deleted", "This message was deleted before it was sent");
+      if (!["queued", "paused", "blocked"].includes(String(row.state))) throw new SessionOperationError("already_sent", "The agent already took this message");
+      const result = use(String(row.input_text ?? ""), this.queuedInput(row));
+      this.finalizeQueued(id, "deleted");
+      return { result, released: row.blocks_json !== null };
+    });
+    if (released) { try { this.reclaimUnreferencedPayloads(); } catch { /* Idle maintenance retries reclamation. */ } }
+    return result;
+  }
+
   private pauseOpenInputs(sessionId: string, reason?: string): void {
     this.database.prepare(`UPDATE session_queued_inputs SET state = 'paused', mode = 'queue', reason = ?, updated_at = ?
       WHERE session_id = ? AND state IN ('queued', 'delivering')`).run(reason ?? null, this.now(), sessionId);

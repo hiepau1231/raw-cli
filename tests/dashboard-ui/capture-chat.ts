@@ -38,6 +38,16 @@ const session = async (stage: "answer" | "approval" | "question", viewport: { wi
   await seedChat(page, raw, stage);
   return { raw, page };
 };
+/** Messages sent while the turn waits for approval: they wait as cards above the composer. */
+const queue = async ({ raw, page }: Awaited<ReturnType<typeof session>>) => {
+  const sessionId = new URL(page.url()).pathname.split("/").at(-1)!;
+  for (const item of [
+    { input: "Sau khi sửa xong, chạy lại kiểm tra liên kết cho cả thư mục docs và ghi số liên kết hỏng vào báo cáo, kèm đường dẫn của từng trang có liên kết hỏng để tôi xem lại trước khi gửi." },
+    { input: "Xem thêm script này", files: ["scripts/check-links.mjs"] },
+    { input: "Bỏ qua các liên kết tới localhost." },
+  ]) await raw.json(`/sessions/${sessionId}/inputs`, "POST", { clientRequestId: crypto.randomUUID(), agent: "raw", mode: "queue", ...item });
+  await expect(page.getByTestId("queued-input")).toHaveCount(3);
+};
 const shots: string[] = [];
 try {
   // The desktop with the side panel open and the write waiting for approval, as in the mockup, then the conversation
@@ -63,6 +73,13 @@ try {
     await desktop.page.locator(".conversation-scroll").evaluate((element) => { element.scrollTop = element.scrollHeight; });
   }
   shots.push("desktop", "work");
+  // Three waiting messages above the composer, one long, one with a file.
+  await queue(desktop);
+  for (const scheme of ["dark", "light"] as const) {
+    await desktop.page.emulateMedia({ colorScheme: scheme });
+    await shoot(desktop.page, "queued", scheme, ".chat-main");
+  }
+  shots.push("queued");
   await desktop.raw.close();
   // The composer of an idle conversation, its Context card open, as in the mockup.
   const idle = await session("answer", { width: 1440, height: 900 });
@@ -90,6 +107,14 @@ try {
   }
   shots.push("narrow");
   await narrow.raw.close();
+  const narrowQueued = await session("approval", { width: 390, height: 844 });
+  await queue(narrowQueued);
+  for (const scheme of ["dark", "light"] as const) {
+    await narrowQueued.page.emulateMedia({ colorScheme: scheme });
+    await shoot(narrowQueued.page, "queued-narrow", scheme);
+  }
+  shots.push("queued-narrow");
+  await narrowQueued.raw.close();
   console.log(`captured ${shots.length * 2} images: ${shots.join(", ")}`);
 } finally {
   await browser.close();
