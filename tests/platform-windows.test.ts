@@ -155,6 +155,20 @@ test("stopping a tree never signals a child that has already exited", () => {
   assert.equal(killed, 1);
 });
 
+test("a stop that fails while the child still runs is reported; one that loses a race with its exit is not", async () => {
+  const errors: string[] = [];
+  const onError = (message: string) => errors.push(message);
+  const stuck = { pid: 4244, exitCode: null, signalCode: null, kill: () => { throw new Error("access denied"); } } as unknown as ChildProcess;
+  terminateTree(stuck, { jobbed: true, onError });
+  const refused = { pid: 4245, exitCode: null, signalCode: null, kill: () => false } as unknown as ChildProcess;
+  terminateTree(refused, { jobbed: true, onError });
+  // Refuses the kill because it has just exited; its exit is seen a moment later.
+  const racing = { pid: 4246, exitCode: null as number | null, signalCode: null, kill() { setTimeout(() => { racing.exitCode = 0; }, 10); return false; } };
+  terminateTree(racing as unknown as ChildProcess, { jobbed: true, onError });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.deepEqual(errors, ["cannot stop process 4244: access denied", "cannot stop process 4245"]);
+});
+
 // The real launcher, compiled with the .NET Framework compiler on the Windows runner.
 
 function run(prepared: ResolvedCommand, options: { cwd?: string } = {}) {

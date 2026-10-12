@@ -39,15 +39,20 @@ import { spawn, spawnSync } from "child_process";
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 import { existsSync as existsSync2, mkdirSync, readFileSync, renameSync, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "fs";
 import { homedir } from "os";
-import path2 from "path";
+import path3 from "path";
 
 // src/package-root.ts
 import { existsSync } from "fs";
 import { dirname as dirname2, join as join2 } from "path";
 import { fileURLToPath } from "url";
 
+// src/platform/fs.ts
+import { closeSync as closeSync2, fsyncSync, openSync as openSync2 } from "fs";
+import { access, readFile, rename } from "fs/promises";
+import path2 from "path";
+
 // src/platform/windows.ts
-var win32 = path2.win32;
+var win32 = path3.win32;
 function mergeEnv(base, overrides = {}, platform = process.platform) {
   const merged = { ...base };
   for (const [key, value] of Object.entries(overrides)) {
@@ -81,14 +86,14 @@ var renamedArguments = { timeout_ms: "timeout" };
 function normalizeArguments(input) {
   const args = { ...input };
   const notes = [];
-  const rename = (from, to) => {
+  const rename2 = (from, to) => {
     if (!Object.hasOwn(args, from) || args[to] !== void 0) return;
     args[to] = args[from];
     delete args[from];
     notes.push(`read ${from} as ${to}`);
   };
-  rename("timeout_ms", "timeout");
-  for (const alias of ["process_id", "shell_id", "bash_id"]) rename(alias, "id");
+  rename2("timeout_ms", "timeout");
+  for (const alias of ["process_id", "shell_id", "bash_id"]) rename2(alias, "id");
   const allowed = typeof args.action === "string" ? FIELDS[args.action] : void 0;
   if (allowed) {
     for (const key of Object.keys(args)) if (!allowed.includes(key)) {

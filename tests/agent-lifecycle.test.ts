@@ -7,6 +7,9 @@ import { createAgent } from "../src/agent.js";
 import type { ProviderAdapter, ProviderRequest, ProviderTurn } from "../src/llm/types.js";
 import { createTestToolRegistry } from "./fixtures/registry.js";
 
+/** How a stopped bash call ends: Windows stops the whole job, elsewhere the process group. */
+const STOPPED = process.platform === "win32" ? "process tree stopped" : "process group stopped";
+
 const fake = (generate: (request: ProviderRequest) => Promise<ProviderTurn>): ProviderAdapter => ({
   modelConfig: { agentName: "fake", provider: "ollama", method: "openai-chat-completions", model: "fixture" }, generate,
 });
@@ -109,7 +112,7 @@ test("abort during first active tool records real and cancelled results, then re
   const toolResults = agent.transcript.filter((message) => message.role === "tool");
   assert.deepEqual(toolResults.map((message) => message.callId), ["done", "sleep", "pending"]);
   assert.equal(toolResults[1]?.result.host?.status, "cancelled");
-  assert.match(toolResults[1]!.result.content.map((block) => block.type === "text" ? block.text : "").join(""), /\[aborted after \d+\.\ds; process group stopped\]/);
+  assert.match(toolResults[1]!.result.content.map((block) => block.type === "text" ? block.text : "").join(""), new RegExp(`\\[aborted after \\d+\\.\\ds; ${STOPPED}\\]`));
   assert.equal(toolResults[2]?.result.code, "cancelled");
   assert.equal(events.filter((type) => type === "run_end").length, 1);
   assert.equal((await agent.run("recover")).status, "completed");

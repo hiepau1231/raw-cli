@@ -3,7 +3,7 @@
   "id": "bash",
   "version": "1.0.0",
   "name": "bash",
-  "description": "Run one Bash command with bash -c in the session cwd. The result is its output, stdout and stderr in the order produced, then a status line such as [exit 0 · 1.2s]; a nonzero exit is reported, not an error. Example: {\"command\":\"npm test\",\"timeout\":300000,\"description\":\"Run the test suite\"}. timeout is in milliseconds (default 120000, maximum 600000). For several commands make several calls, or join them with &&. Set run_in_background for servers and watchers, then use the process tool to read output or stop them. Long output keeps its start and end and names a file holding all of it.",
+  "description": "Run one Bash command (Git Bash on Windows) with bash -c in the session cwd. The result is its output, stdout and stderr in the order produced, then a status line such as [exit 0 · 1.2s]; a nonzero exit is reported, not an error. Example: {\"command\":\"npm test\",\"timeout\":300000,\"description\":\"Run the test suite\"}. timeout is in milliseconds (default 120000, maximum 600000). For several commands make several calls, or join them with &&. Set run_in_background for servers and watchers, then use the process tool to read output or stop them. Long output keeps its start and end and names a file holding all of it.",
   "display": {
     "title": "{description|Run command}",
     "kind": "execute",

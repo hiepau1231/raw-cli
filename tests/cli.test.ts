@@ -35,7 +35,8 @@ function ptyRaw(args: string[], env: NodeJS.ProcessEnv) {
   return { child, output: () => output };
 }
 
-async function waitFor(read: () => string, token: string, timeoutMs = 3000): Promise<void> {
+// Generous: a cold tsx compile on a loaded CI runner can take seconds before the first output.
+async function waitFor(read: () => string, token: string, timeoutMs = 10000): Promise<void> {
   const until = Date.now() + timeoutMs;
   while (!read().includes(token)) {
     if (Date.now() > until) throw new Error(`missing ${token}: ${read().slice(-500)}`);
@@ -380,7 +381,7 @@ test("T-08 review: queued REPL command follows an automatic tool call", { skip: 
 test("T-08b: Ctrl-C during an active PTY tool aborts it and exits 130", { skip: posixOnly("pty") }, async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-pty-cancel-"));
   const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
-    name: "bash", arguments: JSON.stringify({ command: `sleep 0.5; printf late > ${join(root, "marker")}` }),
+    name: "bash", arguments: JSON.stringify({ command: `sleep 0.5; printf late > ${JSON.stringify(join(root, "marker"))}` }),
   } }] }, "tool_calls"), openAiDone] }]);
   const { child, output } = ptyRaw(["--config", testConfig("openai", "fixture", fixture.url), "-y", "run shell"],
     { ...process.env, OPENAI_API_KEY: "key", NO_COLOR: "", TERM: "xterm-256color" });
@@ -398,7 +399,7 @@ test("T-08b: Ctrl-C during an active PTY tool aborts it and exits 130", { skip: 
 test("T-08b: REPL Ctrl-C aborts active work, then Ctrl-C while idle exits", { skip: posixOnly("pty") }, async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-repl-cancel-"));
   const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
-    name: "bash", arguments: JSON.stringify({ command: `sleep 1.5; printf late > ${join(root, "marker")}` }),
+    name: "bash", arguments: JSON.stringify({ command: `sleep 1.5; printf late > ${JSON.stringify(join(root, "marker"))}` }),
   } }] }, "tool_calls"), openAiDone] }]);
   const { child, output } = ptyRaw(["--config", testConfig("openai", "fixture", fixture.url), "--interactive", "-y"],
     { ...process.env, OPENAI_API_KEY: "key" });
@@ -424,7 +425,7 @@ test("T-08b: REPL Ctrl-C aborts active work, then Ctrl-C while idle exits", { sk
 test("T-08b: EOF during an active piped REPL turn aborts owned Bash", async () => {
   const root = await mkdtemp(join(tmpdir(), "raw-cli-repl-eof-"));
   const fixture = await startMockProvider([{ frames: [openAiFrame({ tool_calls: [{ index: 0, id: "shell", type: "function", function: {
-    name: "bash", arguments: JSON.stringify({ command: `sleep 0.5; printf late > ${join(root, "marker")}` }),
+    name: "bash", arguments: JSON.stringify({ command: `sleep 0.5; printf late > ${JSON.stringify(join(root, "marker"))}` }),
   } }] }, "tool_calls"), openAiDone] }]);
   const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), join(process.cwd(), "bin/raw.ts"),
     "--config", testConfig("openai", "fixture", fixture.url), "--interactive", "-y"],

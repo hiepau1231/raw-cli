@@ -384,7 +384,7 @@ export async function bashTool(args: BashArgs, context: ToolContext): Promise<To
   const started = performance.now();
   let result: ToolResult;
   try {
-    result = await runBash({ command: args.command, cwd, maxOutputBytes: Math.max(0, context.maxOutputBytes - BASH_STATUS_RESERVE),
+    result = await runBash({ command: args.command, cwd, workspace: context.cwd, maxOutputBytes: Math.max(0, context.maxOutputBytes - BASH_STATUS_RESERVE),
       timeoutMs: timeout,
       ...(activity ? { onOutput: activity.output } : {}),
       ...(bindings ? { env: mergeEnv(process.env, bindings) } : {}),
@@ -396,10 +396,12 @@ export async function bashTool(args: BashArgs, context: ToolContext): Promise<To
   }
   try { activity?.finish(result); } catch { /* UI persistence cannot change the completed Bash outcome. */ }
   const durationMs = Math.round(performance.now() - started);
-  if (result.code === "bash_spawn_error" || result.code === "bash_error") return { ...result, host: host("error", { durationMs }) };
+  if (result.code === "bash_spawn_error" || result.code === "bash_error" || result.code === "bash_unavailable") return { ...result, host: host("error", { durationMs }) };
   const aborted = result.code === "aborted" || context.signal?.aborted === true;
-  const status = aborted ? `[aborted after ${seconds(durationMs)}; process group stopped]`
-    : result.timedOut ? `[timed out after ${timeout / 1000}s; process group stopped]`
+  // Windows stops the command's whole job at once rather than signalling a process group.
+  const stopped = process.platform === "win32" ? "process tree stopped" : "process group stopped";
+  const status = aborted ? `[aborted after ${seconds(durationMs)}; ${stopped}]`
+    : result.timedOut ? `[timed out after ${timeout / 1000}s; ${stopped}]`
       : result.exitCode === null || result.exitCode === undefined ? `[killed by ${result.signal ?? "signal"} · ${seconds(durationMs)}]`
         : `[exit ${result.exitCode} · ${seconds(durationMs)}]`;
   // Reached with run_in_background only when the call was not handed to the process tool.

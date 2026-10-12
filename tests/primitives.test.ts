@@ -8,6 +8,9 @@ import { createTestToolRegistry } from "./fixtures/registry.js";
 import { fileURLToPath } from "node:url";
 import { resolveToolPath } from "../src/platform/paths.js";
 
+/** How a stopped bash call ends: Windows stops the whole job, elsewhere the process group. */
+const STOPPED = process.platform === "win32" ? "process tree stopped" : "process group stopped";
+
 const context = (cwd: string, maxOutputBytes = 8192) => ({ cwd, maxOutputBytes, autoApprove: true });
 
 const text = (result: { content: Array<{ type: string; text?: string }> }) => result.content.map((block) => block.type === "text" ? block.text : "").join("");
@@ -64,7 +67,7 @@ test("bash preserves output channels, exit status and bounded UTF-8 while draini
   assert.equal(Buffer.byteLength(await readFile(huge.host.fullOutputPath, "utf8")), 200004);
   const timeout = await registry.dispatch("bash", { command: "sleep 5", timeout: 20 }, context(cwd));
   assert.equal(timeout.host?.status, "timeout");
-  assert.match(text(timeout), /\[timed out after 0\.02s; process group stopped\]$/);
+  assert.match(text(timeout), new RegExp(`\\[timed out after 0\\.02s; ${STOPPED}\\]$`));
   assert.notEqual(timeout.host?.exitCode, 0);
 });
 
@@ -85,7 +88,7 @@ test("abort kills owned shell descendants and leaves unrelated processes running
   controller.abort();
   const result = await task;
   assert.equal(result.host?.status, "cancelled");
-  assert.match(text(result), /\[aborted after \d+\.\ds; process group stopped\]$/);
+  assert.match(text(result), new RegExp(`\\[aborted after \\d+\\.\\ds; ${STOPPED}\\]$`));
   await otherExited;
   await new Promise((resolve) => setTimeout(resolve, 250));
   let ownedRunning = false;

@@ -156,6 +156,10 @@ function errorResult(code, message) {
 import { closeSync as closeSync2, fsyncSync, openSync as openSync2 } from "fs";
 import { access, readFile, rename } from "fs/promises";
 import path2 from "path";
+function contained(root, candidate, api = path2) {
+  const rel = api.relative(api.resolve(root), api.resolve(candidate));
+  return rel === "" || rel !== ".." && !rel.startsWith(`..${api.sep}`) && !api.isAbsolute(rel);
+}
 
 // src/tools/file-patch.ts
 var PATCH_BYTES = 1024 * 1024;
@@ -194,8 +198,210 @@ import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat 
 import { dirname as dirname4 } from "path";
 
 // src/tools/process.ts
-import { spawn } from "child_process";
+import { spawn as spawn2 } from "child_process";
 import { StringDecoder } from "string_decoder";
+
+// src/platform/windows.ts
+import { spawn, spawnSync } from "child_process";
+import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
+import { existsSync as existsSync2, mkdirSync, readFileSync, renameSync, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "fs";
+import { homedir as homedir2 } from "os";
+import path3 from "path";
+
+// src/package-root.ts
+import { existsSync } from "fs";
+import { dirname as dirname3, join as join3 } from "path";
+import { fileURLToPath } from "url";
+function packageRoot() {
+  let directory2 = dirname3(fileURLToPath(import.meta.url));
+  for (; ; ) {
+    if (existsSync(join3(directory2, "package.json"))) return directory2;
+    const parent = dirname3(directory2);
+    if (parent === directory2) throw new Error("Raw package root not found");
+    directory2 = parent;
+  }
+}
+
+// src/platform/windows.ts
+var win32 = path3.win32;
+function mergeEnv(base, overrides = {}, platform = process.platform) {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (platform === "win32") for (const existing of Object.keys(merged)) {
+      if (existing !== key && existing.toUpperCase() === key.toUpperCase()) delete merged[existing];
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
+function envValue(env, name) {
+  if (env[name] !== void 0) return env[name];
+  const upper = name.toUpperCase();
+  for (const [key, value] of Object.entries(env)) if (key.toUpperCase() === upper) return value;
+  return void 0;
+}
+function windowsFolder(env = process.env) {
+  return envValue(env, "SystemRoot") || envValue(env, "windir") || "C:\\Windows";
+}
+function systemBinary(name, env = process.env) {
+  return win32.join(windowsFolder(env), "System32", name);
+}
+function isRegularFile(file) {
+  try {
+    return statSync2(file).isFile();
+  } catch {
+    return false;
+  }
+}
+function quoteWindowsArgument(arg) {
+  if (!arg) return '""';
+  if (!/[ \t"]/.test(arg)) return arg;
+  if (!/["\\]/.test(arg)) return `"${arg}"`;
+  let out = "";
+  let beforeQuote = true;
+  for (let i = arg.length - 1; i >= 0; i--) {
+    const char = arg[i];
+    out = char + out;
+    if (beforeQuote && char === "\\") out = "\\" + out;
+    else if (char === '"') {
+      beforeQuote = true;
+      out = "\\" + out;
+    } else beforeQuote = false;
+  }
+  return `"${out}"`;
+}
+function findGitBash(env, workspace, exists = isRegularFile) {
+  const configured = envValue(env, "RAW_BASH_PATH");
+  if (configured) return configured;
+  const windows = windowsFolder(env);
+  const allowed = (candidate) => !contained(windows, candidate, win32) && !contained(workspace, candidate, win32) && !candidate.split(/[\\/]/).some((part) => part.toLowerCase() === "windowsapps");
+  const usable = (candidate) => allowed(candidate) && exists(candidate);
+  const installs = [envValue(env, "ProgramFiles"), envValue(env, "ProgramW6432")].filter((root) => !!root).map((root) => win32.join(root, "Git", "bin", "bash.exe"));
+  const local = envValue(env, "LOCALAPPDATA");
+  for (const candidate of [...installs, ...local ? [win32.join(local, "Programs", "Git", "bin", "bash.exe")] : []]) {
+    if (usable(candidate)) return candidate;
+  }
+  const entries = (envValue(env, "PATH") ?? "").split(";").map((entry) => entry.replace(/^"(.*)"$/, "$1")).filter((entry) => entry && win32.isAbsolute(entry) && allowed(entry));
+  for (const entry of entries) {
+    if (!exists(win32.join(entry, "git.exe"))) continue;
+    const root = /[\\/]cmd[\\/]?$/i.test(entry) ? win32.dirname(win32.resolve(entry)) : /[\\/]mingw(?:32|64)[\\/]bin[\\/]?$/i.test(entry) ? win32.dirname(win32.dirname(win32.resolve(entry))) : void 0;
+    if (root && usable(win32.join(root, "bin", "bash.exe"))) return win32.join(root, "bin", "bash.exe");
+  }
+  for (const entry of entries) if (exists(win32.join(entry, "bash.exe"))) return win32.join(entry, "bash.exe");
+  return void 0;
+}
+var launchers = /* @__PURE__ */ new Map();
+var warned = false;
+function launcherSource() {
+  const root = packageRoot();
+  for (const candidate of [path3.join(root, "dist", "platform", "job-launcher.cs"), path3.join(root, "src", "platform", "job-launcher.cs")]) {
+    if (existsSync2(candidate)) return readFileSync(candidate, "utf8");
+  }
+  throw new Error("job-launcher.cs is missing from the Raw package");
+}
+function compileLauncher(source, output, env) {
+  const windows = windowsFolder(env);
+  const compiler = ["Framework64", "Framework"].map((folder) => win32.join(windows, "Microsoft.NET", folder, "v4.0.30319", "csc.exe")).find((candidate) => existsSync2(candidate));
+  if (!compiler) throw new Error("the .NET Framework C# compiler (csc.exe) was not found");
+  const input = `${output}.cs`;
+  writeFileSync(input, source);
+  try {
+    const result = spawnSync(compiler, ["/nologo", "/optimize", "/target:exe", `/out:${output}`, input], { encoding: "utf8", windowsHide: true, env });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`csc.exe failed: ${(result.stdout + result.stderr).trim().slice(0, 2e3)}`);
+  } finally {
+    rmSync2(input, { force: true });
+  }
+}
+function stateDirectory(env = process.env) {
+  return path3.join(env.XDG_STATE_HOME ? path3.resolve(env.XDG_STATE_HOME) : path3.join(homedir2(), ".local", "state"), "raw");
+}
+function jobLauncher(options) {
+  if ((options.platform ?? process.platform) !== "win32") return void 0;
+  const env = options.env ?? process.env;
+  let result;
+  let target;
+  try {
+    const source = options.source ?? launcherSource();
+    target = path3.join(options.stateDir, "bin", `raw-job-${createHash2("sha256").update(source).digest("hex").slice(0, 12)}.exe`);
+    if (launchers.has(target)) return launchers.get(target);
+    if (!existsSync2(target)) {
+      mkdirSync(path3.dirname(target), { recursive: true });
+      const staged = `${target}.${randomUUID3()}.exe`;
+      try {
+        (options.compile ?? compileLauncher)(source, staged, env);
+        try {
+          renameSync(staged, target);
+        } catch (error) {
+          if (!existsSync2(target)) throw error;
+        }
+      } finally {
+        rmSync2(staged, { force: true });
+      }
+    }
+    result = target;
+  } catch (error) {
+    if (!warned) {
+      warned = true;
+      (options.log ?? ((message) => process.stderr.write(`${message}
+`)))(
+        `raw: the Windows job launcher is unavailable (${error.message}); process trees are stopped with taskkill`
+      );
+    }
+  }
+  if (target) launchers.set(target, result);
+  return result;
+}
+function wrapInJob(resolved, launcher) {
+  if (!launcher) return resolved;
+  const quote = resolved.windowsVerbatimArguments ? (arg) => arg : quoteWindowsArgument;
+  const line = [resolved.file, ...resolved.args].map(quote).join(" ");
+  const encode = (text) => Buffer.from(text, "utf8").toString("base64");
+  return { file: launcher, args: ["--app", encode(resolved.file), "--line", encode(line)] };
+}
+var exited = (child) => child.exitCode !== null || child.signalCode !== null;
+function terminateTree(child, options) {
+  if (!child.pid || exited(child)) return;
+  const report = (message) => {
+    setTimeout(() => {
+      if (!exited(child)) options.onError?.(message);
+    }, 250).unref();
+  };
+  const last = () => {
+    if (exited(child)) return;
+    try {
+      if (!child.kill()) report(`cannot stop process ${child.pid}`);
+    } catch (error) {
+      report(`cannot stop process ${child.pid}: ${error.message}`);
+    }
+  };
+  if (options.jobbed) return last();
+  const killer = spawn(systemBinary("taskkill.exe", options.env), ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true });
+  killer.on("error", (error) => {
+    report(`taskkill failed: ${error.message}`);
+    last();
+  });
+  killer.on("exit", (code) => {
+    if (code !== 0) report(`taskkill exited with ${code}`);
+    last();
+  });
+}
+
+// src/tools/shells.ts
+var BASH_UNAVAILABLE = "Bash was not found. Install Git for Windows, set RAW_BASH_PATH to its bin\\bash.exe, or select builtin/powershell.";
+var found = /* @__PURE__ */ new Map();
+function resolveBash(options) {
+  const env = options.env ?? process.env;
+  if ((options.platform ?? process.platform) !== "win32") return { ok: true, path: env.RAW_BASH_PATH || "bash" };
+  const key = JSON.stringify([options.workspace, ...["RAW_BASH_PATH", "PATH", "ProgramFiles", "ProgramW6432", "LOCALAPPDATA", "SystemRoot", "windir"].map((name) => envValue(env, name) ?? null)]);
+  const cached = options.exists ? void 0 : found.get(key);
+  const path4 = cached ?? findGitBash(env, options.workspace, options.exists);
+  if (!path4) return { ok: false, code: "bash_unavailable", message: BASH_UNAVAILABLE };
+  if (!options.exists) found.set(key, path4);
+  return { ok: true, path: path4 };
+}
+
+// src/tools/process.ts
 var OrderedCapture = class {
   constructor(headCap, tailCap) {
     this.headCap = headCap;
@@ -275,18 +481,34 @@ function merge(segments) {
   }
   return merged;
 }
+var jobbedShells = /* @__PURE__ */ new WeakSet();
 function spawnShell(options, platform = process.platform) {
-  return spawn(options.bashPath ?? process.env.RAW_BASH_PATH ?? "bash", ["-c", options.command], {
+  const bash = options.bashPath ? { ok: true, path: options.bashPath } : resolveBash({ platform, workspace: options.workspace ?? options.cwd });
+  if (!bash.ok) throw Object.assign(new Error(bash.message), { code: bash.code });
+  let launch = { file: bash.path, args: ["-c", options.command] };
+  let jobbed = false;
+  if (platform === "win32") {
+    const launcher = jobLauncher({ platform, stateDir: stateDirectory() });
+    launch = wrapInJob(launch, launcher);
+    jobbed = launcher !== void 0;
+  }
+  const child = spawn2(launch.file, launch.args, {
     cwd: options.cwd,
     ...options.env ? { env: options.env } : {},
     stdio: ["ignore", "pipe", "pipe"],
     detached: platform !== "win32",
     windowsHide: true
   });
+  if (jobbed) jobbedShells.add(child);
+  return child;
 }
-function signalShellGroup(child, signal, platform = process.platform) {
+function signalShellGroup(child, signal, platform = process.platform, onError) {
+  if (platform === "win32") {
+    terminateTree(child, { jobbed: jobbedShells.has(child), ...onError ? { onError } : {} });
+    return;
+  }
   try {
-    if (child.pid) process.kill(platform !== "win32" ? -child.pid : child.pid, signal);
+    if (child.pid) process.kill(-child.pid, signal);
   } catch (error) {
     if (error.code !== "ESRCH") throw error;
   }
@@ -294,7 +516,14 @@ function signalShellGroup(child, signal, platform = process.platform) {
 async function runBash(options) {
   if (options.signal?.aborted) return errorResult("aborted", "bash aborted before execution");
   const timeoutMs = options.timeoutMs ?? 12e4;
-  const child = spawnShell(options);
+  let child;
+  try {
+    child = spawnShell(options);
+  } catch (error) {
+    const code = error.code;
+    if (code === "bash_unavailable") return errorResult(code, error.message);
+    return errorResult("bash_spawn_error", `cannot start Bash: ${error.message}`);
+  }
   let observedBytes = 0;
   let timedOut = false;
   let aborted = false;
@@ -314,7 +543,17 @@ async function runBash(options) {
     resolveCancelled = resolve2;
   });
   let escalation;
-  const signalGroup = (signal) => signalShellGroup(child, signal);
+  let stopFailure;
+  const signalGroup = (signal) => {
+    const failed = (message) => {
+      stopFailure ??= message;
+    };
+    try {
+      signalShellGroup(child, signal, process.platform, failed);
+    } catch (error) {
+      failed(error.message);
+    }
+  };
   const stop = (reason) => {
     if (aborted || timedOut) return;
     if (reason === "abort") aborted = true;
@@ -356,16 +595,21 @@ async function runBash(options) {
   };
   child.stdout?.on("data", (chunk) => append("stdout", chunk));
   child.stderr?.on("data", (chunk) => append("stderr", chunk));
-  let exited = { code: null, signal: null };
+  let exited2 = { code: null, signal: null };
   const exitedPromise = new Promise((resolve2) => {
     child.once("exit", (code, signal) => {
-      exited = { code, signal };
+      exited2 = { code, signal };
       resolve2();
     });
   });
+  let started = false;
+  child.once("spawn", () => {
+    started = true;
+  });
   const closedPromise = new Promise((resolve2) => {
-    child.once("error", (error) => {
-      spawnError = error;
+    child.on("error", (error) => {
+      if (started) stopFailure ??= error.message;
+      else spawnError ??= error;
     });
     child.once("close", () => resolve2());
   });
@@ -393,43 +637,20 @@ async function runBash(options) {
   if (spawnError) return errorResult("bash_spawn_error", `cannot start Bash: ${spawnError.message}`);
   const { segments, truncated } = capture.render(max, savedLabel(spill?.path, spill?.capped));
   const content = segments.map((segment) => segment.channel ? { type: "text", channel: segment.channel, text: segment.text } : { type: "text", text: segment.text });
+  if (stopFailure) content.push({ type: "text", text: `
+[stopping the command failed: ${stopFailure}]` });
   return {
     isError: aborted || timedOut,
     ...aborted ? { code: "aborted" } : timedOut ? { code: "timeout" } : {},
     content,
-    exitCode: exited.code,
-    signal: exited.signal,
+    exitCode: exited2.code,
+    signal: exited2.signal,
     timedOut,
     truncated,
     retainedBytes: segments.reduce((sum, segment) => sum + Buffer.byteLength(segment.text), 0),
     observedBytes,
     ...truncated && spill?.path ? { fullOutputPath: spill.path, ...spill.capped ? { fullOutputCapped: true } : {} } : {}
   };
-}
-
-// src/platform/windows.ts
-import { spawn as spawn2, spawnSync } from "child_process";
-import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
-import { existsSync as existsSync2, mkdirSync, readFileSync, renameSync, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "fs";
-import { homedir as homedir2 } from "os";
-import path3 from "path";
-
-// src/package-root.ts
-import { existsSync } from "fs";
-import { dirname as dirname3, join as join3 } from "path";
-import { fileURLToPath } from "url";
-
-// src/platform/windows.ts
-var win32 = path3.win32;
-function mergeEnv(base, overrides = {}, platform = process.platform) {
-  const merged = { ...base };
-  for (const [key, value] of Object.entries(overrides)) {
-    if (platform === "win32") for (const existing of Object.keys(merged)) {
-      if (existing !== key && existing.toUpperCase() === key.toUpperCase()) delete merged[existing];
-    }
-    merged[key] = value;
-  }
-  return merged;
 }
 
 // src/tools/primitives.ts
@@ -468,6 +689,7 @@ async function bashTool(args, context) {
     result = await runBash({
       command: args.command,
       cwd,
+      workspace: context.cwd,
       maxOutputBytes: Math.max(0, context.maxOutputBytes - BASH_STATUS_RESERVE),
       timeoutMs: timeout,
       ...activity ? { onOutput: activity.output } : {},
@@ -483,9 +705,10 @@ async function bashTool(args, context) {
   } catch {
   }
   const durationMs = Math.round(performance.now() - started);
-  if (result.code === "bash_spawn_error" || result.code === "bash_error") return { ...result, host: host("error", { durationMs }) };
+  if (result.code === "bash_spawn_error" || result.code === "bash_error" || result.code === "bash_unavailable") return { ...result, host: host("error", { durationMs }) };
   const aborted = result.code === "aborted" || context.signal?.aborted === true;
-  const status = aborted ? `[aborted after ${seconds(durationMs)}; process group stopped]` : result.timedOut ? `[timed out after ${timeout / 1e3}s; process group stopped]` : result.exitCode === null || result.exitCode === void 0 ? `[killed by ${result.signal ?? "signal"} \xB7 ${seconds(durationMs)}]` : `[exit ${result.exitCode} \xB7 ${seconds(durationMs)}]`;
+  const stopped = process.platform === "win32" ? "process tree stopped" : "process group stopped";
+  const status = aborted ? `[aborted after ${seconds(durationMs)}; ${stopped}]` : result.timedOut ? `[timed out after ${timeout / 1e3}s; ${stopped}]` : result.exitCode === null || result.exitCode === void 0 ? `[killed by ${result.signal ?? "signal"} \xB7 ${seconds(durationMs)}]` : `[exit ${result.exitCode} \xB7 ${seconds(durationMs)}]`;
   const notes = [
     ...requested > BASH_MAX_TIMEOUT_MS ? [`[timeout clamped to ${BASH_MAX_TIMEOUT_MS} ms]`] : [],
     ...args.run_in_background === true ? [BACKGROUND_IGNORED] : []

@@ -13,9 +13,10 @@ test("packaged bundled plugins preserve exact definitions and semantic batch pre
   const registry = new ToolRegistry();
   for (const plugin of plugins) registry.register(plugin);
   assert.deepEqual(registry.definitions(), createTestToolRegistry([], true).definitions());
-  // Intentional revision: bash, read_file and write_file take one action in the trained shape (docs/tool-ux-design.md §4.2).
+  // Intentional revisions: bash, read_file and write_file take one action in the trained shape (docs/tool-ux-design.md §4.2);
+  // bash names Git Bash on Windows.
   assert.equal(createHash("sha256").update(JSON.stringify(registry.definitions())).digest("hex"),
-    "2c47b24c8f3062bf78a633e86bfb067178f78b5cabdb58c04f70a2fe873ab8bd");
+    "63159c221aa12186ef7af43f3204b9779965c6728699a29c732a28bf19cf69fa");
 
   const cwd = await mkdtemp(join(tmpdir(), "raw-bundled-"));
   const marker = join(cwd, "side-effect");

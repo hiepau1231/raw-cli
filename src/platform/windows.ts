@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { homedir } from "node:os";
 import path from "node:path";
 import { packageRoot } from "../package-root.js";
+import { contained } from "./fs.js";
 
 const win32 = path.win32;
 
@@ -28,9 +29,14 @@ export function envValue(env: NodeJS.ProcessEnv, name: string): string | undefin
   return undefined;
 }
 
+/** The Windows folder: SystemRoot, else windir, else C:\\Windows; an empty value counts as unset. */
+export function windowsFolder(env: NodeJS.ProcessEnv = process.env): string {
+  return envValue(env, "SystemRoot") || envValue(env, "windir") || "C:\\Windows";
+}
+
 /** An executable in the Windows System32 folder, by absolute path so neither PATH nor the cwd can shadow it. */
 export function systemBinary(name: string, env: NodeJS.ProcessEnv = process.env): string {
-  return win32.join(envValue(env, "SystemRoot") ?? envValue(env, "windir") ?? "C:\\Windows", "System32", name);
+  return win32.join(windowsFolder(env), "System32", name);
 }
 
 export interface ResolvedCommand {
@@ -89,7 +95,7 @@ export function resolveCommand(command: string, args: readonly string[], options
     return { ok: true, file: powershell, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file, ...args] };
   }
   if (extension === ".sh") {
-    const bash = options.bash?.();
+    const bash = (options.bash ?? (() => findGitBash(env, options.cwd, exists)))();
     if (!bash) return { ok: false, code: "bash_unavailable", message: "Bash was not found. Install Git for Windows or set RAW_BASH_PATH to its bin\\bash.exe." };
     return { ok: true, file: bash, args: [file, ...args] };
   }
@@ -149,6 +155,38 @@ export function findPowerShell(env: NodeJS.ProcessEnv = process.env, exists: (fi
   return undefined;
 }
 
+/**
+ * Git Bash for `workspace`: RAW_BASH_PATH as given, then Git's usual install folders, then the `bin\bash.exe` of the Git
+ * whose git.exe is on PATH, then a bash.exe on PATH. WSL's launcher is never picked implicitly: PATH entries under the
+ * Windows folder or a WindowsApps folder are skipped, as are relative entries and every candidate inside the workspace.
+ */
+export function findGitBash(env: NodeJS.ProcessEnv, workspace: string, exists: (file: string) => boolean = isRegularFile): string | undefined {
+  const configured = envValue(env, "RAW_BASH_PATH");
+  if (configured) return configured;
+  const windows = windowsFolder(env);
+  // Never implicitly: the Windows folder (WSL's bash.exe), a WindowsApps folder (its app alias) or the workspace.
+  const allowed = (candidate: string) => !contained(windows, candidate, win32) && !contained(workspace, candidate, win32)
+    && !candidate.split(/[\\/]/).some((part) => part.toLowerCase() === "windowsapps");
+  const usable = (candidate: string) => allowed(candidate) && exists(candidate);
+  const installs = [envValue(env, "ProgramFiles"), envValue(env, "ProgramW6432")].filter((root): root is string => !!root)
+    .map((root) => win32.join(root, "Git", "bin", "bash.exe"));
+  const local = envValue(env, "LOCALAPPDATA");
+  for (const candidate of [...installs, ...(local ? [win32.join(local, "Programs", "Git", "bin", "bash.exe")] : [])]) {
+    if (usable(candidate)) return candidate;
+  }
+  const entries = (envValue(env, "PATH") ?? "").split(";").map((entry) => entry.replace(/^"(.*)"$/, "$1"))
+    .filter((entry) => entry && win32.isAbsolute(entry) && allowed(entry));
+  for (const entry of entries) {
+    if (!exists(win32.join(entry, "git.exe"))) continue;
+    // Git for Windows keeps git.exe in <root>\cmd and <root>\mingw64\bin; <root>\bin\bash.exe sets up its environment.
+    const root = /[\\/]cmd[\\/]?$/i.test(entry) ? win32.dirname(win32.resolve(entry))
+      : /[\\/]mingw(?:32|64)[\\/]bin[\\/]?$/i.test(entry) ? win32.dirname(win32.dirname(win32.resolve(entry))) : undefined;
+    if (root && usable(win32.join(root, "bin", "bash.exe"))) return win32.join(root, "bin", "bash.exe");
+  }
+  for (const entry of entries) if (exists(win32.join(entry, "bash.exe"))) return win32.join(entry, "bash.exe");
+  return undefined;
+}
+
 export interface JobLauncherOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
@@ -175,7 +213,7 @@ export function launcherSource(): string {
 
 /** The .NET Framework C# compiler that ships with Windows. */
 export function compileLauncher(source: string, output: string, env: NodeJS.ProcessEnv): void {
-  const windows = envValue(env, "SystemRoot") ?? envValue(env, "windir") ?? "C:\\Windows";
+  const windows = windowsFolder(env);
   const compiler = ["Framework64", "Framework"].map((folder) => win32.join(windows, "Microsoft.NET", folder, "v4.0.30319", "csc.exe"))
     .find((candidate) => existsSync(candidate));
   if (!compiler) throw new Error("the .NET Framework C# compiler (csc.exe) was not found");
@@ -253,15 +291,24 @@ export function prepareSpawn(command: string, args: readonly string[], options: 
   return { ok: true, ...wrapInJob(resolved, launcher), jobbed: launcher !== undefined };
 }
 
+const exited = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
+
 /**
  * Stops a Windows child and everything it started: killing a job launcher closes its job; without one, the absolute
  * taskkill.exe walks the tree. A child that has already exited is never signalled, so a reused PID is never hit.
+ * `onError` hears of a stop that failed while the child still ran, possibly after this returns.
  */
-export function terminateTree(child: ChildProcess, options: { jobbed: boolean; env?: NodeJS.ProcessEnv }): void {
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
-  const last = () => { if (child.exitCode === null && child.signalCode === null) try { child.kill(); } catch { /* exited */ } };
+export function terminateTree(child: ChildProcess, options: { jobbed: boolean; env?: NodeJS.ProcessEnv; onError?: (message: string) => void }): void {
+  if (!child.pid || exited(child)) return;
+  // A child that exited just now makes a kill fail too; only one still running a moment later is a failure.
+  const report = (message: string) => { setTimeout(() => { if (!exited(child)) options.onError?.(message); }, 250).unref(); };
+  const last = () => {
+    if (exited(child)) return;
+    try { if (!child.kill()) report(`cannot stop process ${child.pid}`); }
+    catch (error) { report(`cannot stop process ${child.pid}: ${(error as Error).message}`); }
+  };
   if (options.jobbed) return last();
   const killer = spawn(systemBinary("taskkill.exe", options.env), ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true });
-  killer.on("error", last);
-  killer.on("exit", last);
+  killer.on("error", (error) => { report(`taskkill failed: ${error.message}`); last(); });
+  killer.on("exit", (code) => { if (code !== 0) report(`taskkill exited with ${code}`); last(); });
 }

@@ -777,11 +777,11 @@ import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat 
 import { dirname as dirname4 } from "path";
 
 // src/tools/process.ts
-import { spawn } from "child_process";
+import { spawn as spawn2 } from "child_process";
 import { StringDecoder } from "string_decoder";
 
 // src/platform/windows.ts
-import { spawn as spawn2, spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
 import { existsSync as existsSync2, mkdirSync, readFileSync, renameSync, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "fs";
 import { homedir as homedir2 } from "os";

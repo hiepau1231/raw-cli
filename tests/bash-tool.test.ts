@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { ChildProcess, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,6 +17,11 @@ import type { ToolContext } from "../src/tools/primitives.js";
 import { ToolRegistry, type ToolPolicyRule } from "../src/tools/registry.js";
 import type { ToolResult } from "../src/tools/types.js";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
+import { processesWithMarker, waitForNoMarked } from "./fixtures/windows-processes.js";
+import { resolveBash } from "../src/tools/shells.js";
+
+/** How a stopped bash call ends: Windows stops the whole job, elsewhere the process group. */
+const STOPPED = process.platform === "win32" ? "process tree stopped" : "process group stopped";
 
 const BACKGROUND_NOTE = "[ignored run_in_background: background jobs need the process tool; ran in the foreground]";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -97,9 +103,10 @@ test("2: a nonzero exit is reported, not an error; a timeout stops the process g
   const started = Date.now();
   const timedOut = await tools.dispatch("bash", { command: "echo $$ > pid; sleep 5 & sleep 5; wait", timeout_s: 1 }, { cwd, maxOutputBytes: 8192 });
   assert.ok(Date.now() - started < 4000, "timeout_s is seconds, converted to 1000 ms");
-  assert.match(text(timedOut), /\[timed out after 1s; process group stopped\]$/);
+  assert.match(text(timedOut), new RegExp(`\\[timed out after 1s; ${STOPPED}\\]$`));
   assert.equal(timedOut.host?.status, "timeout");
-  assert.equal(await groupGone(Number((await readFile(join(cwd, "pid"), "utf8")).trim())), true);
+  // `$$` is an MSYS process id on Windows; the Windows tree stop has its own test below.
+  if (process.platform !== "win32") assert.equal(await groupGone(Number((await readFile(join(cwd, "pid"), "utf8")).trim())), true);
 
   const clamped = await tools.dispatch("bash", { command: "true", timeout: 900000 }, { cwd, maxOutputBytes: 8192 });
   assert.match(text(clamped), /\[exit 0 · \d+\.\ds\]\n\[timeout clamped to 600000 ms\]$/);
@@ -113,7 +120,9 @@ test("3: aliases from other harnesses run, and workdir runs the command in that 
   assert.match(text(cmd), /^alias\n?\[exit 0/);
   assert.deepEqual(cmd.host?.notes, ["read cmd as command", "read timeout_ms as timeout"]);
   for (const key of ["workdir", "cwd", "dir_path", "directory"]) {
-    const pwd = await tools.dispatch("bash", { command: "pwd -P", [key]: "sub" }, { cwd, maxOutputBytes: 8192 });
+    // Git Bash prints /c/...; cygpath gives the Windows path to compare.
+    const command = process.platform === "win32" ? "cygpath -w \"$(pwd -P)\"" : "pwd -P";
+    const pwd = await tools.dispatch("bash", { command, [key]: "sub" }, { cwd, maxOutputBytes: 8192 });
     assert.equal(text(pwd).split("\n")[0], join(cwd, "sub"), key);
   }
   const codex = await tools.dispatch("bash", { command: ["bash", "-lc", "printf codex"] }, { cwd, maxOutputBytes: 8192 });
@@ -381,4 +390,70 @@ test("a background workdir is passed on as a relative cwd, or absolute when no r
   assert.equal(cwd({}, "C:\\work", "win32"), undefined);
   assert.equal(cwd({ workdir: "../x" }, "/work/a", "linux"), "../x");
   assert.equal(cwd({ workdir: "/srv" }, "/work", "linux"), "../srv");
+});
+
+const onlyWindows = process.platform === "win32" ? false : "needs Windows";
+
+test("on Windows abort and timeout stop the whole tree, MSYS pipelines and native grandchildren included", { skip: onlyWindows }, async () => {
+  const cwd = await workdir("raw-bash-tree-");
+  const tools = await registry(["bash"]);
+  const node = process.execPath.replaceAll("\\", "/");
+  // Plain taskkill /T misses MSYS pipeline members and processes whose parent already exited; the job does not.
+  // Every process meant to be stopped carries the marker on its command line; `running` names those that must be seen
+  // alive first, so the stop is never tested against the parent shell alone.
+  const cases: { name: string; command: (marker: string) => string; running: string[]; timeout?: number }[] = [
+    { name: "aborted pipeline", command: (marker) => `sleep ${marker} | grep -F ${marker}`, running: ["sleep.exe", "grep.exe"] },
+    { name: "timed-out find and xargs", command: (marker) => `find / -maxdepth 1 2>/dev/null | xargs -I{} sleep ${marker}`,
+      running: ["xargs.exe", "sleep.exe"], timeout: 6000 },
+    { name: "native grandchild through a child bash", command: (marker) => `bash -c '"${node}" -e "setInterval(()=>{},1000)" ${marker}'`,
+      running: ["bash.exe", "node.exe"] },
+  ];
+  for (const item of cases) {
+    // Numeric, so `sleep` still reads it as a duration, and unique to this case.
+    const marker = `300.${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+    const controller = new AbortController();
+    const running = tools.dispatch("bash", { command: item.command(marker), ...(item.timeout ? { timeout: item.timeout } : {}) },
+      { cwd, maxOutputBytes: 8192, signal: controller.signal });
+    await waitFor(() => {
+      const names = new Set(processesWithMarker(marker).map((found) => found.name.toLowerCase()));
+      return item.running.every((name) => names.has(name)) ? true : undefined;
+    }, 5000);
+    if (!item.timeout) controller.abort();
+    const result = await running;
+    assert.match(text(result), item.timeout ? /\[timed out after 6s; process tree stopped\]$/ : /\[aborted after \d+\.\ds; process tree stopped\]$/, item.name);
+    assert.deepEqual(await waitForNoMarked(marker, 3000), [], item.name);
+  }
+});
+
+test("on Windows the job launcher leaves $0, quoting and exit codes as Git Bash gives them", { skip: onlyWindows }, async () => {
+  const cwd = await workdir("raw-bash-same-");
+  const tools = await registry(["bash"]);
+  const bash = resolveBash({ workspace: cwd });
+  assert.ok(bash.ok, JSON.stringify(bash));
+  const command = "printf '%s' \"$0 a\\\"b\"; exit 7";
+  const direct = spawnSync(bash.path, ["-c", command], { cwd, encoding: "utf8" });
+  const result = await tools.dispatch("bash", { command }, { cwd, maxOutputBytes: 8192 });
+  assert.equal(direct.status, 7);
+  assert.equal(result.host?.exitCode, 7);
+  assert.match(text(result), /\[exit 7 · /);
+  assert.equal(text(result).replace(/\n?\[exit 7 · [^\]]*\]$/, ""), direct.stdout);
+});
+
+test("on Windows a stop that fails keeps the aborted result and its output, and says the stop failed", { skip: onlyWindows }, async () => {
+  const cwd = await workdir("raw-bash-stuck-");
+  const tools = await registry(["bash"]);
+  // Node reports a failed kill with an error event and a false return; the command then ends on its own.
+  const kill = ChildProcess.prototype.kill;
+  ChildProcess.prototype.kill = function (this: ChildProcess) { this.emit("error", new Error("kill EPERM")); return false; };
+  try {
+    const controller = new AbortController();
+    const running = tools.dispatch("bash", { command: "echo started; sleep 3" }, { cwd, maxOutputBytes: 8192, signal: controller.signal });
+    await sleep(1000);
+    controller.abort();
+    const result = await running;
+    assert.equal(result.code, "aborted");
+    assert.match(text(result), /^started\n/);
+    assert.match(text(result), /\[stopping the command failed: kill EPERM\]/);
+    assert.match(text(result), new RegExp(`\\[aborted after \\d+\\.\\ds; ${STOPPED}\\]$`));
+  } finally { ChildProcess.prototype.kill = kill; }
 });

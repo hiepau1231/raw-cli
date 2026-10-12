@@ -3,6 +3,8 @@ import { StringDecoder } from "node:string_decoder";
 import type { ToolResult } from "./types.js";
 import { errorResult, utf8Prefix, utf8Suffix } from "./results.js";
 import { OutputSpill, savedLabel } from "./spill.js";
+import { resolveBash } from "./shells.js";
+import { jobLauncher, stateDirectory, terminateTree, wrapInJob, type ResolvedCommand } from "../platform/windows.js";
 
 type Channel = "stdout" | "stderr";
 interface Segment { channel?: Channel; text: string }
@@ -98,16 +100,43 @@ export interface BashOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   bashPath?: string;
+  /** The session's workspace, where a Windows Bash is never looked for; the cwd when absent. */
+  workspace?: string;
 }
 
-/** Shared shell spawn/group primitive; lifecycle and output policy belong to its caller. */
-export function spawnShell(options: { command: string; cwd: string; env?: NodeJS.ProcessEnv; bashPath?: string }, platform: NodeJS.Platform = process.platform) {
-  return spawn(options.bashPath ?? process.env.RAW_BASH_PATH ?? "bash", ["-c", options.command], {
+/** Shells started inside the Windows job launcher, whose kill stops the whole tree. */
+const jobbedShells = new WeakSet<ChildProcess>();
+
+/**
+ * Shared shell spawn/group primitive; lifecycle and output policy belong to its caller. On Windows the shell is Git Bash
+ * (see resolveBash) run inside the job launcher; when Bash is missing it throws an error whose code is bash_unavailable.
+ */
+export function spawnShell(options: { command: string; cwd: string; env?: NodeJS.ProcessEnv; bashPath?: string; workspace?: string },
+  platform: NodeJS.Platform = process.platform) {
+  const bash = options.bashPath ? { ok: true as const, path: options.bashPath }
+    : resolveBash({ platform, workspace: options.workspace ?? options.cwd });
+  if (!bash.ok) throw Object.assign(new Error(bash.message), { code: bash.code });
+  let launch: ResolvedCommand = { file: bash.path, args: ["-c", options.command] };
+  let jobbed = false;
+  if (platform === "win32") {
+    const launcher = jobLauncher({ platform, stateDir: stateDirectory() });
+    launch = wrapInJob(launch, launcher);
+    jobbed = launcher !== undefined;
+  }
+  const child = spawn(launch.file, launch.args, {
     cwd: options.cwd, ...(options.env ? { env: options.env } : {}), stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32", windowsHide: true,
   });
+  if (jobbed) jobbedShells.add(child);
+  return child;
 }
-export function signalShellGroup(child: ChildProcess, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform): void {
-  try { if (child.pid) process.kill(platform !== "win32" ? -child.pid : child.pid, signal); }
+/**
+ * Signals the shell's process group; Windows has no signals, so there every signal stops the whole tree at once, and a
+ * stop that fails later is passed to `onError`.
+ */
+export function signalShellGroup(child: ChildProcess, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform,
+  onError?: (message: string) => void): void {
+  if (platform === "win32") { terminateTree(child, { jobbed: jobbedShells.has(child), ...(onError ? { onError } : {}) }); return; }
+  try { if (child.pid) process.kill(-child.pid, signal); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
 }
 
@@ -118,7 +147,13 @@ export function signalShellGroup(child: ChildProcess, signal: NodeJS.Signals, pl
 export async function runBash(options: BashOptions): Promise<ToolResult> {
   if (options.signal?.aborted) return errorResult("aborted", "bash aborted before execution");
   const timeoutMs = options.timeoutMs ?? 120000;
-  const child = spawnShell(options);
+  let child: ChildProcess;
+  try { child = spawnShell(options); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "bash_unavailable") return errorResult(code, (error as Error).message);
+    return errorResult("bash_spawn_error", `cannot start Bash: ${(error as Error).message}`);
+  }
   let observedBytes = 0;
   let timedOut = false;
   let aborted = false;
@@ -137,7 +172,12 @@ export async function runBash(options: BashOptions): Promise<ToolResult> {
   let resolveCancelled!: () => void;
   const cancellationWatchdog = new Promise<void>((resolve) => { resolveCancelled = resolve; });
   let escalation: Promise<void> | undefined;
-  const signalGroup = (signal: NodeJS.Signals) => signalShellGroup(child, signal);
+  let stopFailure: string | undefined;
+  // The drain and reap timers bound the result even when stopping fails; the failure is reported, not swallowed.
+  const signalGroup = (signal: NodeJS.Signals) => {
+    const failed = (message: string) => { stopFailure ??= message; };
+    try { signalShellGroup(child, signal, process.platform, failed); } catch (error) { failed((error as Error).message); }
+  };
   const stop = (reason: "abort" | "timeout") => {
     if (aborted || timedOut) return;
     if (reason === "abort") aborted = true;
@@ -177,8 +217,14 @@ export async function runBash(options: BashOptions): Promise<ToolResult> {
   const exitedPromise = new Promise<void>((resolve) => {
     child.once("exit", (code, signal) => { exited = { code, signal }; resolve(); });
   });
+  // After the spawn, an error event can only come from a kill that failed; it belongs to the stop, not the start.
+  let started = false;
+  child.once("spawn", () => { started = true; });
   const closedPromise = new Promise<void>((resolve) => {
-    child.once("error", (error) => { spawnError = error; });
+    child.on("error", (error) => {
+      if (started) stopFailure ??= error.message;
+      else spawnError ??= error;
+    });
     child.once("close", () => resolve());
   });
   const outcome = await Promise.race([closedPromise.then(() => "closed" as const), cancellationWatchdog.then(() => "watchdog" as const)]);
@@ -201,6 +247,7 @@ export async function runBash(options: BashOptions): Promise<ToolResult> {
   const { segments, truncated } = capture.render(max, savedLabel(spill?.path, spill?.capped));
   const content: ToolResult["content"] = segments.map((segment) => segment.channel
     ? { type: "text", channel: segment.channel, text: segment.text } : { type: "text", text: segment.text });
+  if (stopFailure) content.push({ type: "text", text: `\n[stopping the command failed: ${stopFailure}]` });
   return {
     isError: aborted || timedOut,
     ...(aborted ? { code: "aborted" } : timedOut ? { code: "timeout" } : {}),
