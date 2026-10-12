@@ -78,6 +78,20 @@ const LoadEarlier = memo(function LoadEarlier({ onLoad }: { onLoad: () => void }
   );
 });
 
+/** How far `entry` is below the top of the conversation viewport. */
+const entryOffset = (entry: Element, viewport: HTMLElement) =>
+  entry.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+/** The first conversation entry that reaches into the viewport, and its offset. Load earlier stays first, so it is no anchor. */
+function firstEntryInView(viewport: HTMLElement) {
+  const entries = viewport.querySelector(".conversation")?.children ?? [];
+  for (const element of entries) {
+    if (element.classList.contains("load-earlier")) continue;
+    const offset = entryOffset(element, viewport);
+    if (offset + element.getBoundingClientRect().height > 0) return { element, offset };
+  }
+  return undefined;
+}
+
 export function Chat({
   id,
   shell,
@@ -219,10 +233,43 @@ export function Chat({
   useEffect(() => {
     following.current = preferences.follow;
   }, [preferences.follow]);
+  /** Set while scrollToBottom checks the next frames, so updates in between do not start more checks. */
+  const settling = useRef(false);
+  /**
+   * Scrolls to the bottom, then again on the next frames while the content height still changes, at most three times:
+   * an entry that renders for the first time replaces its size estimate (docs/chat-design.md §10).
+   */
+  const scrollToBottom = useCallback(() => {
+    const element = scroll.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+    if (settling.current) return;
+    settling.current = true;
+    let height = element.scrollHeight;
+    let left = 3;
+    const again = () => {
+      const current = scroll.current;
+      if (!current || !following.current || prepending.current || left-- === 0 || current.scrollHeight === height) {
+        settling.current = false;
+        return;
+      }
+      height = current.scrollHeight;
+      current.scrollTop = height;
+      requestAnimationFrame(again);
+    };
+    requestAnimationFrame(again);
+  }, []);
+  /**
+   * While an earlier page joins the timeline: the entry in view and its offset, which it keeps from that commit on, and the
+   * scroll position and height for a timeline without entries. Jump to latest clears it.
+   */
+  const keepInPlace = useRef<{ anchor: { element: Element; offset: number } | undefined; top: number; height: number }>(undefined);
   useLayoutEffect(() => {
-    if (scroll.current && following.current && !prepending.current)
-      scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [state]);
+    const element = scroll.current;
+    const anchor = keepInPlace.current?.anchor;
+    if (element && anchor?.element.isConnected) element.scrollTop += entryOffset(anchor.element, element) - anchor.offset;
+    if (following.current && !prepending.current) scrollToBottom();
+  }, [state, scrollToBottom]);
   const checkReceipt = async (key: string) => {
     try {
       const op = await api<SessionOperation>(
@@ -333,17 +380,29 @@ export function Chat({
   const loadEarlier = async () => {
     if (!scroll.current) return;
     prepending.current = true;
-    const height = scroll.current.scrollHeight;
-    const top = scroll.current.scrollTop;
+    // Taken when the page has arrived, so scrolling while it loads is not undone. The first entry in view keeps its place
+    // from the commit that adds the page; entries that render for the first time replace their size estimate on the next
+    // frames (docs/chat-design.md §10), so the place is kept for three more frames.
     try {
-      await earlier();
-      requestAnimationFrame(() => {
-        if (scroll.current)
-          scroll.current.scrollTop = top + scroll.current.scrollHeight - height;
-        prepending.current = false;
+      await earlier(() => {
+        const element = scroll.current;
+        if (element) keepInPlace.current = { anchor: firstEntryInView(element), top: element.scrollTop, height: element.scrollHeight };
       });
+      let left = 4;
+      const settle = () => {
+        const element = scroll.current;
+        const kept = keepInPlace.current;
+        if (element && kept?.anchor?.element.isConnected)
+          element.scrollTop += entryOffset(kept.anchor.element, element) - kept.anchor.offset;
+        else if (element && kept && left === 4) element.scrollTop = kept.top + element.scrollHeight - kept.height;
+        if (element && kept?.anchor && --left > 0) return void requestAnimationFrame(settle);
+        prepending.current = false;
+        keepInPlace.current = undefined;
+      };
+      requestAnimationFrame(settle);
     } catch (cause) {
       prepending.current = false;
+      keepInPlace.current = undefined;
       setError(errorText(cause));
     }
   };
@@ -573,8 +632,9 @@ export function Chat({
                 className="jump-latest"
                 onClick={() => {
                   following.current = true;
-                  if (scroll.current)
-                    scroll.current.scrollTop = scroll.current.scrollHeight;
+                  // Leaving for the bottom ends a Load earlier that still keeps an entry in place.
+                  keepInPlace.current = undefined;
+                  scrollToBottom();
                   setAtBottom(true);
                 }}
               >

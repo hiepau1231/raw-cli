@@ -4,7 +4,7 @@
  */
 import type { Page } from "@playwright/test";
 import { openAiDone, openAiFrame, type MockResponse } from "../fixtures/mock-provider.js";
-import { ANSWER, chatScenario, seedChat } from "./chat-stress.js";
+import { ANSWER, chatScenario, REQUEST, seedChat } from "./chat-stress.js";
 
 interface Store {
   getSessionHistory(options: { sessionId: string; limit?: number; before?: string }): { items: Array<{ kind: string; payload: Record<string, unknown>; status: string }>; nextCursor?: string };
@@ -38,6 +38,10 @@ export const LIVE_REQUEST = "Tổng hợp lại toàn bộ các lần kiểm tra
 /** The scenario: the first stress turn (5 responses), then the live answer. */
 export const longScenario = { ...chatScenario, responses: [...chatScenario.responses.slice(0, 5), longStream(LIVE_ANSWER, 2400, 10)] };
 
+const HEADING = "Kết quả rà soát liên kết";
+/** The tag that ends turn `n`'s request and answer heading (1-based). */
+export const turnTag = (n: number) => `[lượt ${n}]`;
+
 /**
  * Records the first stress turn in a chat of its own, then copies its history `turns` times into a new session.
  * Returns the new session's id and the number of records written.
@@ -61,7 +65,10 @@ export async function seedLongChat(page: Page, raw: Raw, turns: number): Promise
   const session = store.createSession({ cwd: raw.root, title: "Long chat", agentName: "raw" });
   for (let copy = 0; copy < turns; copy++)
     for (const row of rows) {
-      const payload = JSON.parse(JSON.stringify(row.payload).replace(pattern, (_, id: string) => JSON.stringify(`${id}~${copy}`))) as Record<string, unknown>;
+      // The request and the answer's heading end with the turn's number, so each turn has text of its own.
+      const json = JSON.stringify(row.payload).replace(pattern, (_, id: string) => JSON.stringify(`${id}~${copy}`))
+        .replaceAll(REQUEST, `${REQUEST} ${turnTag(copy + 1)}`).replaceAll(HEADING, `${HEADING} ${turnTag(copy + 1)}`);
+      const payload = JSON.parse(json) as Record<string, unknown>;
       store.appendHistory({ sessionId: session.id, kind: row.kind, payload, status: row.status });
     }
   return { sessionId: session.id, records: rows.length * turns };

@@ -321,11 +321,13 @@ export function useSession(sessionId: string | undefined) {
       if (timer) clearTimeout(timer);
     };
   }, [sessionId]);
-  const earlier = async () => {
+  /** Loads the previous history page. `beforeApply` runs once the page has arrived, right before it joins the state. */
+  const earlier = async (beforeApply?: () => void) => {
     if (!state?.history.nextCursor || !sessionId) return;
     const page = await api<Page<HistoryView>>(
       `/sessions/${sessionId}/history?before=${encodeURIComponent(state.history.nextCursor)}&limit=50`,
     );
+    beforeApply?.();
     setState((old) =>
       old
         ? {

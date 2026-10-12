@@ -973,6 +973,16 @@ main > .error-banner {
   padding: 24px 28px 32px;
   min-width: 0;
 }
+/*
+ * Entries outside the viewport skip layout and paint (docs/chat-design.md §10). An estimate holds an entry's place until it
+ * first renders, then its last size does. Paint is clipped 16 px outside the entry, room for the message actions' focus rings.
+ */
+.conversation > .message,
+.conversation > .work-group {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
+  overflow-clip-margin: 16px;
+}
 /* Messages (docs/chat-design.md §5): the user's bubble on the right, the assistant's prose under its name. */
 .message {
   margin: 0 0 22px;

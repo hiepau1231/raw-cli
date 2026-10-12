@@ -1,7 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
 import { ASK, chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
-import { LIVE_ANSWER, LIVE_REQUEST, longStream, seedLongChat } from "./chat-long.js";
+import { LIVE_ANSWER, LIVE_REQUEST, longStream, seedLongChat, turnTag } from "./chat-long.js";
 import { probe, startCommits, stopCommits } from "./perf-probe.js";
 
 // docs/chat-design.md §10 on a 60-turn long chat: what typing and streaming re-render, and what they must not lose.
@@ -206,4 +206,235 @@ test("a Work group cut by the history page keeps its state when the earlier page
     while (previous && !previous.matches(".message, .work-group")) previous = previous.previousElementSibling;
     return previous?.className;
   })).toBe("message user");
+});
+
+// Off-screen entries skip layout and paint (docs/chat-design.md §10) but stay in the page for search, selection and assistive tech.
+test.describe("off-screen entries", () => {
+  /** Opens the 60-turn chat with its whole history loaded, scrolled to the bottom. */
+  async function openAll(page: Page, raw: Raw) {
+    await openLong(page, raw);
+    const scroller = page.locator(".conversation-scroll");
+    const button = page.locator(".load-earlier");
+    while (await button.count()) {
+      const before = await page.getByTestId("assistant-message").count();
+      await scroller.evaluate((element) => { element.scrollTop = 0; });
+      await button.click();
+      await expect.poll(async () => (await page.getByTestId("assistant-message").count()) > before || !(await button.count())).toBe(true);
+    }
+    await expect(page.getByTestId("assistant-message")).toHaveCount(60);
+    await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    await frames(page, 3);
+    return scroller;
+  }
+  const frames = (page: Page, count: number) => page.evaluate((n) => new Promise<void>((resolve) => {
+    const step = (left: number) => (left ? requestAnimationFrame(() => step(left - 1)) : resolve());
+    step(n);
+  }), count);
+  /** Whether `locator`'s element intersects the scroller's viewport. */
+  const inView = (locator: Locator) => locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const view = element.closest(".conversation-scroll")!.getBoundingClientRect();
+    return box.bottom > view.top && box.top < view.bottom;
+  });
+  const answer = (page: Page, n: number) => page.getByTestId("assistant-message").filter({ hasText: turnTag(n) });
+  /** Whether the browser renders `locator`'s contents: an entry that is skipped still has its own box, its children do not. */
+  const rendered = (locator: Locator) => locator.evaluate((element) =>
+    element.firstElementChild!.checkVisibility({ contentVisibilityAuto: true } as CheckVisibilityOptions));
+
+  test("an entry outside the viewport is skipped for rendering", async ({ page, raw }) => {
+    await openAll(page, raw);
+    const first = page.locator(".conversation > .message").first();
+    expect(await inView(first)).toBe(false);
+    expect(await rendered(first)).toBe(false);
+    expect(await rendered(page.locator(".conversation > .work-group").first())).toBe(false);
+    // The last answer is on screen and rendered.
+    expect(await rendered(page.getByTestId("assistant-message").last())).toBe(true);
+  });
+
+  test("find in page reaches a skipped entry and brings it into view", async ({ page, raw }) => {
+    await openAll(page, raw);
+    expect(await inView(answer(page, 2))).toBe(false);
+    // window.find selects the match like the browser's find bar; headless Chromium does not scroll to it, so the test
+    // reveals the match as the find bar does.
+    const found = await page.evaluate((text) => {
+      if (!(window as unknown as { find(text: string): boolean }).find(text)) return "";
+      const element = getSelection()!.getRangeAt(0).startContainer.parentElement!;
+      element.scrollIntoView({ block: "center" });
+      return element.closest('[data-testid="assistant-message"]')?.querySelector("h2")?.textContent ?? "";
+    }, `Kết quả rà soát liên kết ${turnTag(2)}`);
+    expect(found).toBe(`Kết quả rà soát liên kết ${turnTag(2)}`);
+    await frames(page, 2);
+    expect(await inView(answer(page, 2))).toBe(true);
+    expect(await rendered(answer(page, 2))).toBe(true);
+  });
+
+  test("a selection across skipped entries copies their text", async ({ page, raw }) => {
+    await openAll(page, raw);
+    const text = await page.evaluate(() => {
+      const answers = [...document.querySelectorAll('[data-testid="assistant-message"]')];
+      const start = answers[1]!.querySelector("h2")!.firstChild!;
+      const end = answers.at(-1)!.querySelector("h2")!.firstChild!;
+      const selection = getSelection()!;
+      selection.setBaseAndExtent(start, 0, end, end.textContent!.length);
+      return selection.toString();
+    });
+    for (const n of [2, 30, 60]) expect(text).toContain(`Kết quả rà soát liên kết ${turnTag(n)}`);
+    expect(text).toContain("docs/getting-started-with-the-command-line.md");
+  });
+
+  test("following keeps the last line in view while an answer streams", async ({ page, raw }) => {
+    const scroller = await openAll(page, raw);
+    await startStream(page);
+    const gaps = await scroller.evaluate(async (element) => {
+      const gaps: number[] = [];
+      for (let index = 0; index < 10; index++) {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        gaps.push(element.scrollHeight - element.scrollTop - element.clientHeight);
+      }
+      return gaps;
+    });
+    for (const gap of gaps) expect(gap).toBeLessThan(80);
+    await streamDone(page);
+  });
+
+  test("Jump to latest lands on the last message from the top", async ({ page, raw }) => {
+    const scroller = await openAll(page, raw);
+    await scroller.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
+    await frames(page, 2);
+    await page.getByRole("button", { name: "Jump to latest" }).click();
+    await frames(page, 2);
+    expect(await inView(page.getByTestId("assistant-message").last())).toBe(true);
+    expect(await scroller.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(80);
+  });
+
+  test("Load earlier keeps the first entry in view in place while new entries replace their estimates", async ({ page, raw }) => {
+    await openLong(page, raw);
+    const scroller = page.locator(".conversation-scroll");
+    await scroller.evaluate((element) => { element.scrollTop = 0; });
+    await frames(page, 2);
+    const first = page.getByTestId("assistant-message").first();
+    const tag = (await first.locator("h2").textContent())!;
+    const anchored = page.getByTestId("assistant-message").filter({ hasText: tag });
+    const offset = () => anchored.evaluate((element) =>
+      element.getBoundingClientRect().top - element.closest(".conversation-scroll")!.getBoundingClientRect().top);
+    const before = await offset();
+    const count = await page.getByTestId("assistant-message").count();
+    await page.locator(".load-earlier").click();
+    await expect.poll(() => page.getByTestId("assistant-message").count()).toBeGreaterThan(count);
+    // Past the settling frames, and again later: the place holds.
+    await frames(page, 5);
+    expect(Math.abs((await offset()) - before)).toBeLessThan(15);
+    await sleep(300);
+    expect(Math.abs((await offset()) - before)).toBeLessThan(15);
+  });
+
+  test("scrolling while an earlier page loads is not undone when it arrives", async ({ page, raw }) => {
+    await openLong(page, raw);
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route(/\/history\?before=/, async (route) => { await held; await route.continue(); });
+    const scroller = page.locator(".conversation-scroll");
+    await scroller.evaluate((element) => { element.scrollTop = 0; });
+    await frames(page, 2);
+    const count = await page.getByTestId("assistant-message").count();
+    await page.locator(".load-earlier").click();
+    // The reader moves on to the middle of the loaded turns while the page is on its way.
+    await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight / 2; element.dispatchEvent(new Event("scroll")); });
+    await frames(page, 2);
+    const tag = await page.evaluate(() => {
+      const view = document.querySelector(".conversation-scroll")!.getBoundingClientRect();
+      const inView = [...document.querySelectorAll('[data-testid="assistant-message"]')]
+        .find((element) => element.getBoundingClientRect().top >= view.top);
+      return inView!.querySelector("h2")!.textContent!;
+    });
+    const anchored = page.getByTestId("assistant-message").filter({ hasText: tag });
+    const offset = () => anchored.evaluate((element) =>
+      element.getBoundingClientRect().top - element.closest(".conversation-scroll")!.getBoundingClientRect().top);
+    const before = await offset();
+    release();
+    await expect.poll(() => page.getByTestId("assistant-message").count()).toBeGreaterThan(count);
+    await frames(page, 5);
+    expect(Math.abs((await offset()) - before)).toBeLessThan(15);
+  });
+
+  test("Jump to latest right as an earlier page arrives stays at the bottom", async ({ page, raw }) => {
+    await openLong(page, raw);
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route(/\/history\?before=/, async (route) => { await held; await route.continue(); });
+    const scroller = page.locator(".conversation-scroll");
+    await scroller.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
+    await expect(page.locator(".jump-latest")).toBeVisible();
+    const count = await page.getByTestId("assistant-message").count();
+    await page.locator(".load-earlier").click();
+    // Clicked from the commit that adds the page, before the next frame.
+    await page.evaluate(() => {
+      const observer = new MutationObserver(() => {
+        observer.disconnect();
+        document.querySelector<HTMLButtonElement>(".jump-latest")!.click();
+      });
+      observer.observe(document.querySelector(".conversation")!, { childList: true });
+    });
+    release();
+    await expect.poll(() => page.getByTestId("assistant-message").count()).toBeGreaterThan(count);
+    await frames(page, 5);
+    expect(await scroller.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(80);
+  });
+
+  test("an open Work group keeps its state and size when scrolled away and back", async ({ page, raw }) => {
+    const scroller = await openAll(page, raw);
+    const group = page.locator(".conversation > .work-group").nth(4);
+    await group.scrollIntoViewIfNeeded();
+    await openGroup(group);
+    await frames(page, 2);
+    const height = await group.evaluate((element) => element.getBoundingClientRect().height);
+    // An entry that holds the focus is always rendered: the toggle gives it up, as when the reader clicks elsewhere.
+    await group.locator(".work-toggle").blur();
+    await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    await frames(page, 3);
+    expect(await rendered(group)).toBe(false);
+    await group.evaluate((element) => element.scrollIntoView({ block: "center" }));
+    await frames(page, 3);
+    await expect(group.locator(".work-toggle")).toHaveAttribute("aria-expanded", "true");
+    expect(await group.evaluate((element) => element.getBoundingClientRect().height)).toBe(height);
+  });
+
+  test("a focus ring at an entry's edge is not clipped", async ({ page, raw }) => {
+    await openAll(page, raw);
+    // The last answer's Copy message button sits at the message's left edge.
+    const button = page.getByTestId("assistant-message").last().getByRole("button", { name: "Copy message" });
+    await button.scrollIntoViewIfNeeded();
+    // Keyboard focus: a key press first, so the focus ring shows.
+    await page.keyboard.press("Shift");
+    await button.focus();
+    await frames(page, 2);
+    const ring = await button.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const message = element.closest(".message")!.getBoundingClientRect();
+      return { left: box.left, top: box.top, height: box.height, messageLeft: message.left, outline: getComputedStyle(element).outlineColor };
+    });
+    // The ring sits 3 to 5 px outside the button, which sits at or left of the message's left edge.
+    expect(ring.left - ring.messageLeft).toBeLessThan(3);
+    const shot = await page.screenshot({ clip: { x: ring.left - 5, y: ring.top + ring.height / 2 - 4, width: 3, height: 8 } });
+    // Decoded in a blank page: the dashboard's CSP allows no data: images.
+    const blank = await page.context().newPage();
+    const data = await blank.evaluate(async (base64) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${base64}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return [...context.getImageData(0, 0, canvas.width, canvas.height).data];
+    }, shot.toString("base64"));
+    await blank.close();
+    const [r, g, b] = ring.outline.match(/\d+/g)!.map(Number);
+    let ringPixels = 0;
+    for (let index = 0; index < data.length; index += 4)
+      if (Math.abs(data[index]! - r!) + Math.abs(data[index + 1]! - g!) + Math.abs(data[index + 2]! - b!) < 60) ringPixels++;
+    expect(ringPixels).toBeGreaterThan(0);
+  });
 });
