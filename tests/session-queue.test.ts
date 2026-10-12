@@ -387,3 +387,120 @@ test("a restart pauses the queued messages of an interrupted turn", () => {
     } finally { restarted.close(); }
   } finally { f.cleanup(); }
 });
+
+/** A provider step that waits until the turn is stopped. */
+const untilStopped = (request: ProviderRequest) => new Promise<never>((_resolve, reject) => {
+  const stop = () => reject(new Error("stopped"));
+  request.signal?.addEventListener("abort", stop, { once: true });
+  if (request.signal?.aborted) stop();
+});
+
+test("an interrupt during a tool cancels the turn and its message starts the next one, keeping finished results", async () => {
+  const started = gate(); let competing: unknown;
+  const registry = new ToolRegistry();
+  registry.register({ name: "work", description: "Work", inputSchema: { type: "object" }, async handler() {
+    return { isError: false, content: [{ type: "text", text: "worked" }] };
+  } });
+  registry.register({ name: "wait", description: "Wait", inputSchema: { type: "object" }, async handler(_args, context) {
+    started.open();
+    await new Promise<void>((resolve) => { context.signal?.addEventListener("abort", () => resolve(), { once: true }); });
+    return { isError: true, code: "aborted", content: [{ type: "text", text: "stopped" }] };
+  } });
+  const h = harness({ registry,
+    beforeAttach: async (operation) => {
+      if (operation.clientRequestId !== "now") return;
+      const other = openSessionStore(h.options);
+      try { other.claimSession(h.session.id); competing = "claimed"; } catch (error) { competing = error; } finally { other.close(); }
+    },
+    generate: async (_request, index) => index === 0 ? { text: "", finishReason: "tool_calls",
+      toolCalls: [{ id: "call-1", name: "work", arguments: {} }, { id: "call-2", name: "wait", arguments: {} }] } : answer("done") });
+  try {
+    h.store.database.exec(`CREATE TEMP TABLE releases(generation INTEGER);
+      CREATE TEMP TRIGGER record_release AFTER UPDATE OF owner_token ON sessions WHEN NEW.owner_token IS NULL
+      BEGIN INSERT INTO releases VALUES (OLD.owner_generation); END;`);
+    const { operation } = h.send("first", "do it") as { operation: SessionOperation };
+    await started.promise;
+    h.send("earlier", "queued before");
+    const startedAt = Date.now();
+    const interrupt = h.service.enqueue({ ...h.intent, clientRequestId: "now", input: "new direction" }, { mode: "interrupt" });
+    assert.equal("queued" in interrupt && interrupt.queued.mode, "interrupt");
+    assert.equal((await h.service.wait(operation.id)).state, "cancelled");
+    assert.ok(Date.now() - startedAt < 2000);
+    await until(() => h.row("now")?.state === "taken", "the interrupting turn");
+    const next = h.store.findOperation(h.session.id, "now")!;
+    assert.equal((await h.service.wait(next.id)).state, "completed");
+    assert.deepEqual(lines(h.requests[1]!).slice(-5), ["assistant:", "tool:call-1", "tool:call-2", "user:new direction", "user:queued before"]);
+    assert.equal(h.row("earlier")?.state, "delivered"); assert.equal(h.row("earlier")?.operationId, next.id);
+    assert.ok(competing instanceof Error && /busy/.test(competing.message), String(competing));
+    assert.deepEqual(h.store.database.prepare("SELECT generation FROM releases").all().map((item) => Number(item.generation)), [next.ownerGeneration]);
+  } finally { await h.close(); }
+});
+
+test("two interrupts in a row cancel once and start one turn; the first is delivered after the second", async () => {
+  const entered = gate();
+  const h = harness({ generate: async (request, index) => { if (index === 0) { entered.open(); return untilStopped(request); } return answer("done"); } });
+  try {
+    const { operation } = h.send("first", "do it") as { operation: SessionOperation };
+    await entered.promise;
+    h.service.enqueue({ ...h.intent, clientRequestId: "a", input: "first interrupt" }, { mode: "interrupt" });
+    h.service.enqueue({ ...h.intent, clientRequestId: "b", input: "second interrupt" }, { mode: "interrupt" });
+    assert.equal((await h.service.wait(operation.id)).state, "cancelled");
+    await until(() => h.row("b")?.state === "taken", "the interrupting turn");
+    const next = h.store.findOperation(h.session.id, "b")!;
+    assert.equal((await h.service.wait(next.id)).state, "completed");
+    assert.equal(h.store.findOperation(h.session.id, "a"), undefined);
+    assert.equal(h.store.listOperations(h.session.id).length, 2);
+    assert.deepEqual(lines(h.requests[1]!).slice(-2), ["user:second interrupt", "user:first interrupt"]);
+    assert.equal(h.row("a")?.state, "delivered");
+  } finally { await h.close(); }
+});
+
+test("Send now interrupts with a waiting message and refuses one already sent", async () => {
+  const entered = gate();
+  const h = harness({ generate: async (request, index) => {
+    if (index === 0) { entered.open(); return untilStopped(request); }
+    return answer(`answer ${index}`);
+  } });
+  try {
+    const { operation } = h.send("first", "do it") as { operation: SessionOperation };
+    await entered.promise;
+    h.send("a", "one"); h.send("b", "two");
+    const sent = h.service.sendNow(h.session.id, h.store.findQueuedInput(h.session.id, "b")!.id);
+    assert.equal("queued" in sent && sent.queued.mode, "interrupt");
+    assert.equal((await h.service.wait(operation.id)).state, "cancelled");
+    await until(() => h.row("b")?.state === "taken", "the interrupting turn");
+    const next = h.store.findOperation(h.session.id, "b")!;
+    assert.equal((await h.service.wait(next.id)).state, "completed");
+    assert.deepEqual(lines(h.requests[1]!).slice(-2), ["user:two", "user:one"]);
+    assert.throws(() => h.service.sendNow(h.session.id, h.store.findQueuedInput(h.session.id, "b")!.id), (error: Error & { code?: string }) => error.code === "already_sent");
+    assert.throws(() => h.service.sendNow(h.session.id, h.store.findQueuedInput(h.session.id, "a")!.id), (error: Error & { code?: string }) => error.code === "already_sent");
+  } finally { await h.close(); }
+});
+
+test("Send now starts a paused message as a turn when the session is idle", async () => {
+  const entered = gate();
+  const h = harness({ generate: async (request, index) => { if (index === 0) { entered.open(); return untilStopped(request); } return answer("done"); } });
+  try {
+    const { operation } = h.send("first", "do it") as { operation: SessionOperation };
+    await entered.promise;
+    h.send("a", "one"); h.send("b", "two");
+    h.service.cancel(operation.id);
+    await h.service.wait(operation.id);
+    assert.deepEqual(h.store.queuedInputs(h.session.id).map((item) => item.state), ["paused", "paused"]);
+    const started = h.service.sendNow(h.session.id, h.store.findQueuedInput(h.session.id, "b")!.id);
+    assert.ok("operation" in started && started.operation.clientRequestId === "b");
+    assert.equal((await h.service.wait(started.operation.id)).state, "completed");
+    assert.equal(h.row("b")?.state, "taken"); assert.equal(h.row("a")?.state, "paused");
+    assert.equal(lines(h.requests[1]!).at(-1), "user:two");
+  } finally { await h.close(); }
+});
+
+test("an interrupt on an idle session is a normal send", async () => {
+  const h = harness({ generate: async () => answer("done") });
+  try {
+    const sent = h.service.enqueue({ ...h.intent, clientRequestId: "idle", input: "hello" }, { mode: "interrupt" });
+    assert.ok("operation" in sent);
+    assert.equal((await h.service.wait(sent.operation.id)).state, "completed");
+    assert.equal(h.row("idle"), undefined);
+  } finally { await h.close(); }
+});

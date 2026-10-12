@@ -384,7 +384,7 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
       if (store.sessionIsBusy(id)) throw new DashboardError(409, "session_busy", "Wait for the active operation to finish");
       return reply({ operationId: operations.submit(intent).id }, 202);
     }
-    const inputRoute = /^\/api\/sessions\/([^/]+)\/inputs(?:\/([^/]+))?$/.exec(path);
+    const inputRoute = /^\/api\/sessions\/([^/]+)\/inputs(?:\/([^/]+)(\/send-now)?)?$/.exec(path);
     if (inputRoute) {
       const id = decodeURIComponent(inputRoute[1]!); requireSession(id);
       if (inputRoute[2] === undefined && method === "GET") {
@@ -396,7 +396,7 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
       if (inputRoute[2] === undefined && method === "POST") {
         const body = await context.readJson(request);
         const clientRequestId = textField(body.clientRequestId, "clientRequestId", 128);
-        if (body.mode !== "queue") throw new DashboardError(400, "invalid_mode", "mode must be queue");
+        if (body.mode !== "queue" && body.mode !== "interrupt") throw new DashboardError(400, "invalid_mode", "mode must be queue or interrupt");
         const intent: OperationIntent = { sessionId: id, clientRequestId, kind: "turn", agentName: textField(body.agent, "agent"),
           configPath: context.configPath, input: textField(body.input, "input", 1024 * 1024) };
         const ids = stringList(body.attachments, "attachments", 8); const files = stringList(body.files, "files", 20);
@@ -404,12 +404,13 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
         const prior = inputReceipt(id, clientRequestId, intent); if (prior) return reply(prior, 202);
         const prepared = await prepareTurn(id, intent, body, ids, files, () => inputReceipt(id, clientRequestId, intent));
         if ("replay" in prepared) return reply(prepared.replay, 202);
-        const sent = operations.enqueue(intent, { mode: "queue", ...(prepared.blocks ? { blocks: prepared.blocks } : {}),
+        const sent = operations.enqueue(intent, { mode: body.mode, ...(prepared.blocks ? { blocks: prepared.blocks } : {}),
           ...(prepared.override ? { request: prepared.override } : {}) });
         staging.release(ids);
         return reply(sent, 202);
       }
-      if (inputRoute[2] !== undefined && method === "DELETE") {
+      if (inputRoute[2] !== undefined && inputRoute[3] && method === "POST") return reply(operations.sendNow(id, decodeURIComponent(inputRoute[2])), 202);
+      if (inputRoute[2] !== undefined && !inputRoute[3] && method === "DELETE") {
         store.deleteQueuedInput(id, decodeURIComponent(inputRoute[2]));
         operations.publishInputs(id);
         response.writeHead(204, { "Cache-Control": "no-store" }); response.end();

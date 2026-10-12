@@ -88,7 +88,8 @@ export class SessionOperations {
 
   /**
    * Sends a turn message: it starts a turn when the session is idle, and waits in the session's queue while a turn of
-   * this process runs (docs/sessions.md). A session held by another process answers `busy`.
+   * this process runs (docs/sessions.md). `interrupt` also stops that turn, and the message starts the next one. A session
+   * held by another process answers `busy`.
    */
   enqueue(intent: OperationIntent, options: { blocks?: UserInput; request?: RequestOverride; mode: QueuedIntent["mode"] }):
     { operation: SessionOperation } | { queued: QueuedInputView } {
@@ -100,6 +101,8 @@ export class SessionOperations {
         const queued = this.options.store.enqueueInput(intent.sessionId, holder.owner, { ...intent, mode: options.mode,
           ...(options.blocks ? { blocks: options.blocks } : {}), ...(options.request ? { request: options.request } : {}) });
         this.publishInputs(intent.sessionId, holder.operationId);
+        // Marked and stopped in one synchronous call, so the ending turn's successor choice sees this message.
+        if (options.mode === "interrupt") this.cancel(holder.operationId);
         return { queued };
       } catch (error) {
         // The turn ended between the lookup and the write: the session is free, so this message starts the next turn.
@@ -107,6 +110,25 @@ export class SessionOperations {
       }
     }
     return { operation: this.submit(intent, options.blocks, options.request) };
+  }
+
+  /** Sends a waiting, paused or blocked message now: it interrupts the running turn, or starts a turn when the session is idle. */
+  sendNow(sessionId: string, inputId: string): { operation: SessionOperation } | { queued: QueuedInputView } {
+    if (this.closed) throw new SessionOperationError("closed", "session operations are closed");
+    this.options.store.recoverOperations();
+    const holder = this.holder(sessionId);
+    if (holder) {
+      try {
+        const queued = this.options.store.markInterrupt(sessionId, holder.owner, inputId);
+        this.publishInputs(sessionId, holder.operationId);
+        this.cancel(holder.operationId);
+        return { queued };
+      } catch (error) { if (!(error instanceof Error && error.message === "session ownership lost")) throw error; }
+    }
+    const started = this.options.store.startQueuedInput(sessionId, inputId);
+    this.launch(started.operation, started.owner, typeof started.input === "string" ? undefined : started.input, started.request);
+    this.publishInputs(sessionId, started.operation.id);
+    return { operation: structuredClone(started.operation) };
   }
 
   /** The operation of this process that holds the session's lease now, if any. */
@@ -210,11 +232,12 @@ export class SessionOperations {
       state = "error"; error = { code: "cleanup_error", message: cause instanceof Error ? cause.message : String(cause) };
     }
     const details = { ...(result ? { result } : {}), ...(error ? { error } : {}), ...(metrics ? { metrics } : {}) };
-    // A completed turn hands the session to the oldest waiting message; any other ending, or a Stop that arrived during
-    // cleanup, pauses them all.
+    // The interrupting message starts the next turn whatever the ending; otherwise a completed turn hands the session to
+    // the oldest waiting message, and any other ending, or a Stop that arrived during cleanup, pauses them all.
     let pauseReason: string | undefined;
-    const next = state === "completed" && !this.closed && !active.controller.signal.aborted
-      ? store.queuedInputs(operation.sessionId).find((item) => item.state === "queued") : undefined;
+    const waiting = this.closed ? [] : store.queuedInputs(operation.sessionId).filter((item) => item.state === "queued");
+    const next = waiting.find((item) => item.mode === "interrupt")
+      ?? (state === "completed" && !active.controller.signal.aborted ? waiting[0] : undefined);
     if (next) {
       try {
         const handed = store.handOff({ id: operation.id, owner, state, details }, next.id);

@@ -376,3 +376,94 @@ test("after a restart, 201 delivered messages still resolve their replays and wa
     assert.equal(restarted.context.store!.historyWatermark(session.id), 201);
   } finally { await restarted?.close(); await f.close(); }
 });
+
+const operationFor = async (f: Awaited<ReturnType<typeof dashboardFixture>>, sessionId: string, key: string) => {
+  let found: SessionOperation | undefined;
+  await until(async () => { const response = await f.api(`/sessions/${sessionId}/operations?clientRequestId=${key}`);
+    if (response.ok) found = await response.json() as SessionOperation; return !!found; }, `the turn of ${key}`);
+  return found!;
+};
+
+test("an interrupt during a Bash sleep ends its process at once and starts the message as the next turn", async () => {
+  const f = await dashboardFixture({ agent: { tools: { use: ["builtin/bash"] } }, responses: [
+    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "sleep", type: "function", function: { name: "bash",
+      arguments: JSON.stringify({ command: "echo $$ > sleep.pid; sleep 5" }) } }] }, "tool_calls"), openAiDone] },
+    { frames: [openAiFrame({ content: "changed course" }, "stop"), openAiDone] },
+  ] });
+  try {
+    const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root });
+    const first = await f.json<InputReply>(`/sessions/${session.id}/inputs`, "POST", { clientRequestId: "first", agent: "raw", input: "wait", mode: "queue" });
+    const marker = join(f.root, "sleep.pid");
+    await until(() => existsSync(marker) && readFileSync(marker, "utf8").trim().length > 0, "the sleep to start");
+    const pid = Number(readFileSync(marker, "utf8"));
+    const startedAt = Date.now();
+    const sent = await f.json<InputReply>(`/sessions/${session.id}/inputs`, "POST", { clientRequestId: "now", agent: "raw", input: "do this instead", mode: "interrupt" });
+    assert.equal(sent.queued?.mode, "interrupt");
+    assert.equal((await f.wait(first.operation!.id)).state, "cancelled");
+    assert.ok(Date.now() - startedAt < 2000, `interrupt took ${Date.now() - startedAt} ms`);
+    assert.throws(() => process.kill(pid, 0));
+    const next = await operationFor(f, session.id, "now");
+    assert.equal((await f.wait(next.id)).state, "completed");
+    const messages = (f.provider.requests[1]!.body as { messages: Array<{ role: string; content: unknown }> }).messages;
+    assert.deepEqual(messages.slice(-3).map((message) => message.role), ["assistant", "tool", "user"]);
+    assert.equal(messages.at(-1)?.content, "do this instead");
+  } finally { await f.close(); }
+});
+
+test("an interrupt while the answer streams leaves the partial answer out of the next request", async () => {
+  const pieces = Array.from({ length: 40 }, (_, index) => openAiFrame({ content: `partial${index} ` }));
+  const f = await dashboardFixture({ responses: [
+    { frames: [...pieces, openAiFrame({ content: "end" }, "stop"), openAiDone], frameDelayMs: 50 },
+    { frames: [openAiFrame({ content: "fresh" }, "stop"), openAiDone] },
+  ] });
+  try {
+    const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root });
+    const first = await f.json<InputReply>(`/sessions/${session.id}/inputs`, "POST", { clientRequestId: "first", agent: "raw", input: "write", mode: "queue" });
+    await until(async () => (await f.json<SessionSnapshot>(`/sessions/${session.id}`)).live.some((item) => item.text.includes("partial2")), "the answer to stream");
+    await f.json(`/sessions/${session.id}/inputs`, "POST", { clientRequestId: "now", agent: "raw", input: "stop and listen", mode: "interrupt" });
+    assert.equal((await f.wait(first.operation!.id)).state, "cancelled");
+    assert.equal((await f.wait((await operationFor(f, session.id, "now")).id)).state, "completed");
+    const body = JSON.stringify(f.provider.requests[1]!.body);
+    assert.doesNotMatch(body, /partial/);
+    assert.match(body, /stop and listen/);
+  } finally { await f.close(); }
+});
+
+test("an interrupt with an approval pending cancels the approval and starts the new turn", async () => {
+  const f = await dashboardFixture({ agent: { tools: { use: ["builtin/bash"], rules: [{ match: "builtin/bash", effect: "ask" }] } }, responses: [
+    { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "pending", type: "function", function: { name: "bash", arguments: '{"command":"printf never"}' } }] }, "tool_calls"), openAiDone] },
+    { frames: [openAiFrame({ content: "new turn" }, "stop"), openAiDone] },
+  ] });
+  try {
+    const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root });
+    const first = await f.json<InputReply>(`/sessions/${session.id}/inputs`, "POST", { clientRequestId: "first", agent: "raw", input: "go", mode: "queue" });
+    let pending: { id: string; callId: string } | undefined;
+    await until(async () => { pending = (await f.json<{ approvals: Array<{ id: string; callId: string }> }>("/activity")).approvals[0]; return !!pending; }, "the approval");
+    await f.json(`/sessions/${session.id}/inputs`, "POST", { clientRequestId: "now", agent: "raw", input: "never mind", mode: "interrupt" });
+    assert.equal((await f.wait(first.operation!.id)).state, "cancelled");
+    assert.equal((await f.api(`/permissions/${pending!.id}`, "POST", { operationId: first.operation!.id, callId: pending!.callId, allow: true })).status, 409);
+    assert.equal((await f.wait((await operationFor(f, session.id, "now")).id)).state, "completed");
+    const history = await f.json<{ items: HistoryView[] }>(`/sessions/${session.id}/history`);
+    assert.ok(history.items.some((item) => item.toolResult?.code === "aborted"));
+    assert.ok(!existsSync(join(f.root, "never")));
+  } finally { await f.close(); }
+});
+
+test("POST send-now starts a paused message and answers already_sent for a message already sent", async () => {
+  const f = await dashboardFixture({ responses: [{ hold: true }, { frames: [openAiFrame({ content: "sent now" }, "stop"), openAiDone] }] });
+  try {
+    const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root });
+    const inputs = `/sessions/${session.id}/inputs`;
+    const first = await f.json<InputReply>(inputs, "POST", { clientRequestId: "first", agent: "raw", input: "go", mode: "queue" });
+    await until(() => f.provider.requests.length === 1, "the request");
+    const waiting = await f.json<InputReply>(inputs, "POST", { clientRequestId: "later", agent: "raw", input: "later", mode: "queue" });
+    await f.json(`/operations/${first.operation!.id}/cancel`, "POST"); await f.wait(first.operation!.id);
+    const started = await f.api(`${inputs}/${waiting.queued!.id}/send-now`, "POST", {});
+    assert.equal(started.status, 202);
+    const operation = (await started.json() as InputReply).operation!;
+    assert.equal(operation.clientRequestId, "later");
+    assert.equal((await f.wait(operation.id)).state, "completed");
+    const again = await f.api(`${inputs}/${waiting.queued!.id}/send-now`, "POST", {});
+    assert.equal(again.status, 409); assert.equal((await again.json() as { error: { code: string } }).error.code, "already_sent");
+  } finally { await f.close(); }
+});

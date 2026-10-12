@@ -450,22 +450,59 @@ export class SessionStore {
         WHERE id = ? AND owner_token = ? AND owner_generation = ?`)
         .run(owner.token, owner.generation, this.now() + 15_000, ended.sessionId, previous.owner.token, previous.owner.generation);
       if (moved.changes !== 1) throw new Error("session ownership lost");
-      const operation: SessionOperation = { sessionId: ended.sessionId, clientRequestId: String(row.client_request_id), kind: "turn",
-        agentName: String(row.agent_name), configPath: String(row.config_path), input: String(row.input_text),
-        id: randomUUID(), state: "accepted", ownerGeneration: owner.generation, acceptedAt: this.now(), updatedAt: this.now() };
-      this.database.prepare(`INSERT INTO session_operations(id, session_id, client_request_id, request_hash,
-        owner_generation, state, accepted_at, updated_at, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(operation.id, operation.sessionId, operation.clientRequestId, String(row.request_hash), owner.generation, operation.state,
-          operation.acceptedAt, operation.updatedAt, JSON.stringify(operation));
-      const input = this.queuedInput(row);
-      const request = row.request_json === null ? undefined : JSON.parse(String(row.request_json)) as RequestOverride;
-      const blocks = row.blocks_json !== null;
-      this.finalizeQueued(inputId, "taken", { operationId: operation.id });
-      return { previous: ended, operation, owner, input, ...(request ? { request } : {}), blocks };
+      return { previous: ended, owner, ...this.takeQueuedInput(row, owner) };
     });
     if (handed.blocks) { try { this.reclaimUnreferencedPayloads(); } catch { /* Idle maintenance retries reclamation. */ } }
     const { blocks: _blocks, ...result } = handed;
     return result;
+  }
+
+  /** Starts a waiting, paused or blocked message as a turn of an idle session: the claim, the operation and `taken` commit together. */
+  startQueuedInput(sessionId: string, inputId: string): { operation: SessionOperation; owner: SessionOwner; input: UserInput; request?: RequestOverride } {
+    const started = this.transaction(() => {
+      const row = this.waitingRow(sessionId, inputId);
+      const owner = this.claimInTransaction(sessionId);
+      return { owner, ...this.takeQueuedInput(row, owner) };
+    });
+    if (started.blocks) { try { this.reclaimUnreferencedPayloads(); } catch { /* Idle maintenance retries reclamation. */ } }
+    const { blocks: _blocks, ...result } = started;
+    return result;
+  }
+
+  /** Makes a waiting, paused or blocked message the one that interrupts the running turn; any earlier interrupt becomes an ordinary queued message. */
+  markInterrupt(sessionId: string, owner: SessionOwner, inputId: string): QueuedInputView {
+    return this.transaction(() => {
+      this.ownerRow(sessionId, owner);
+      this.waitingRow(sessionId, inputId);
+      this.database.prepare("UPDATE session_queued_inputs SET mode = 'queue' WHERE session_id = ? AND mode = 'interrupt'").run(sessionId);
+      this.database.prepare("UPDATE session_queued_inputs SET state = 'queued', mode = 'interrupt', reason = NULL, updated_at = ? WHERE id = ?")
+        .run(this.now(), inputId);
+      return this.queuedView(this.database.prepare("SELECT * FROM session_queued_inputs WHERE id = ?").get(inputId)!);
+    });
+  }
+
+  private waitingRow(sessionId: string, inputId: string): DbRow {
+    const row = this.database.prepare("SELECT * FROM session_queued_inputs WHERE id = ? AND session_id = ?").get(inputId, sessionId);
+    if (!row) throw new SessionOperationError("not_found", "Queued message not found");
+    if (row.state === "deleted") throw new SessionOperationError("deleted", "This message was deleted before it was sent");
+    if (!["queued", "paused", "blocked"].includes(String(row.state))) throw new SessionOperationError("already_sent", "The agent already took this message");
+    return row;
+  }
+
+  /** Inserts the turn operation of a queued message under `owner` and marks the message `taken`; the caller holds the transaction. */
+  private takeQueuedInput(row: DbRow, owner: SessionOwner): { operation: SessionOperation; input: UserInput; request?: RequestOverride; blocks: boolean } {
+    const operation: SessionOperation = { sessionId: String(row.session_id), clientRequestId: String(row.client_request_id), kind: "turn",
+      agentName: String(row.agent_name), configPath: String(row.config_path), input: String(row.input_text),
+      id: randomUUID(), state: "accepted", ownerGeneration: owner.generation, acceptedAt: this.now(), updatedAt: this.now() };
+    this.database.prepare(`INSERT INTO session_operations(id, session_id, client_request_id, request_hash,
+      owner_generation, state, accepted_at, updated_at, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(operation.id, operation.sessionId, operation.clientRequestId, String(row.request_hash), owner.generation, operation.state,
+        operation.acceptedAt, operation.updatedAt, JSON.stringify(operation));
+    const input = this.queuedInput(row);
+    const request = row.request_json === null ? undefined : JSON.parse(String(row.request_json)) as RequestOverride;
+    const blocks = row.blocks_json !== null;
+    this.finalizeQueued(String(row.id), "taken", { operationId: operation.id });
+    return { operation, input, ...(request ? { request } : {}), blocks };
   }
 
   recoverOperations(): number {
@@ -484,7 +521,7 @@ export class SessionStore {
         count++;
       }
       // Messages wait only while their session is held; any left in a released session wait for the user.
-      this.database.prepare(`UPDATE session_queued_inputs SET state = 'paused', updated_at = ? WHERE state IN ('queued', 'delivering')
+      this.database.prepare(`UPDATE session_queued_inputs SET state = 'paused', mode = 'queue', updated_at = ? WHERE state IN ('queued', 'delivering')
         AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = session_queued_inputs.session_id AND s.owner_token IS NULL)`).run(this.now());
       return count;
     });
@@ -1160,6 +1197,8 @@ export class SessionStore {
           AND state IN ('queued', 'delivering', 'paused', 'blocked')`).get(sessionId)?.n);
         if (open >= MAX_QUEUED_INPUTS) throw new SessionOperationError("queue_full", `At most ${MAX_QUEUED_INPUTS} messages can wait; delete one or wait for the agent`);
         if (staged) this.addPayloadReference(staged);
+        // One message interrupts: a newer interrupt makes an earlier one an ordinary queued message, delivered after it.
+        if (mode === "interrupt") this.database.prepare("UPDATE session_queued_inputs SET mode = 'queue' WHERE session_id = ? AND mode = 'interrupt'").run(sessionId);
         const sequence = Number(this.database.prepare("SELECT coalesce(max(sequence), 0) + 1 AS next FROM session_queued_inputs WHERE session_id = ?").get(sessionId)?.next);
         const id = randomUUID();
         this.database.prepare(`INSERT INTO session_queued_inputs(id, session_id, sequence, client_request_id, request_hash, state, mode,
@@ -1203,11 +1242,12 @@ export class SessionStore {
     return row ? this.queuedView(row) : undefined;
   }
 
-  /** Takes the oldest waiting message for delivery, under the session lease. */
+  /** Takes the oldest waiting message for delivery, under the session lease. The interrupting message starts the next turn instead. */
   claimQueuedInput(sessionId: string, owner: SessionOwner): { id: string; clientRequestId: string; input: UserInput } | undefined {
     return this.transaction(() => {
       this.ownerRow(sessionId, owner);
-      const row = this.database.prepare("SELECT * FROM session_queued_inputs WHERE session_id = ? AND state = 'queued' ORDER BY sequence LIMIT 1").get(sessionId);
+      const row = this.database.prepare(`SELECT * FROM session_queued_inputs WHERE session_id = ? AND state = 'queued' AND mode = 'queue'
+        ORDER BY sequence LIMIT 1`).get(sessionId);
       if (!row) return undefined;
       this.database.prepare("UPDATE session_queued_inputs SET state = 'delivering', updated_at = ? WHERE id = ?").run(this.now(), String(row.id));
       return { id: String(row.id), clientRequestId: String(row.client_request_id), input: this.queuedInput(row) };
@@ -1237,7 +1277,7 @@ export class SessionStore {
   }
 
   private pauseOpenInputs(sessionId: string, reason?: string): void {
-    this.database.prepare(`UPDATE session_queued_inputs SET state = 'paused', reason = ?, updated_at = ?
+    this.database.prepare(`UPDATE session_queued_inputs SET state = 'paused', mode = 'queue', reason = ?, updated_at = ?
       WHERE session_id = ? AND state IN ('queued', 'delivering')`).run(reason ?? null, this.now(), sessionId);
   }
 
