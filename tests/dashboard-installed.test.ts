@@ -51,7 +51,7 @@ test("packed dashboard configures, reconnects, updates a package, then installed
     const packed = await command("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", root], repo, env);
     const tarball = join(root, (JSON.parse(packed.stdout) as Array<{ filename: string }>)[0]!.filename);
     const artifactHash = createHash("sha256").update(await readFile(tarball)).digest("hex");
-    await command("npm", ["install", "--omit=dev", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=silly", tarball], consumer, env);
+    await command("npm", ["install", "--omit=dev", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund", tarball], consumer, env);
     const installed = join(consumer, "node_modules/@tlelabs/raw"), bin = join(consumer, "node_modules/.bin/raw");
     assert.equal(existsSync(join(consumer, "node_modules/vite")), false);
     for (const file of ["docs/dashboard.md", "docs/dashboard-api.md", "docs/cli.md", "docs/architecture.md", "docs/hooks.md", "examples/hooks/guard/hook.json", "dist/dashboard/index.html"]) {

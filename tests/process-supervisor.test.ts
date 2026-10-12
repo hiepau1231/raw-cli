@@ -126,7 +126,8 @@ test("managed Stop terminates owned grandchildren before they can execute delaye
   try {
     const job = await context.start({ command: `${quote(process.execPath)} ${quote(fileURLToPath(new URL("./fixtures/process-tree.cjs", import.meta.url)))} ${quote(marker)}`, cwd: root });
     let pid = 0;
-    for (let i = 0; i < 100 && !pid; i++) { try { pid = Number(await readFile(marker + ".ready", "utf8")); } catch { await delay(10); } }
+    // Up to 10 s for Git Bash and Node to start on a loaded Windows runner; the side effects come 1 s after ready.
+    for (let i = 0; i < 1000 && !pid; i++) { try { pid = Number(await readFile(marker + ".ready", "utf8")); } catch { await delay(10); } }
     assert.ok(pid > 0);
     assert.equal((await context.stop(job.id)).state, "stopped");
     await delay(700);
