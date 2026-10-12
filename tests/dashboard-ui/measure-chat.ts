@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { dashboardFixture } from "../fixtures/dashboard.js";
 import { installChatWorkspace } from "./chat-stress.js";
 import { LIVE_ANSWER, LIVE_REQUEST, longScenario, longStream, seedLongChat } from "./chat-long.js";
+import { probe } from "./perf-probe.js";
 
 // Run after npm run build. Measures the long chat of docs/chat-design.md §10 and writes test-results/chat-perf/report-<label>.json.
 //   --label <name>    report name (default "run")
@@ -23,71 +24,6 @@ const strictFrames = flag("--strict-frames");
 const asserting = flag("--assert") && cpu === 1;
 const observe = !flag("--no-observer");
 const KEYS = 40;
-
-/**
- * Installed before the app loads. The Event Timing and long-animation-frame observers, and a test-only React DevTools hook that,
- * while enabled, counts the DOM nodes whose props changed in each commit, by region.
- */
-function probe(observeEvents: boolean) {
-  const w = window as unknown as Record<string, unknown>;
-  const events: Array<{ name: string; start: number; duration: number; interactionId: number }> = [];
-  const frames: Array<{ start: number; duration: number }> = [];
-  w.__perf = { events, frames, observing: false };
-  if (observeEvents) {
-    const observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries() as Array<PerformanceEventTiming & { interactionId?: number }>)
-        events.push({ name: entry.name, start: entry.startTime, duration: entry.duration, interactionId: entry.interactionId ?? 0 });
-    });
-    observer.observe({ type: "event", durationThreshold: 16, buffered: true } as PerformanceObserverInit);
-    observer.observe({ type: "first-input", buffered: true });
-    (w.__perf as { observing: boolean }).observing = true;
-  }
-  new PerformanceObserver((list) => {
-    for (const entry of list.getEntries()) frames.push({ start: entry.startTime, duration: entry.duration });
-  }).observe({ type: "long-animation-frame", buffered: true });
-  type Fiber = { child: Fiber | null; sibling: Fiber | null; stateNode: unknown; memoizedProps: unknown };
-  const seen = new WeakMap<object, unknown>();
-  const counts = { conversation: 0, beforeLastUser: 0, inspector: 0, commits: 0 };
-  let enabled = false;
-  let last: { current: Fiber } | undefined;
-  const walk = (root: Fiber, visit: (fiber: Fiber) => void) => {
-    const stack: Fiber[] = [root];
-    while (stack.length) {
-      const fiber = stack.pop()!;
-      visit(fiber);
-      if (fiber.sibling) stack.push(fiber.sibling);
-      if (fiber.child) stack.push(fiber.child);
-    }
-  };
-  const snapshot = () => { if (last) walk(last.current, (fiber) => { if (fiber.stateNode instanceof Node) seen.set(fiber.stateNode, fiber.memoizedProps); }); };
-  w.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
-    supportsFiber: true, isDisabled: false, renderers: new Map(),
-    inject: () => 1, checkDCE: () => {}, onCommitFiberUnmount: () => {}, onPostCommitFiberRoot: () => {},
-    onCommitFiberRoot: (_id: number, root: { current: Fiber }) => {
-      last = root;
-      if (!enabled) return;
-      counts.commits++;
-      const lastUser = [...document.querySelectorAll(".conversation .message.user")].at(-1);
-      walk(root.current, (fiber) => {
-        const node = fiber.stateNode;
-        if (!(node instanceof Node)) return;
-        const changed = seen.get(node) !== fiber.memoizedProps;
-        seen.set(node, fiber.memoizedProps);
-        if (!changed || !node.isConnected) return;
-        const element = node instanceof Element ? node : node.parentElement;
-        if (!element) return;
-        if (element.closest(".inspector")) counts.inspector++;
-        if (!element.closest(".conversation")) return;
-        counts.conversation++;
-        if (lastUser && !lastUser.contains(element) && lastUser.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_PRECEDING) counts.beforeLastUser++;
-      });
-    },
-  };
-  w.__commits = {
-    start: () => { snapshot(); Object.assign(counts, { conversation: 0, beforeLastUser: 0, inspector: 0, commits: 0 }); enabled = true; },
-    stop: () => { enabled = false; return { ...counts }; },
-  };
-}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const now = (page: Page) => page.evaluate(() => performance.now());
@@ -215,15 +151,16 @@ try {
   from = await now(page);
   await typeKeys(cdp, KEYS, 50);
   to = await now(page);
-  const overlap = growth > grownBefore && (await page.getByRole("button", { name: "Stop" }).count()) > 0;
+  // CSS, not a role query: computing accessible names over the whole long chat would itself make a long frame.
+  const stop = page.locator(".composer-send.stop");
+  const overlap = growth > grownBefore && (await stop.count()) > 0;
   const streaming = await samples(page, from, to, KEYS, calibrated);
   await page.evaluate(() => (window as unknown as { __commits: { start(): void } }).__commits.start());
-  const commitFrom = await now(page);
   await sleep(1500);
   const streamingCommits = await page.evaluate(() => (window as unknown as { __commits: { stop(): unknown } }).__commits.stop());
-  await expect(page.getByRole("button", { name: "Stop" })).toHaveCount(0, { timeout: 60000 });
-  // While streaming, without the probe's own cost.
-  const loafStreaming = await longFrames(page, from, commitFrom);
+  await expect(stop).toHaveCount(0, { timeout: 60000 * cpu });
+  // While typing during the stream: the measuring's own page queries and the probe's walk come after.
+  const loafStreaming = await longFrames(page, from, to);
   const answers = await assistants.count();
   const liveRequests = raw.provider.requests.length - requestsBefore;
   if (answers !== turns + 1) throw new Error(`expected ${turns + 1} answers after the stream, found ${answers}`);

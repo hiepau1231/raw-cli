@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import type { SessionSnapshot } from "../../src/dashboard/sessions.js";
 import type {
   DashboardEvent,
@@ -9,6 +9,7 @@ import type { HistoryView } from "../../src/sessions/view.js";
 import type { Page } from "../../src/sessions/store.js";
 import { api, ApiError, errorText, subscribe } from "./api.js";
 import { applyFrame } from "./panels/panel-state.js";
+import { browserScheduler, createEventBatcher } from "./session-batch.js";
 
 export type LiveTool = DashboardEventData["tool"] & { operationId: string };
 export interface ChatState extends SessionSnapshot {
@@ -235,8 +236,23 @@ export function useSession(sessionId: string | undefined) {
     let cursor: string | undefined;
     let lastSequence = -1;
     let epoch = "";
+    // Stream events apply once per frame, as a transition, so a keystroke goes first (docs/chat-design.md §10).
+    const batcher = createEventBatcher<DashboardEvent>((events, urgent) => {
+      const update = (old: ChatState | undefined) => events.reduce(reduceEvent, old);
+      if (urgent) setState(update);
+      else startTransition(() => setState(update));
+    }, browserScheduler);
+    // Set only on a change: a same-value set while a batch is pending would still render the chat once per event.
+    let connectionShown: string | undefined;
+    let errorShown = "";
+    const showConnection = (value: string) => {
+      if (value !== connectionShown) setConnection((connectionShown = value));
+    };
+    const showError = (value: string) => {
+      if (value !== errorShown) setError((errorShown = value));
+    };
     const connect = async () => {
-      setConnection("Connecting");
+      showConnection("Connecting");
       try {
         await subscribe(
           sessionId,
@@ -254,9 +270,11 @@ export function useSession(sessionId: string | undefined) {
             epoch = nextEpoch;
             lastSequence = event.sequence;
             cursor = event.id;
-            setConnection("Connected");
-            setError("");
-            setState((old) => reduceEvent(old, event));
+            showConnection("Connected");
+            showError("");
+            batcher.push(event);
+            // A snapshot replaces what the queue would build on, so it applies at once, after the queued events.
+            if (event.type === "snapshot" || event.type === "reset") batcher.flush(true);
             // The title is set from the first message when its turn starts, so a placeholder is refreshed at once; everything else at the end of the turn.
             if (event.type === "operation" && (isTerminal(event.data.state) || placeholderTitle(titleRef.current)))
               void api<SessionSnapshot>(
@@ -279,17 +297,17 @@ export function useSession(sessionId: string | undefined) {
                   ),
                 )
                 .catch(() => {});
-            if (event.type === "host_error") setError(event.data.message);
+            if (event.type === "host_error") showError(event.data.message);
           },
           () => {
-            setConnection("Connected");
-            setError("");
+            showConnection("Connected");
+            showError("");
           },
         );
       } catch (cause) {
         if (controller.signal.aborted) return;
-        setConnection("Disconnected");
-        setError(errorText(cause));
+        showConnection("Disconnected");
+        showError(errorText(cause));
         if (!(cause instanceof ApiError && [401, 404].includes(cause.status)))
           timer = setTimeout(() => {
             void connect();
@@ -299,6 +317,7 @@ export function useSession(sessionId: string | undefined) {
     void connect();
     return () => {
       controller.abort();
+      batcher.dispose();
       if (timer) clearTimeout(timer);
     };
   }, [sessionId]);

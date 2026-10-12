@@ -1,5 +1,5 @@
 import { InteractionView } from "./panels/InteractionView.js";
-import { useId, useState, type ReactNode } from "react";
+import { memo, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { InlineToolView } from "./panels/ToolView.js";
 import type { ActionHost } from "./panels/actions.js";
 import type { InsertRef } from "./panels/status.js";
@@ -27,6 +27,10 @@ import { ToolRow } from "./tool-cards/ToolRow.js";
 import { ToolIcon } from "./tool-cards/ToolIcon.js";
 import { diffTotals } from "./tool-cards/diff-totals.js";
 import { statusBadge } from "./tool-cards/status.js";
+import { assignStableKeys, splitTurns, type KeyUnit } from "./timeline-keys.js";
+import type { SessionOperation } from "../../src/sessions/operations.js";
+import type { InteractionRequest } from "../../src/interactions/contract.js";
+import type { PanelStackItem } from "../../src/panels/stack.js";
 
 /** The owner of the files-changed panel the editing tools share (src/tools/write-changes.ts FILES_CHANGED_OWNER). */
 const FILES_CHANGED_OWNER = "host/files_changed";
@@ -306,12 +310,346 @@ function WorkGroup({
     </div>
   );
 }
-export function Timeline({
+interface Pair {
+  call?: VisibleToolCall;
+  result?: VisibleToolResult;
+  status?: string;
+  abbreviated?: boolean;
+}
+type ViewFrame = ChatState["views"][string];
+
+/** A user or assistant message; it renders again only when its record, its live segment or the session changes. */
+const MessageRow = memo(function MessageRow({ item, segment, sessionId }: { item: HistoryView; segment: LiveSegment | undefined; sessionId: string }) {
+  return (
+    <article
+      className={`message ${item.kind}`}
+      data-testid={
+        item.kind === "user" ? "user-message" : "assistant-message"
+      }
+    >
+      {item.kind === "user" ? (
+        <>
+          {/* The user's bubble: attachments above the text, the time and Copy message under it. */}
+          <div className="bubble">
+            {item.attachments?.length ? (
+              <HistoryAttachments
+                items={item.attachments}
+                sessionId={sessionId}
+                sequence={item.sequence}
+              />
+            ) : null}
+            {segment?.paged ? (
+              <PagedLive segment={segment} sessionId={sessionId} />
+            ) : (
+              <div className="user-text">{item.text}</div>
+            )}
+          </div>
+          <div className="message-meta">
+            <time dateTime={new Date(item.createdAt).toISOString()}>
+              {new Date(item.createdAt).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </time>
+            <CopyButton value={item.text ?? ""} label="Copy message" />
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="message-label">
+            <span className="avatar" aria-hidden="true">r</span>
+            <strong>Raw</strong>
+            <time dateTime={new Date(item.createdAt).toISOString()}>
+              {new Date(item.createdAt).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </time>
+          </div>
+          {segment?.paged ? (
+            <PagedLive segment={segment} sessionId={sessionId} />
+          ) : (
+            <Markdown>{item.text ?? ""}</Markdown>
+          )}
+        </>
+      )}
+      {item.status === "interrupted" && (
+        <small className="warning">Incomplete response</small>
+      )}
+      {item.kind === "assistant" && (
+        <div className="message-actions">
+          <CopyButton value={item.text ?? ""} label="Copy message" />
+        </div>
+      )}
+    </article>
+  );
+});
+
+/**
+ * One turn: your message and everything up to the next one. Its props are only what it shows, so a turn whose records,
+ * calls, approvals, questions, views, operations and panels did not change is not rendered again (docs/chat-design.md §10).
+ */
+interface TurnProps {
+  records: HistoryView[];
+  /** Each record's call key (`<scope>:<callId>`), or "" for a record without a call. */
+  keys: string[];
+  pairs: Map<string, Pair>;
+  approvals: Approval[];
+  interactions: InteractionRequest[];
+  live: LiveSegment[];
+  views: ViewFrame[];
+  operations: SessionOperation[];
+  compactions: CompactionDetails[];
+  panels: PanelStackItem[];
+  /** Calls, views and compactions an earlier turn already rendered. */
+  priorTools: string[];
+  priorViews: string[];
+  priorCompactions: string[];
+  sessionId: string;
+  preferences: Preferences;
+  availabilityRevision: string;
+  actions: ActionHost | undefined;
+  onInsert: InsertRef;
+  onOpenPanel: (panel: string) => void;
+}
+const NONE: never[] = [];
+const sameList = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((value, index) => value === b[index]);
+const samePairs = (a: Map<string, Pair>, b: Map<string, Pair>) => {
+  if (a.size !== b.size) return false;
+  for (const [key, pair] of a) {
+    const other = b.get(key);
+    if (!other || other.call !== pair.call || other.result !== pair.result || other.status !== pair.status || other.abbreviated !== pair.abbreviated) return false;
+  }
+  return true;
+};
+function sameTurn(a: TurnProps, b: TurnProps): boolean {
+  for (const name of Object.keys(a) as Array<keyof TurnProps>) {
+    const x = a[name];
+    const y = b[name];
+    if (x === y) continue;
+    if (Array.isArray(x) && Array.isArray(y) && sameList(x, y)) continue;
+    if (x instanceof Map && y instanceof Map && samePairs(x, y)) continue;
+    return false;
+  }
+  return true;
+}
+
+const TurnView = memo(function TurnView({
+  records, keys, pairs, approvals: pendingApprovals, interactions, live, views, operations, compactions, panels,
+  priorTools, priorViews, priorCompactions, sessionId, preferences, availabilityRevision, actions, onInsert, onOpenPanel,
+}: TurnProps) {
+  /** Each record's group key in the last committed render, so a group keeps its key when records join it at either end. */
+  const groupKeys = useRef<ReadonlyMap<string, string>>(new Map());
+  const result: Array<ReactNode | { unit: KeyUnit; render: (key: string) => ReactNode }> = [];
+  /** The open group's entries; rows are built at flush, when the receipts of its calls are known. */
+  let work: Array<{ reasoning: string; id: string } | { key: string; callId: string; operationId?: string | undefined }> = [];
+  let workIds: string[] = [];
+  let receipts: PanelReceipt[] = [];
+  let workActive = false;
+  let elapsedMs: number | undefined;
+  const renderedTools = new Set(priorTools);
+  const renderedCompact = new Set(priorCompactions);
+  const renderedViews = new Set(priorViews);
+  const stackOf = (receipt: PanelReceipt) => panels.find((panel) => panel.panel === receiptPanel(receipt));
+  const flush = () => {
+    if (work.length) {
+      const byCall = new Map<string, PanelReceipt[]>();
+      for (const receipt of receipts) byCall.set(receipt.toolCallId, [...(byCall.get(receipt.toolCallId) ?? []), receipt]);
+      let failed = 0;
+      const approvals: ReactNode[] = [];
+      const results: VisibleToolResult[] = [];
+      const rows = work.map((entry) => {
+        if ("reasoning" in entry) return <ReasoningRow key={entry.id} text={entry.reasoning} preferences={preferences} />;
+        const pair = pairs.get(entry.key)!;
+        const approval = pendingApprovals.find((pending) => pending.operationId === entry.operationId && pending.callId === entry.callId);
+        const badge = statusBadge({ result: pair.result, lifecycle: pair.status, approval: !!approval, started: !!pair.call?.started });
+        if (badge.tone === "error") failed++;
+        if (approval) approvals.push(<ApprovalCard key={approval.id} approval={approval} call={pair.call} />);
+        if (pair.result) results.push(pair.result);
+        // A call that asked you something: its question cards are the only place the questions and answers show. A
+        // call may ask several in turn; it waits for you while any of them is pending.
+        const questions = interactions.filter((request) => request.identity.toolCallId === entry.callId
+          && (!request.identity.operationId || request.identity.operationId === entry.operationId));
+        return (
+          <ToolRow
+            key={entry.key}
+            call={pair.call}
+            result={pair.result}
+            status={pair.status}
+            approval={!!approval}
+            preferences={preferences}
+            previewAbbreviated={pair.abbreviated}
+            sessionId={sessionId}
+            // Files changed is the header's +a −r pill; other panels get a pill on the row that updated them.
+            receipts={(byCall.get(entry.callId) ?? []).filter((receipt) => receipt.owner !== FILES_CHANGED_OWNER).map((receipt) => ({
+              receipt, panelTitle: stackOf(receipt)?.title ?? receipt.title, icon: stackOf(receipt)?.icon ?? "panel", onOpen: () => onOpenPanel(receiptPanel(receipt)) }))}
+            onOpenCommands={() => onOpenPanel(COMMANDS_ID)}
+            waitingForYou={questions.some((request) => request.state === "pending")}
+            // History records carry no call id: an ask_user call is recognised by its identity, unless it failed before
+            // it asked, when its result is the only explanation.
+            argumentsOnly={questions.length > 0 || (pair.call?.identity === "builtin/ask_user" && !pair.result?.failed)}
+          />
+        );
+      });
+      // One pill per panel, in the order the group first updated it, showing its latest receipt.
+      const latest = new Map<string, PanelReceipt>();
+      for (const receipt of receipts) latest.set(receiptPanel(receipt), receipt);
+      const pills = [...latest].map(([panel, receipt]): WorkPill => {
+        const stack = stackOf(receipt);
+        const pill = { key: panel, icon: stack?.icon ?? "panel", error: false, onOpen: () => onOpenPanel(panel) };
+        if (receipt.error) return { ...pill, label: receipt.title, name: `${receipt.title}: update rejected`, error: true };
+        // This group's own lines, from its diff results; the receipt's summary counts the whole session.
+        const totals = receipt.owner === FILES_CHANGED_OWNER ? diffTotals(results) : undefined;
+        if (totals)
+          return { ...pill, name: `${receipt.title} +${totals.added} −${totals.removed}`,
+            label: <><span className="add">+{totals.added}</span> <span className="remove">−{totals.removed}</span></> };
+        const title = stack?.title ?? receipt.title;
+        const label = receipt.progress && receipt.progress.total > 0 ? `${title} ${receipt.progress.done}/${receipt.progress.total}` : receipt.title;
+        return { ...pill, label, name: label };
+      });
+      const count = rows.length - work.filter((entry) => "reasoning" in entry).length;
+      const active = workActive;
+      const elapsed = elapsedMs;
+      result.push(
+        {
+          unit: { ids: workIds, prefix: "work:" },
+          render: (key) => (
+            <WorkGroup
+              key={key}
+              count={count}
+              failed={failed}
+              approval={approvals.length > 0}
+              active={active}
+              preferences={preferences}
+              elapsedMs={elapsed}
+              pills={pills}
+            >
+              {rows}
+            </WorkGroup>
+          ),
+        },
+        // A pending approval is a card of its own after the group that holds the call.
+        ...approvals,
+      );
+    }
+    work = [];
+    workIds = [];
+    receipts = [];
+    workActive = false;
+    elapsedMs = undefined;
+  };
+  records.forEach((item, index) => {
+    if (item.interactionRequestId) {
+      flush();
+      if (item.interactionViewInstanceId) renderedViews.add(item.interactionViewInstanceId);
+      result.push(<InteractionView key={item.interactionRequestId} sessionId={sessionId} requestId={item.interactionRequestId}
+        live={interactions.find(request => request.identity.requestId === item.interactionRequestId)} availabilityRevision={availabilityRevision}
+        actions={actions} onInsert={onInsert} onOpenPanel={onOpenPanel} />);
+      return;
+    }
+    const identity = item.toolView ?? item.panelReceipt?.view;
+    if (identity) {
+      if (renderedViews.has(identity.instanceId)) {
+        if (item.panelReceipt) {
+          flush();
+          result.push(<Receipt key={item.id} receipt={item.panelReceipt} icon="panel" openLabel="Show this tool view"
+            onOpen={() => document.querySelector(`[data-instance="${CSS.escape(identity.instanceId)}"]`)?.scrollIntoView({ block: "nearest" })} />);
+        }
+        return;
+      }
+      renderedViews.add(identity.instanceId);
+      flush();
+      result.push(<InlineToolView key={identity.instanceId} sessionId={sessionId} identity={identity}
+        live={views.find((frame) => frame.view?.instanceId === identity.instanceId)} receipt={item.panelReceipt}
+        availabilityRevision={availabilityRevision} actions={actions} onInsert={onInsert} />);
+      return;
+    }
+    if (item.kind === "reasoning" || item.callId) {
+      workActive ||= operations.some(
+        (op) => op.id === item.operationId && !isTerminal(op.state),
+      );
+      elapsedMs ??= operations.find((op) => op.id === item.operationId)
+        ?.metrics?.elapsedMs;
+      const key = keys[index]!;
+      // A call's live record and its history records have different ids; the call names the group across both.
+      workIds.push(item.id, ...(item.callId ? [`call:${key}`] : []));
+      if (item.kind === "reasoning") work.push({ reasoning: item.text ?? "", id: item.id });
+      else {
+        if (renderedTools.has(key)) return;
+        renderedTools.add(key);
+        work.push({ key, callId: item.callId!, operationId: item.operationId });
+      }
+      return;
+    }
+    if (item.panelReceipt) {
+      // A call's receipt is a pill of its group; one without a call in the open group (a user action) is a row of its own.
+      const receipt = item.panelReceipt;
+      if (receipt.source === "tool" && work.some((entry) => "callId" in entry && entry.callId === receipt.toolCallId)) {
+        receipts.push(receipt);
+        return;
+      }
+      flush();
+      result.push(<Receipt key={item.id} receipt={receipt} icon={stackOf(receipt)?.icon ?? "panel"} onOpen={() => onOpenPanel(receiptPanel(receipt))} />);
+      return;
+    }
+    flush();
+    if (item.hook) {
+      result.push(<p className="run-status" key={item.id}>
+        Hook {item.hook.id} · {item.hook.event} · {item.hook.outcome}
+        {item.hook.message ? ` · ${item.hook.message}` : item.hook.code ? ` · ${item.hook.code}` : ""}
+      </p>);
+      return;
+    }
+    if (item.compaction) {
+      const id = item.compaction.id;
+      if (!renderedCompact.has(id)) {
+        renderedCompact.add(id);
+        result.push(<Compaction key={id} details={compactions.find((details) => details.id === id)!} />);
+      }
+      return;
+    }
+    if (item.kind === "run_end") {
+      if (item.runResult?.status !== "completed")
+        result.push(
+          <p className="run-status" key={item.id}>
+            {item.runResult?.status === "cancelled"
+              ? "Stopped · response may be incomplete"
+              : `${item.runResult?.status ?? item.status}${item.runResult?.message ? ` · ${item.runResult.message}` : ""}`}
+          </p>,
+        );
+      return;
+    }
+    if (item.kind === "user" || item.kind === "assistant")
+      result.push(<MessageRow key={item.id} item={item} segment={live.find((entry) => entry.segmentId === item.id)} sessionId={sessionId} />);
+    else if (item.text)
+      result.push(
+        <p className="system-note" key={item.id}>
+          {item.text}
+        </p>,
+      );
+  });
+  flush();
+  const groups = result.filter((entry): entry is { unit: KeyUnit; render: (key: string) => ReactNode } => !!entry && typeof entry === "object" && "unit" in entry);
+  const { keys: assigned, next } = assignStableKeys(groups.map((entry) => entry.unit), groupKeys.current);
+  useLayoutEffect(() => {
+    groupKeys.current = next;
+  });
+  let group = 0;
+  return <>{result.map((entry) => (entry && typeof entry === "object" && "unit" in entry ? entry.render(assigned[group++]!) : entry))}</>;
+}, sameTurn);
+
+const noInsert: InsertRef = () => {};
+
+/**
+ * The conversation: history and live output, split at your messages into turns, each rendered by a TurnView under a key
+ * that survives new records at either end (docs/chat-design.md §10).
+ */
+export const Timeline = memo(function Timeline({
   state,
   preferences,
   onOpenPanel,
   actions,
-  onInsert = () => {},
+  onInsert = noInsert,
 }: {
   state: ChatState;
   preferences: Preferences;
@@ -319,6 +657,8 @@ export function Timeline({
   actions?: ActionHost | undefined;
   onInsert?: InsertRef;
 }) {
+  /** Each record's turn key in the last committed render. */
+  const turnKeys = useRef<ReadonlyMap<string, string>>(new Map());
   const records = [...state.history.items];
   for (const segment of state.live)
     if (!records.some((record) => record.id === segment.segmentId))
@@ -332,15 +672,7 @@ export function Timeline({
         operationId: segment.operationId,
         ...(segment.turnId ? { turnId: segment.turnId } : {}),
       });
-  const pairs = new Map<
-    string,
-    {
-      call?: VisibleToolCall;
-      result?: VisibleToolResult;
-      status?: string;
-      abbreviated?: boolean;
-    }
-  >();
+  const pairs = new Map<string, Pair>();
   const scopes = new Map<string, string>();
   let legacyTurn = "legacy:before-page";
   for (const record of records) {
@@ -426,249 +758,95 @@ export function Timeline({
         compaction: item.details,
       });
     }
-  const result: ReactNode[] = [];
-  /** The open group's entries; rows are built at flush, when the receipts of its calls are known. */
-  let work: Array<{ reasoning: string; id: string } | { key: string; callId: string; operationId?: string | undefined }> = [];
-  let receipts: PanelReceipt[] = [];
-  let workId = "";
-  let workActive = false;
-  let elapsedMs: number | undefined;
-  const renderedTools = new Set<string>();
-  const renderedCompact = new Set<string>();
-  const renderedViews = new Set<string>();
   const availabilityRevision = `${state.snapshotCount}:${state.session.agentName}:${state.operations.filter(op => isTerminal(op.state)).map(op => `${op.id}:${op.state}`).join(",")}`;
-  const stackOf = (receipt: PanelReceipt) => state.panels.find((panel) => panel.panel === receiptPanel(receipt));
-  const flush = () => {
-    if (work.length) {
-      const byCall = new Map<string, PanelReceipt[]>();
-      for (const receipt of receipts) byCall.set(receipt.toolCallId, [...(byCall.get(receipt.toolCallId) ?? []), receipt]);
-      let failed = 0;
-      const approvals: ReactNode[] = [];
-      const results: VisibleToolResult[] = [];
-      const rows = work.map((entry) => {
-        if ("reasoning" in entry) return <ReasoningRow key={entry.id} text={entry.reasoning} preferences={preferences} />;
-        const pair = pairs.get(entry.key)!;
-        const approval = state.approvals.find((pending) => pending.operationId === entry.operationId && pending.callId === entry.callId);
-        const badge = statusBadge({ result: pair.result, lifecycle: pair.status, approval: !!approval, started: !!pair.call?.started });
-        if (badge.tone === "error") failed++;
-        if (approval) approvals.push(<ApprovalCard key={approval.id} approval={approval} call={pair.call} />);
-        if (pair.result) results.push(pair.result);
-        // A call that asked you something: its question cards are the only place the questions and answers show. A
-        // call may ask several in turn; it waits for you while any of them is pending.
-        const questions = (state.interactions ?? []).filter((request) => request.identity.toolCallId === entry.callId
-          && (!request.identity.operationId || request.identity.operationId === entry.operationId));
-        return (
-          <ToolRow
-            key={entry.key}
-            call={pair.call}
-            result={pair.result}
-            status={pair.status}
-            approval={!!approval}
-            preferences={preferences}
-            previewAbbreviated={pair.abbreviated}
-            sessionId={state.session.id}
-            // Files changed is the header's +a −r pill; other panels get a pill on the row that updated them.
-            receipts={(byCall.get(entry.callId) ?? []).filter((receipt) => receipt.owner !== FILES_CHANGED_OWNER).map((receipt) => ({
-              receipt, panelTitle: stackOf(receipt)?.title ?? receipt.title, icon: stackOf(receipt)?.icon ?? "panel", onOpen: () => onOpenPanel(receiptPanel(receipt)) }))}
-            onOpenCommands={() => onOpenPanel(COMMANDS_ID)}
-            waitingForYou={questions.some((request) => request.state === "pending")}
-            // History records carry no call id: an ask_user call is recognised by its identity, unless it failed before
-            // it asked, when its result is the only explanation.
-            argumentsOnly={questions.length > 0 || (pair.call?.identity === "builtin/ask_user" && !pair.result?.failed)}
-          />
-        );
-      });
-      // One pill per panel, in the order the group first updated it, showing its latest receipt.
-      const latest = new Map<string, PanelReceipt>();
-      for (const receipt of receipts) latest.set(receiptPanel(receipt), receipt);
-      const pills = [...latest].map(([panel, receipt]): WorkPill => {
-        const stack = stackOf(receipt);
-        const pill = { key: panel, icon: stack?.icon ?? "panel", error: false, onOpen: () => onOpenPanel(panel) };
-        if (receipt.error) return { ...pill, label: receipt.title, name: `${receipt.title}: update rejected`, error: true };
-        // This group's own lines, from its diff results; the receipt's summary counts the whole session.
-        const totals = receipt.owner === FILES_CHANGED_OWNER ? diffTotals(results) : undefined;
-        if (totals)
-          return { ...pill, name: `${receipt.title} +${totals.added} −${totals.removed}`,
-            label: <><span className="add">+{totals.added}</span> <span className="remove">−{totals.removed}</span></> };
-        const title = stack?.title ?? receipt.title;
-        const label = receipt.progress && receipt.progress.total > 0 ? `${title} ${receipt.progress.done}/${receipt.progress.total}` : receipt.title;
-        return { ...pill, label, name: label };
-      });
-      result.push(
-        <WorkGroup
-          key={`work:${workId}`}
-          count={rows.length - work.filter((entry) => "reasoning" in entry).length}
-          failed={failed}
-          approval={approvals.length > 0}
-          active={workActive}
-          preferences={preferences}
-          elapsedMs={elapsedMs}
-          pills={pills}
-        >
-          {rows}
-        </WorkGroup>,
-        // A pending approval is a card of its own after the group that holds the call.
-        ...approvals,
-      );
-    }
-    work = [];
-    receipts = [];
-    workActive = false;
-    elapsedMs = undefined;
-  };
-  for (const item of records) {
-    if (item.interactionRequestId) {
-      flush();
-      if (item.interactionViewInstanceId) renderedViews.add(item.interactionViewInstanceId);
-      result.push(<InteractionView key={item.interactionRequestId} sessionId={state.session.id} requestId={item.interactionRequestId}
-        live={state.interactions?.find(request => request.identity.requestId === item.interactionRequestId)} availabilityRevision={availabilityRevision}
-        actions={actions} onInsert={onInsert} onOpenPanel={onOpenPanel} />);
-      continue;
-    }
-    const identity = item.toolView ?? item.panelReceipt?.view;
-    if (identity) {
-      if (renderedViews.has(identity.instanceId)) {
-        if (item.panelReceipt) {
-          flush();
-          result.push(<Receipt key={item.id} receipt={item.panelReceipt} icon="panel" openLabel="Show this tool view"
-            onOpen={() => document.querySelector(`[data-instance="${CSS.escape(identity.instanceId)}"]`)?.scrollIntoView({ block: "nearest" })} />);
-        }
-        continue;
-      }
-      renderedViews.add(identity.instanceId);
-      flush();
-      result.push(<InlineToolView key={identity.instanceId} sessionId={state.session.id} identity={identity}
-        live={state.views[identity.instanceId]} receipt={item.panelReceipt}
-        availabilityRevision={availabilityRevision} actions={actions} onInsert={onInsert} />);
-      continue;
-    }
-    if (item.kind === "reasoning" || item.callId) {
-      if (!work.length) workId = item.id;
-      workActive ||= state.operations.some(
-        (op) => op.id === item.operationId && !isTerminal(op.state),
-      );
-      elapsedMs ??= state.operations.find((op) => op.id === item.operationId)
-        ?.metrics?.elapsedMs;
-      if (item.kind === "reasoning") work.push({ reasoning: item.text ?? "", id: item.id });
-      else {
-        const key = keyFor(item);
-        if (renderedTools.has(key)) continue;
-        renderedTools.add(key);
-        work.push({ key, callId: item.callId!, operationId: item.operationId });
-      }
-      continue;
-    }
-    if (item.panelReceipt) {
-      // A call's receipt is a pill of its group; one without a call in the open group (a user action) is a row of its own.
-      const receipt = item.panelReceipt;
-      if (receipt.source === "tool" && work.some((entry) => "callId" in entry && entry.callId === receipt.toolCallId)) {
-        receipts.push(receipt);
-        continue;
-      }
-      flush();
-      result.push(<Receipt key={item.id} receipt={receipt} icon={stackOf(receipt)?.icon ?? "panel"} onOpen={() => onOpenPanel(receiptPanel(receipt))} />);
-      continue;
-    }
-    flush();
-    if (item.hook) {
-      result.push(<p className="run-status" key={item.id}>
-        Hook {item.hook.id} · {item.hook.event} · {item.hook.outcome}
-        {item.hook.message ? ` · ${item.hook.message}` : item.hook.code ? ` · ${item.hook.code}` : ""}
-      </p>);
-      continue;
-    }
-    if (item.compaction) {
-      const id = item.compaction.id;
-      if (!renderedCompact.has(id)) {
-        renderedCompact.add(id);
-        result.push(<Compaction key={id} details={compactions.get(id)!} />);
-      }
-      continue;
-    }
-    if (item.kind === "run_end") {
-      if (item.runResult?.status !== "completed")
-        result.push(
-          <p className="run-status" key={item.id}>
-            {item.runResult?.status === "cancelled"
-              ? "Stopped · response may be incomplete"
-              : `${item.runResult?.status ?? item.status}${item.runResult?.message ? ` · ${item.runResult.message}` : ""}`}
-          </p>,
-        );
-      continue;
-    }
-    if (item.kind === "user" || item.kind === "assistant") {
-      const segment = state.live.find((entry) => entry.segmentId === item.id);
-      result.push(
-        <article
-          className={`message ${item.kind}`}
-          key={item.id}
-          data-testid={
-            item.kind === "user" ? "user-message" : "assistant-message"
+  const turns = splitTurns(records);
+  const { keys: turnKeyList, next } = assignStableKeys(turns.map((turn) => ({ ids: turn.map((record) => record.id), prefix: "" })), turnKeys.current);
+  useLayoutEffect(() => {
+    turnKeys.current = next;
+  });
+  /** What earlier turns rendered: a later record of the same call, view or compaction is not rendered again. */
+  const seenTools = new Set<string>();
+  const seenViews = new Set<string>();
+  const seenCompactions = new Set<string>();
+  const views = Object.values(state.views);
+  const interactions = state.interactions ?? [];
+  return (
+    <>
+      {turns.map((turn, index) => {
+        const keys = turn.map((record) => (record.callId ? keyFor(record) : ""));
+        const priorTools: string[] = [];
+        const priorViews: string[] = [];
+        const priorCompactions: string[] = [];
+        const addViews: string[] = [];
+        const addTools: string[] = [];
+        const addCompactions: string[] = [];
+        const requests = new Set<string>();
+        const calls = new Set<string>();
+        const operationIds = new Set<string>();
+        const viewIds = new Set<string>();
+        const segments = new Set<string>();
+        const panelIds = new Set<string>();
+        turn.forEach((record, at) => {
+          segments.add(record.id);
+          if (record.interactionRequestId) {
+            requests.add(record.interactionRequestId);
+            if (record.interactionViewInstanceId) addViews.push(record.interactionViewInstanceId);
+            return;
           }
-        >
-          {item.kind === "user" ? (
-            <>
-              {/* The user's bubble: attachments above the text, the time and Copy message under it. */}
-              <div className="bubble">
-                {item.attachments?.length ? (
-                  <HistoryAttachments
-                    items={item.attachments}
-                    sessionId={state.session.id}
-                    sequence={item.sequence}
-                  />
-                ) : null}
-                {segment?.paged ? (
-                  <PagedLive segment={segment} sessionId={state.session.id} />
-                ) : (
-                  <div className="user-text">{item.text}</div>
-                )}
-              </div>
-              <div className="message-meta">
-                <time dateTime={new Date(item.createdAt).toISOString()}>
-                  {new Date(item.createdAt).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </time>
-                <CopyButton value={item.text ?? ""} label="Copy message" />
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="message-label">
-                <span className="avatar" aria-hidden="true">r</span>
-                <strong>Raw</strong>
-                <time dateTime={new Date(item.createdAt).toISOString()}>
-                  {new Date(item.createdAt).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </time>
-              </div>
-              {segment?.paged ? (
-                <PagedLive segment={segment} sessionId={state.session.id} />
-              ) : (
-                <Markdown>{item.text ?? ""}</Markdown>
-              )}
-            </>
-          )}
-          {item.status === "interrupted" && (
-            <small className="warning">Incomplete response</small>
-          )}
-          {item.kind === "assistant" && (
-            <div className="message-actions">
-              <CopyButton value={item.text ?? ""} label="Copy message" />
-            </div>
-          )}
-        </article>,
-      );
-    } else if (item.text)
-      result.push(
-        <p className="system-note" key={item.id}>
-          {item.text}
-        </p>,
-      );
-  }
-  flush();
-  return <>{result}</>;
-}
+          const identity = record.toolView ?? record.panelReceipt?.view;
+          if (record.panelReceipt) panelIds.add(receiptPanel(record.panelReceipt));
+          if (identity) {
+            viewIds.add(identity.instanceId);
+            if (seenViews.has(identity.instanceId)) priorViews.push(identity.instanceId);
+            addViews.push(identity.instanceId);
+            return;
+          }
+          if (record.kind === "reasoning" || record.callId) {
+            if (record.operationId) operationIds.add(record.operationId);
+            if (record.callId) {
+              calls.add(record.callId);
+              if (seenTools.has(keys[at]!)) priorTools.push(keys[at]!);
+              addTools.push(keys[at]!);
+            }
+            return;
+          }
+          if (record.compaction && !record.panelReceipt && !record.hook) {
+            if (seenCompactions.has(record.compaction.id)) priorCompactions.push(record.compaction.id);
+            addCompactions.push(record.compaction.id);
+          }
+        });
+        for (const id of addViews) seenViews.add(id);
+        for (const id of addTools) seenTools.add(id);
+        for (const id of addCompactions) seenCompactions.add(id);
+        const turnPairs = new Map<string, Pair>();
+        for (const key of keys) if (key && pairs.has(key)) turnPairs.set(key, pairs.get(key)!);
+        const turnInteractions = interactions.filter((request) => requests.has(request.identity.requestId)
+          || (request.identity.toolCallId !== undefined && calls.has(request.identity.toolCallId)));
+        const interactive = requests.size > 0 || viewIds.size > 0;
+        const props: TurnProps = {
+          records: turn,
+          keys,
+          pairs: turnPairs,
+          approvals: state.approvals.filter((approval) => calls.has(approval.callId)),
+          interactions: turnInteractions.length ? turnInteractions : NONE,
+          live: state.live.filter((segment) => segments.has(segment.segmentId)),
+          views: viewIds.size ? views.filter((frame) => frame.view && viewIds.has(frame.view.instanceId)) : NONE,
+          operations: operationIds.size ? state.operations.filter((op) => operationIds.has(op.id)) : NONE,
+          compactions: [...compactions.values()].filter((details) => addCompactions.includes(details.id)),
+          // Receipts in the group take their panel's title and icon; tool rows look up the same panels.
+          panels: panelIds.size ? state.panels.filter((panel) => panelIds.has(panel.panel)) : NONE,
+          priorTools: priorTools.length ? priorTools : NONE,
+          priorViews: priorViews.length ? priorViews : NONE,
+          priorCompactions: priorCompactions.length ? priorCompactions : NONE,
+          sessionId: state.session.id,
+          preferences,
+          availabilityRevision: interactive ? availabilityRevision : "",
+          actions: interactive ? actions : undefined,
+          onInsert,
+          onOpenPanel,
+        };
+        return <TurnView key={turnKeyList[index]} {...props} />;
+      })}
+    </>
+  );
+});

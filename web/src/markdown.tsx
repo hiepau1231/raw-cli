@@ -1,7 +1,7 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { common, createLowlight } from "lowlight";
-import { createContext, isValidElement, useContext, type ReactNode } from "react";
+import { createContext, isValidElement, memo, useContext, useMemo, type ReactNode } from "react";
 import { CopyButton } from "./ui.js";
 import { MermaidDiagram } from "./diagrams/MermaidDiagram.js";
 import { isClosedMermaidFence } from "./diagrams/policy.js";
@@ -43,13 +43,15 @@ export function CodeBlock({
   code: string;
   language?: string;
 }) {
-  let highlighted: ReactNode = code;
-  if (highlighter.registered(language))
-    try {
-      highlighted = highlighter
-        .highlight(language, code)
-        .children.map((node, index) => render(node as Node, index));
-    } catch {}
+  const highlighted = useMemo(() => {
+    if (highlighter.registered(language))
+      try {
+        return highlighter
+          .highlight(language, code)
+          .children.map((node, index) => render(node as Node, index));
+      } catch {}
+    return code;
+  }, [code, language]);
   return (
     <div className="code-block">
       <div className="code-label">
@@ -104,7 +106,8 @@ const components: Components = {
   ),
 };
 
-export function Markdown({ children }: { children: string }) {
+/** Rendered again only when its text changes (docs/chat-design.md §10). */
+export const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
     <div className="markdown">
       <MarkdownSource.Provider value={children}>
@@ -114,4 +117,4 @@ export function Markdown({ children }: { children: string }) {
       </MarkdownSource.Provider>
     </div>
   );
-}
+});

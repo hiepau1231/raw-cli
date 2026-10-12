@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
 import {
   Activity,
   ArrowDown,
@@ -36,6 +36,7 @@ import { usePanelStack } from "./panels/use-panels.js";
 import { ErrorMessage, Field, Modal } from "./ui.js";
 import { useRouter } from "./router.js";
 import { Composer } from "./composer/Composer.js";
+import { createDraftStore, type DraftStore } from "./composer/draft-store.js";
 import { AttachmentChips } from "./composer/AttachmentChips.js";
 import { useAttachments } from "./composer/useAttachments.js";
 import { fileProvider } from "./composer/files.js";
@@ -49,6 +50,33 @@ export interface ChatShell {
   approvals: number;
   running: number;
 }
+
+const NO_INTERACTIONS: NonNullable<ActionHost["interactions"]> = [];
+
+/** The composer, the only subscriber of the draft: a keystroke re-renders it and nothing else (docs/chat-design.md §10). */
+function ComposerArea({
+  store,
+  blocked,
+  hasContent,
+  ...composer
+}: Omit<ComponentProps<typeof Composer>, "draft" | "onDraft" | "sendDisabled"> & {
+  store: DraftStore;
+  /** Send is disabled whatever the draft: no session yet, busy, uploading, no agent, or an unconfirmed request. */
+  blocked: boolean;
+  hasContent: boolean;
+}) {
+  const draft = useSyncExternalStore(store.subscribe, store.get);
+  return <Composer {...composer} draft={draft} onDraft={store.set} sendDisabled={blocked || (!draft.trim() && !hasContent)} />;
+}
+
+/** Load earlier, memoized so a streamed answer does not render it again. */
+const LoadEarlier = memo(function LoadEarlier({ onLoad }: { onLoad: () => void }) {
+  return (
+    <button className="load-earlier" onClick={onLoad}>
+      Load earlier
+    </button>
+  );
+});
 
 export function Chat({
   id,
@@ -80,7 +108,7 @@ export function Chat({
     receipt,
   } = useSession(id);
   const { navigate } = useRouter();
-  const [draft, setDraft] = useState(drafts.get(id) ?? "");
+  const store = useMemo(() => createDraftStore(id, drafts), [id, drafts]);
   const [agent, setAgent] = useState(() =>
     summary?.agentName && bootstrap.config.agents.includes(summary.agentName)
       ? summary.agentName
@@ -133,8 +161,10 @@ export function Chat({
     openSide,
     autoOpen,
   });
-  const insertRef = (path: string) =>
-    setDraft((current) => `${current}${current && !/\s$/.test(current) ? " " : ""}@${path} `);
+  const insertRef = useCallback((path: string) => {
+    const current = store.get();
+    store.set(`${current}${current && !/\s$/.test(current) ? " " : ""}@${path} `);
+  }, [store]);
   const scroll = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const following = useRef(preferences.follow);
@@ -144,11 +174,17 @@ export function Chat({
   const busy = pending || !!current || state?.ownership === "elsewhere";
   const [confirming, setConfirming] = useState<{ message: string; go: () => void }>();
   const savedAgent = state?.session.agentName;
-  const panelActions: ActionHost = {
-    interactions: state?.interactions ?? [],
+  // The Timeline's actions stay the same object while their questions and blocked reason do; `run` reads the rest when it runs.
+  const latest = useRef({ busy, agent, savedAgent, receipt, onChanged });
+  latest.current = { busy, agent, savedAgent, receipt, onChanged };
+  const interactions = state?.interactions ?? NO_INTERACTIONS;
+  const toolBlocked = busy ? "Wait for the current operation to finish" : agent && savedAgent && agent !== savedAgent ? `Send a message to switch to ${agent} first` : undefined;
+  const panelActions = useMemo<ActionHost>(() => ({
+    interactions,
     respond: (request, submission) => api(`/sessions/${id}/interactions/${encodeURIComponent(request.identity.requestId)}/responses`, "POST", submission),
-    toolBlocked: busy ? "Wait for the current operation to finish" : agent && savedAgent && agent !== savedAgent ? `Send a message to switch to ${agent} first` : undefined,
+    toolBlocked,
     run: (item, action, request) => {
+      const { busy, agent, savedAgent, receipt, onChanged } = latest.current;
       const go = () => {
         if (action.kind === "prompt") {
           let text: string;
@@ -156,8 +192,7 @@ export function Chat({
           if (action.send && !busy) {
             void api<SessionOperation>(`/sessions/${id}/operations`, "POST", { clientRequestId: crypto.randomUUID(), kind: "turn", agent, input: text }).then((op) => { receipt(op); onChanged(); }, (cause) => setError(errorText(cause)));
           } else {
-            setDraft(text);
-            drafts.set(id, text);
+            store.set(text);
             input.current?.focus();
           }
           return;
@@ -168,9 +203,8 @@ export function Chat({
       };
       if (action.confirm) setConfirming({ message: action.confirm, go }); else go();
     },
-  };
+  }), [interactions, toolBlocked, id, store]);
   useEffect(() => {
-    setDraft(drafts.get(id) ?? "");
     setError("");
     following.current = preferences.follow;
     setUnconfirmed(undefined);
@@ -201,8 +235,7 @@ export function Chat({
         sessionStorage.removeItem(`raw.dashboard.pending.${id}`);
       } catch {}
       if (op.kind === "turn") {
-        setDraft((current) => (current === op.input ? "" : current));
-        if (drafts.get(id) === op.input) drafts.delete(id);
+        if (store.get() === op.input) store.set("");
         att.consume(sentKeys.current);
       }
       onChanged();
@@ -224,6 +257,7 @@ export function Chat({
   }, [id, !!state]);
   const hasContent = att.images.length + att.files.length > 0;
   const send = async (kind: "turn" | "compact") => {
+    const draft = store.get();
     if (
       !state ||
       submitting.current ||
@@ -276,8 +310,7 @@ export function Chat({
         sessionStorage.removeItem(`raw.dashboard.pending.${id}`);
       } catch {}
       if (kind === "turn") {
-        setDraft((current) => (current === draft ? "" : current));
-        if (drafts.get(id) === draft) drafts.delete(id);
+        if (store.get() === draft) store.set("");
         att.consume(sent);
       }
       following.current = true;
@@ -314,10 +347,9 @@ export function Chat({
       setError(errorText(cause));
     }
   };
-  const update = (value: string) => {
-    setDraft(value);
-    drafts.set(id, value);
-  };
+  const loadEarlierRef = useRef(loadEarlier);
+  loadEarlierRef.current = loadEarlier;
+  const onLoadEarlier = useCallback(() => void loadEarlierRef.current(), []);
   const title_ = state?.session.title ?? summary?.title;
   const cwd_ = state?.session.cwd ?? summary?.cwd;
   const home = useHome();
@@ -499,16 +531,7 @@ export function Chat({
           >
             <div className="conversation">
               <ErrorMessage>{streamError}</ErrorMessage>
-              {state?.history.nextCursor && (
-                <button
-                  className="load-earlier"
-                  onClick={() => {
-                    void loadEarlier();
-                  }}
-                >
-                  Load earlier
-                </button>
-              )}
+              {state?.history.nextCursor && <LoadEarlier onLoad={onLoadEarlier} />}
               {!state && !streamError && <TimelineSkeleton />}
               {state && <Timeline state={state} preferences={preferences} onOpenPanel={panels.show} actions={panelActions} onInsert={insertRef} />}
               {state && !state.history.items.length && !current && (
@@ -589,19 +612,12 @@ export function Chat({
                 void send("turn");
               }}
             >
-              <Composer
+              <ComposerArea
+                store={store}
                 inputRef={input}
-                draft={draft}
-                onDraft={update}
                 onSend={() => void send("turn")}
-                sendDisabled={
-                  !state ||
-                  !!busy ||
-                  (!draft.trim() && !hasContent) ||
-                  att.uploading ||
-                  !agent ||
-                  !!unconfirmed
-                }
+                blocked={!state || !!busy || att.uploading || !agent || !!unconfirmed}
+                hasContent={hasContent}
                 chips={
                   <AttachmentChips
                     chips={att.chips}
