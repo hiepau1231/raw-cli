@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { writeFileTool } from "../src/tools/primitives.js";
 import { buildWriteChanges as buildFor, changeHostData, displayPath } from "../src/tools/write-changes.js";
 import { unifiedDiff } from "../src/tools/line-diff.js";
+import { slashPath } from "../src/platform/paths.js";
 import { validateDocument } from "../src/panels/validate.js";
 import type { PanelDocument, PanelContext, FileEntry } from "../src/panels/contract.js";
 
@@ -179,12 +180,12 @@ test("the document reads like a source-control list: relative or home paths, a c
   ], "/work/app");
   assert.deepEqual(entries(doc).map(e => [e.path, e.status, e.label, e.added, e.removed]), [
     ["src/parser.ts", "modified", undefined, 2, 1],
-    [join(home, "notes", "todo.md"), "added", "~/notes/todo.md", 2, 0],
+    [slashPath(join(home, "notes", "todo.md")), "added", "~/notes/todo.md", 2, 0],
     ["/srv/shared/config.json", "deleted", undefined, 0, 1],
     ["lib/old.ts", "deleted", "lib/old.ts → lib/new.ts", 0, 0],
     ["lib/new.ts", "added", "lib/old.ts → lib/new.ts", 0, 0],
     ["..config/settings.ts", "added", undefined, 1, 0],
-    [join(home, "..notes.md"), "added", "~/..notes.md", 1, 0],
+    [slashPath(join(home, "..notes.md")), "added", "~/..notes.md", 1, 0],
   ]);
   assert.equal(doc.summary, "7 files · +6 −2");
   assert.equal(doc.status, undefined, "a list of files is never \"done\"");

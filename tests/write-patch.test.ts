@@ -15,7 +15,8 @@ const rows = (result: ToolResult) => (result.content.find(c => c.type === "json"
 const run = (root: string, body: string) => applyFilePatch(parseFilePatch(patch(body), root), { maxOutputBytes: 8192 });
 
 test("syntax validation does not invent target aliases from an unavailable cwd", () => {
-  const source = patch("*** Add File: ../a\n+x\n*** Add File: /a\n+y");
+  // Not /a: on Windows a one-letter first segment is a Git Bash drive (/a is A:\).
+  const source = patch("*** Add File: ../ab\n+x\n*** Add File: /ab\n+y");
   assert.doesNotThrow(() => validateFilePatchSyntax(source));
   assert.doesNotThrow(() => parseFilePatch(source, "/work/project"));
   assert.throws(() => parseFilePatch(source, "/"), /patch_repeated_target/);
