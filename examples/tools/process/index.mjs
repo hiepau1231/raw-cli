@@ -144,6 +144,7 @@ async function handler(raw, context) {
       const record2 = await context.processes.start({
         command: args.command,
         cwd: resolveToolPath(context.cwd, args.cwd ?? "."),
+        workspace: context.cwd,
         ...args.label ? { label: args.label } : {},
         ...args.timeout !== void 0 ? { timeout_ms: args.timeout } : {},
         ...context.signal ? { signal: context.signal } : {},

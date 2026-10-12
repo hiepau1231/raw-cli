@@ -81,7 +81,6 @@ export class ProcessSupervisor {
     if (!job.flushTimer) job.flushTimer = setTimeout(() => this.flush(job), 250);
   }
   private async start(sessionId: string, input: ProcessStart): Promise<ProcessRecord> {
-    if ((this.options.platform ?? process.platform) === "win32") throw new ProcessError("unsupported_platform", "managed background processes support macOS/Linux");
     if (this.closing) throw new ProcessError("process_unavailable", "process supervisor is closing");
     if (this.fences.has(sessionId)) throw new ProcessError("session_deleting", "session deletion is in progress");
     if (input.signal?.aborted) throw new ProcessError("aborted", "process start cancelled before spawn");
@@ -106,7 +105,8 @@ export class ProcessSupervisor {
       child.once("error", error => { record.error = error.message; spawnFailed(error); });
       child.once("exit", (code, signal) => {
         record.exitCode = code; record.signal = signal;
-        if (record.state !== "stopping") {
+        // On Windows the leader's job already killed what it left behind: the launcher exits with the leader and closes it.
+        if (record.state !== "stopping" && (this.options.platform ?? process.platform) !== "win32") {
           // A completed leader must not leave ignored-stdio descendants outside lifecycle cleanup.
           try { (this.options.signalGroup ?? signalShellGroup)(child, "SIGKILL", this.options.platform); }
           catch (error) { record.state = "stopping"; record.error = `process group cleanup failed: ${String(error)}`; this.flush(job); }
@@ -134,7 +134,9 @@ export class ProcessSupervisor {
     } catch (error) {
       if (record.state === "starting") { record.state = "failed"; record.error = error instanceof Error ? error.message : String(error); record.endedAt = this.now(); this.flush(job); }
       this.trim(sessionId);
-      throw error instanceof ProcessError ? error : new ProcessError("process_spawn_error", `cannot start process: ${record.error ?? String(error)}`);
+      if (error instanceof ProcessError) throw error;
+      if ((error as NodeJS.ErrnoException).code === "bash_unavailable") throw new ProcessError("bash_unavailable", (error as Error).message);
+      throw new ProcessError("process_spawn_error", `cannot start process: ${record.error ?? String(error)}`);
     } finally { input.signal?.removeEventListener("abort", cancel); }
   }
   private trim(sessionId: string) {

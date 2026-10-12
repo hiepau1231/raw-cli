@@ -84,7 +84,7 @@ export async function handler(raw: unknown, context: ToolContext): Promise<ToolH
         if (!context.vars) return errorResult("vars_unavailable", "variable services are unavailable");
         context.vars.validateEnvRefs(args.env_refs); bindings = await context.vars.resolveEnv(args.env_refs, { ...(context.signal ? { signal: context.signal } : {}) });
       }
-      const record = await context.processes.start({ command: args.command!, cwd: resolveToolPath(context.cwd, args.cwd ?? "."),
+      const record = await context.processes.start({ command: args.command!, cwd: resolveToolPath(context.cwd, args.cwd ?? "."), workspace: context.cwd,
         ...(args.label ? { label: args.label } : {}), ...(args.timeout !== undefined ? { timeout_ms: args.timeout } : {}),
         ...(context.signal ? { signal: context.signal } : {}), ...(context.bashPath ? { bashPath: context.bashPath } : {}),
         ...(bindings ? { env: mergeEnv(process.env, bindings) } : {}) });

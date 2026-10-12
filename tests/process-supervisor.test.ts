@@ -5,6 +5,7 @@ import { mkdtemp, readFile, access, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { processesWithMarker, waitForNoMarked } from "./fixtures/windows-processes.js";
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 test("acknowledged background process survives its start signal and is readable and stoppable later", async () => {
   const supervisor = new ProcessSupervisor();
@@ -17,7 +18,7 @@ test("acknowledged background process survives its start signal and is readable 
     assert.throws(() => supervisor.forSession("foreign").status(job.id), /not found/);
   } finally { await supervisor.close(); }
 });
-test("supervisor reports nonzero exits, timeout, spawn errors and unsupported platform without false live state", async () => {
+test("supervisor reports nonzero exits, timeout and spawn errors without false live state", async () => {
   const supervisor = new ProcessSupervisor();
   try {
     const context = supervisor.forSession("s");
@@ -27,9 +28,44 @@ test("supervisor reports nonzero exits, timeout, spawn errors and unsupported pl
     assert.equal(context.status(timeout.id).state, "timed_out");
     await assert.rejects(context.start({ command: "true", cwd: process.cwd(), bashPath: "/missing/raw-bash" }), /start/);
   } finally { await supervisor.close(); }
-  const windows = new ProcessSupervisor({ platform: "win32" });
-  try { await assert.rejects(windows.forSession("s").start({ command: "echo x", cwd: process.cwd() }), error => (error as {code?:string}).code === "unsupported_platform"); }
-  finally { await windows.close(); }
+});
+
+const onlyWindows = process.platform === "win32" ? false : "needs Windows";
+const node = process.execPath.replaceAll("\\", "/");
+const marker = () => `300.${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+async function until(ready: () => boolean, ms = 8000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!ready()) { if (Date.now() > end) assert.fail("timed out waiting"); await delay(100); }
+}
+const alive = (mark: string, names: string[]) => {
+  const found = new Set(processesWithMarker(mark).map(item => item.name.toLowerCase()));
+  return names.every(name => found.has(name));
+};
+
+test("on Windows Stop ends a background pipeline with every member", { skip: onlyWindows }, async () => {
+  const supervisor = new ProcessSupervisor();
+  try {
+    const context = supervisor.forSession("win"); const mark = marker();
+    const job = await context.start({ command: `sleep ${mark} | grep -F ${mark}`, cwd: process.cwd() });
+    await until(() => alive(mark, ["sleep.exe", "grep.exe"]));
+    assert.equal((await context.stop(job.id)).state, "stopped");
+    assert.deepEqual(await waitForNoMarked(mark, 3000), []);
+  } finally { await supervisor.close(); }
+});
+
+test("on Windows a leader that exits takes the processes it started in the background with it", { skip: onlyWindows }, async () => {
+  const supervisor = new ProcessSupervisor();
+  const cwd = await mkdtemp(join(tmpdir(), "raw-leader-"));
+  try {
+    const context = supervisor.forSession("win"); const mark = marker();
+    // The leader starts node in the background, then exits once the test has seen node running.
+    const job = await context.start({ command: `"${node}" -e "setInterval(()=>{},1000)" ${mark} & while [ ! -f go ]; do sleep 0.1; done`, cwd });
+    await until(() => alive(mark, ["node.exe"]));
+    await writeFile(join(cwd, "go"), "");
+    await until(() => context.status(job.id).state !== "running");
+    assert.equal(context.status(job.id).state, "exited");
+    assert.deepEqual(processesWithMarker(mark), [], "the job killed the background node before the record became terminal");
+  } finally { await supervisor.close(); await rm(cwd, { recursive: true, force: true }); }
 });
 
 test("output floods retain bounded UTF-8 logs with explicit expired cursors and bounded pages", async () => {

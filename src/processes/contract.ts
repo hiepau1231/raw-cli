@@ -7,7 +7,8 @@ export interface ProcessRecord {
 }
 export interface ProcessChunk { channel: "stdout" | "stderr"; start: number; end: number; text: string }
 export interface ProcessOutput { id: string; chunks: ProcessChunk[]; earliestCursor: number; nextCursor: number; cursor: number; droppedBytes: number; truncated: boolean }
-export interface ProcessStart { command: string; cwd: string; label?: string; timeout_ms?: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal; bashPath?: string }
+/** `workspace` is the session's cwd, where a Windows Bash is never looked for; the start cwd when absent. */
+export interface ProcessStart { command: string; cwd: string; workspace?: string; label?: string; timeout_ms?: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal; bashPath?: string }
 export interface ProcessContext {
   start(input: ProcessStart): Promise<ProcessRecord>;
   list(): ProcessRecord[];
