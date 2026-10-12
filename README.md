@@ -2,7 +2,15 @@
 
 [![npm](https://img.shields.io/npm/v/@tlelabs/raw)](https://www.npmjs.com/package/@tlelabs/raw) [![CI](https://github.com/lploc94/raw-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/lploc94/raw-cli/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-`raw` is a local coding agent for models with limited context. Each agent selects ordered tools, skills and hooks, and can supply a system prompt. Raw ships thirteen tools as editable plugins: `read_file`, `write_file`, `edit_file`, `apply_patch`, `bash`, `view_image`, `list_skills`, `load_skill`, `list_vars`, `read_var`, `todo`, `ask_user`, and `process`. Apply patch, Todo, Ask, and Process are selected explicitly; they are not added to the starter tool selection. Tools, skills and hooks can also live in the user's config directory or beside a selected agent config. Selected MCP tools remain available. Standard Agent Client Protocol (ACP) lets an IDE or parent agent run sessions.
+`raw` is the agent harness you can fork. The parts every agent needs already work: the tool loop, context compaction, saved sessions, approvals, a terminal REPL, a local browser dashboard and the Agent Client Protocol for editors. Everything an agent does is a file you can change, so you build an internal agent, a coding agent or an ops agent by editing parts instead of starting from an empty loop.
+
+- **Fork a tool.** Built-in tools are plain plugins. Copy one with Fork to local, or write your own as one `index.mjs`.
+- **Teach a procedure.** Skills are Markdown files the agent lists and loads when it needs them.
+- **Set the rules.** Ordered policy rules allow, ask or deny a tool or a pattern, and hooks run your scripts on session, prompt and tool events.
+- **Connect your systems.** Selected MCP tools and runtime variables sit next to the built-ins.
+- **Share the result.** Package an agent with its tools and skills as a `.rawpkg` that your team installs.
+
+Each agent selects ordered tools, skills and hooks, and can supply a system prompt, so a request carries only what that agent was given. That also keeps models with limited context useful. Raw ships thirteen tools as editable plugins: `read_file`, `write_file`, `edit_file`, `apply_patch`, `bash`, `view_image`, `list_skills`, `load_skill`, `list_vars`, `read_var`, `todo`, `ask_user`, and `process`. Apply patch, Todo, Ask, and Process are selected explicitly; they are not added to the starter tool selection. Tools, skills and hooks can also live in the user's config directory or beside a selected agent config. Selected MCP tools remain available. Standard Agent Client Protocol (ACP) lets an IDE or parent agent run sessions.
 
 ## Install and run
 
