@@ -14,7 +14,7 @@ Each agent selects ordered tools, skills and hooks, and can supply a system prom
 
 ## Install and run
 
-Requires Node.js 22.13+ and Bash for the `bash` tool. Documentation: [raw.tlelabs.com](https://raw.tlelabs.com).
+Requires Node.js 22.13+ and Bash for the `bash` tool. Documentation: [raw.tlelabs.com](https://raw.tlelabs.com). To shape Raw into your own agent, read [Design an effective agent](https://raw.tlelabs.com/docs/guides/design-an-agent/) and the [FAQ](https://raw.tlelabs.com/docs/start/faq/).
 
 ```sh
 npm install -g @tlelabs/raw
