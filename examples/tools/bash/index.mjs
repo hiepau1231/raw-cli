@@ -1,5 +1,14 @@
-// src/tools/bundled/bash/index.ts
-import { isAbsolute as isAbsolute3, relative as relative3, resolve as resolve4 } from "path";
+// src/platform/paths.ts
+import path from "path";
+function pathFor(platform = process.platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+function resolveToolPath(cwd, input, platform = process.platform) {
+  const api = pathFor(platform);
+  if (platform !== "win32") return api.resolve(cwd, input);
+  const drive = /^\/([A-Za-z])(?:\/(.*))?$/s.exec(input);
+  return api.resolve(cwd, drive ? `${drive[1].toUpperCase()}:\\${drive[2] ?? ""}` : input);
+}
 
 // src/tools/primitives.ts
 import { constants as fsConstants } from "fs";
@@ -8,7 +17,7 @@ import { constants as fsConstants } from "fs";
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 import { constants } from "fs";
 import { chmod, link, lstat, mkdir, open, unlink } from "fs/promises";
-import { dirname as dirname2, join as join2, parse, relative, resolve as resolve2, sep } from "path";
+import { dirname as dirname2, join as join2, parse, relative, sep } from "path";
 
 // src/tools/types.ts
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -36,10 +45,10 @@ function sweep(root) {
     const cutoff = Date.now() - SPILL_RETENTION_MS;
     for (const name of readdirSync(root)) {
       if (!name.startsWith(PREFIX)) continue;
-      const path2 = join(root, name);
-      if (path2 === directory) continue;
+      const path3 = join(root, name);
+      if (path3 === directory) continue;
       try {
-        if (statSync(path2).mtimeMs < cutoff) rmSync(path2, { recursive: true, force: true });
+        if (statSync(path3).mtimeMs < cutoff) rmSync(path3, { recursive: true, force: true });
       } catch {
       }
     }
@@ -82,10 +91,10 @@ var OutputSpill = class {
     const buffer = typeof data === "string" ? Buffer.from(data) : data;
     try {
       if (this.fd === void 0) {
-        const path2 = join(spillDirectory(), `${this.label}-${randomUUID().slice(0, 8)}.log`);
-        this.fd = openSync(path2, "wx", 384);
-        this.path = path2;
-        this.entry = { path: path2, bytes: 0 };
+        const path3 = join(spillDirectory(), `${this.label}-${randomUUID().slice(0, 8)}.log`);
+        this.fd = openSync(path3, "wx", 384);
+        this.path = path3;
+        this.entry = { path: path3, bytes: 0 };
         saved.push(this.entry);
       }
       const room = SPILL_MAX_BYTES - this.bytes;
@@ -109,8 +118,8 @@ var OutputSpill = class {
     this.fd = void 0;
   }
 };
-function savedLabel(path2, capped = false) {
-  return path2 && capped ? `${path2} (first ${SPILL_MAX_BYTES} bytes only)` : path2;
+function savedLabel(path3, capped = false) {
+  return path3 && capped ? `${path3} (first ${SPILL_MAX_BYTES} bytes only)` : path3;
 }
 
 // src/tools/results.ts
@@ -146,7 +155,7 @@ function errorResult(code, message) {
 // src/platform/fs.ts
 import { closeSync as closeSync2, fsyncSync, openSync as openSync2 } from "fs";
 import { access, readFile, rename } from "fs/promises";
-import path from "path";
+import path2 from "path";
 
 // src/tools/file-patch.ts
 var PATCH_BYTES = 1024 * 1024;
@@ -155,7 +164,6 @@ var STAGED_BYTES = 64 * 1024 * 1024;
 
 // src/tools/write-changes.ts
 import { homedir } from "os";
-import { isAbsolute as isAbsolute2, relative as relative2, sep as sep2 } from "path";
 
 // src/panels/contract.ts
 var PANEL_LIMITS = {
@@ -183,7 +191,7 @@ var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
 
 // src/tools/primitives.ts
 import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat } from "fs/promises";
-import { dirname as dirname3, resolve as resolve3 } from "path";
+import { dirname as dirname3 } from "path";
 
 // src/tools/process.ts
 import { spawn } from "child_process";
@@ -301,8 +309,8 @@ async function runBash(options) {
   let reapTimer;
   let deadline;
   let resolveCancelled;
-  const cancellationWatchdog = new Promise((resolve5) => {
-    resolveCancelled = resolve5;
+  const cancellationWatchdog = new Promise((resolve2) => {
+    resolveCancelled = resolve2;
   });
   let escalation;
   const signalGroup = (signal) => signalShellGroup(child, signal);
@@ -311,10 +319,10 @@ async function runBash(options) {
     if (reason === "abort") aborted = true;
     else timedOut = true;
     signalGroup("SIGTERM");
-    escalation = new Promise((resolve5) => {
+    escalation = new Promise((resolve2) => {
       killTimer = setTimeout(() => {
         signalGroup("SIGKILL");
-        resolve5();
+        resolve2();
       }, 500);
     });
     drainTimer = setTimeout(() => {
@@ -348,22 +356,22 @@ async function runBash(options) {
   child.stdout?.on("data", (chunk) => append("stdout", chunk));
   child.stderr?.on("data", (chunk) => append("stderr", chunk));
   let exited = { code: null, signal: null };
-  const exitedPromise = new Promise((resolve5) => {
+  const exitedPromise = new Promise((resolve2) => {
     child.once("exit", (code, signal) => {
       exited = { code, signal };
-      resolve5();
+      resolve2();
     });
   });
-  const closedPromise = new Promise((resolve5) => {
+  const closedPromise = new Promise((resolve2) => {
     child.once("error", (error) => {
       spawnError = error;
     });
-    child.once("close", () => resolve5());
+    child.once("close", () => resolve2());
   });
   const outcome = await Promise.race([closedPromise.then(() => "closed"), cancellationWatchdog.then(() => "watchdog")]);
   if (outcome === "watchdog") {
-    await Promise.race([exitedPromise, new Promise((resolve5) => {
-      reapTimer = setTimeout(resolve5, 1300);
+    await Promise.race([exitedPromise, new Promise((resolve2) => {
+      reapTimer = setTimeout(resolve2, 1300);
     })]);
     if (reapTimer) clearTimeout(reapTimer);
   }
@@ -407,7 +415,7 @@ function seconds(ms) {
   return `${(ms / 1e3).toFixed(1)}s`;
 }
 async function bashTool(args, context) {
-  const cwd = args.workdir === void 0 ? context.cwd : resolve3(context.cwd, args.workdir);
+  const cwd = args.workdir === void 0 ? context.cwd : resolveToolPath(context.cwd, args.workdir);
   const requested = args.timeout ?? BASH_DEFAULT_TIMEOUT_MS;
   const timeout = Math.min(requested, BASH_MAX_TIMEOUT_MS);
   const summary = utf8Prefix(args.command.split("\n", 1)[0], 200).text;
@@ -530,10 +538,12 @@ function validateArgs(value) {
 async function handler(args, context) {
   return bashTool(args, context);
 }
-function delegate(args, context) {
+function delegate(args, context, platform = process.platform) {
   if (args.run_in_background !== true) return void 0;
   const command = String(args.command);
-  const workdir = typeof args.workdir === "string" ? relative3(context.cwd, resolve4(context.cwd, args.workdir)) : "";
+  const target = typeof args.workdir === "string" ? resolveToolPath(context.cwd, args.workdir, platform) : context.cwd;
+  const relativeTarget = pathFor(platform).relative(context.cwd, target);
+  const workdir = pathFor(platform).isAbsolute(relativeTarget) ? target : relativeTarget;
   const summary = command.split("\n", 1)[0].slice(0, 200);
   const clamped = typeof args.timeout === "number" && args.timeout > BASH_MAX_TIMEOUT_MS;
   return {
@@ -541,7 +551,7 @@ function delegate(args, context) {
     arguments: {
       action: "start",
       command,
-      ...workdir && !isAbsolute3(workdir) ? { cwd: workdir } : {},
+      ...workdir ? { cwd: workdir } : {},
       ...typeof args.description === "string" && args.description ? { label: args.description } : {},
       ...args.env_refs ? { env_refs: args.env_refs } : {},
       ...typeof args.timeout === "number" ? { timeout: Math.min(args.timeout, BASH_MAX_TIMEOUT_MS) } : {}

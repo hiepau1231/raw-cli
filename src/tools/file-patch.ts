@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { chmod, link, lstat, mkdir, open, unlink } from "node:fs/promises";
-import { dirname, join, parse, relative, resolve, sep } from "node:path";
+import { dirname, join, parse, relative, sep } from "node:path";
 import { errorResult, indexedResult, indexedResultFits, type IndexedResult } from "./results.js";
 import type { ToolResult } from "./types.js";
 import { renameWithRetry } from "../platform/fs.js";
+import { pathFor, resolveToolPath } from "../platform/paths.js";
 
 const PATCH_BYTES = 1024 * 1024;
 const SOURCE_BYTES = 16 * 1024 * 1024;
@@ -45,8 +46,8 @@ const code = (error: unknown): string => {
 };
 
 /** Pure syntax and lexical target parsing, shared by inspection and execution. No filesystem access. */
-export function parseFilePatch(source: string, cwd: string): ParsedFilePatch {
-  return parsePatch(source, cwd, true);
+export function parseFilePatch(source: string, cwd: string, platform: NodeJS.Platform = process.platform): ParsedFilePatch {
+  return parsePatch(source, cwd, true, platform);
 }
 
 /** Validate grammar without guessing the execution cwd or inventing lexical target aliases. */
@@ -54,7 +55,7 @@ export function validateFilePatchSyntax(source: string): void {
   parsePatch(source, "/", false);
 }
 
-function parsePatch(source: string, cwd: string, checkResolvedTargets: boolean): ParsedFilePatch {
+function parsePatch(source: string, cwd: string, checkResolvedTargets: boolean, platform: NodeJS.Platform = process.platform): ParsedFilePatch {
   if (typeof source !== "string" || Buffer.byteLength(source) > PATCH_BYTES || source.includes("\0")) fail("patch_invalid_size_or_binary");
   const lines = source.split("\n").map(line => line.endsWith("\r") ? line.slice(0, -1) : line);
   if (lines.at(-1) === "") lines.pop();
@@ -64,13 +65,16 @@ function parsePatch(source: string, cwd: string, checkResolvedTargets: boolean):
   let targetCount = 0;
   const target = (raw: string): string => {
     if (!raw || raw.trim() !== raw || /[\r\n\0]/.test(raw)) fail("patch_invalid_path");
-    const path = resolve(cwd, raw);
+    const path = resolveToolPath(cwd, raw, platform);
     if (++targetCount > 64) fail("patch_too_many_paths");
     if (!checkResolvedTargets) return path;
-    if (targets.has(path)) fail("patch_repeated_target");
+    // Windows file names are case-insensitive: SRC\a.ts and src\a.ts are the same file.
+    const key = platform === "win32" ? path.toLowerCase() : path;
+    const separator = pathFor(platform).sep;
+    if (targets.has(key)) fail("patch_repeated_target");
     // A target cannot also be another target's parent (including add-directory conflicts).
-    for (const other of targets) if (path.startsWith(other + sep) || other.startsWith(path + sep)) fail("patch_conflicting_targets");
-    targets.add(path);
+    for (const other of targets) if (key.startsWith(other + separator) || other.startsWith(key + separator)) fail("patch_conflicting_targets");
+    targets.add(key);
     if (targets.size > 64) fail("patch_too_many_paths");
     return path;
   };

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createTestToolRegistry } from "./fixtures/registry.js";
 import { fileURLToPath } from "node:url";
+import { resolveToolPath } from "../src/platform/paths.js";
 
 const context = (cwd: string, maxOutputBytes = 8192) => ({ cwd, maxOutputBytes, autoApprove: true });
 
@@ -123,4 +124,15 @@ test("timeout settles even when an escaped descendant holds inherited output pip
   }
   await new Promise((resolve) => setImmediate(resolve));
   assert.ok(process.getActiveResourcesInfo().filter((name) => name === "Timeout").length <= timersBefore, "no owned timeout remains after settlement");
+});
+
+test("file tools read Git Bash drive paths on Windows and leave other paths and platforms alone", () => {
+  assert.equal(resolveToolPath("C:\\work", "/c/tmp/x", "win32"), "C:\\tmp\\x");
+  assert.equal(resolveToolPath("C:\\work", "/d/a b/y.txt", "win32"), "D:\\a b\\y.txt");
+  assert.equal(resolveToolPath("C:\\work", "/c", "win32"), "C:\\");
+  assert.equal(resolveToolPath("C:\\work", "/cx/y", "win32"), "C:\\cx\\y");
+  assert.equal(resolveToolPath("C:\\work", "src/a.ts", "win32"), "C:\\work\\src\\a.ts");
+  assert.equal(resolveToolPath("C:\\work", "D:\\data\\z", "win32"), "D:\\data\\z");
+  assert.equal(resolveToolPath("/work", "/c/tmp/x", "darwin"), "/c/tmp/x");
+  assert.equal(resolveToolPath("/work", "src/a.ts", "linux"), "/work/src/a.ts");
 });

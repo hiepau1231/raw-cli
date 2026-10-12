@@ -206,3 +206,12 @@ test("many individually unique hunks cannot exceed the cumulative matching work 
   assert.match(JSON.stringify(result), /patch_matching_limit/);
   assert.equal(await readFile(join(root, "a"), "utf8"), original);
 });
+
+test("targets that differ only in letter case are one file on Windows and two elsewhere", () => {
+  const patch = "*** Begin Patch\n*** Add File: src/A.ts\n+a\n*** Add File: SRC/a.ts\n+b\n*** End Patch\n";
+  assert.throws(() => parseFilePatch(patch, "C:\\work", "win32"), /patch_repeated_target/);
+  assert.equal(parseFilePatch(patch, "/work", "linux").changes.length, 2);
+  const nested = "*** Begin Patch\n*** Add File: Src\n+a\n*** Add File: src/b.ts\n+b\n*** End Patch\n";
+  assert.throws(() => parseFilePatch(nested, "C:\\work", "win32"), /patch_conflicting_targets/);
+  assert.deepEqual(parseFilePatch("*** Begin Patch\n*** Add File: /d/x.ts\n+a\n*** End Patch\n", "C:\\work", "win32").changes.map((change) => change.path), ["D:\\x.ts"]);
+});

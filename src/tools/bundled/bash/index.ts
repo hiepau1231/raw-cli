@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { pathFor, resolveToolPath } from "../../../platform/paths.js";
 import { BASH_MAX_TIMEOUT_MS, bashTool, type BashArgs, type ToolContext } from "../../primitives.js";
 import type { NormalizedArguments, ToolDelegation } from "../../registry.js";
 import type { ToolResult } from "../../types.js";
@@ -78,16 +78,19 @@ export async function handler(args: Record<string, unknown>, context: ToolContex
  * default timeout: only a timeout the model gave is passed on, clamped like a foreground one. Without delegation the
  * handler runs the command in the foreground and notes that it ignored the flag.
  */
-export function delegate(args: Record<string, unknown>, context: { cwd: string }): ToolDelegation | undefined {
+export function delegate(args: Record<string, unknown>, context: { cwd: string }, platform: NodeJS.Platform = process.platform): ToolDelegation | undefined {
   if (args.run_in_background !== true) return undefined;
   const command = String(args.command);
-  const workdir = typeof args.workdir === "string" ? relative(context.cwd, resolve(context.cwd, args.workdir)) : "";
+  // Relative inside or beside the cwd; absolute when no relative path reaches it (another Windows drive), never dropped.
+  const target = typeof args.workdir === "string" ? resolveToolPath(context.cwd, args.workdir, platform) : context.cwd;
+  const relativeTarget = pathFor(platform).relative(context.cwd, target);
+  const workdir = pathFor(platform).isAbsolute(relativeTarget) ? target : relativeTarget;
   const summary = command.split("\n", 1)[0]!.slice(0, 200);
   const clamped = typeof args.timeout === "number" && args.timeout > BASH_MAX_TIMEOUT_MS;
   return {
     identity: "builtin/process",
     arguments: { action: "start", command,
-      ...(workdir && !isAbsolute(workdir) ? { cwd: workdir } : {}),
+      ...(workdir ? { cwd: workdir } : {}),
       ...(typeof args.description === "string" && args.description ? { label: args.description } : {}),
       ...(args.env_refs ? { env_refs: args.env_refs } : {}),
       ...(typeof args.timeout === "number" ? { timeout: Math.min(args.timeout, BASH_MAX_TIMEOUT_MS) } : {}) },

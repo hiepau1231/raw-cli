@@ -2,7 +2,7 @@
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 import { constants } from "fs";
 import { chmod, link, lstat, mkdir, open, unlink } from "fs/promises";
-import { dirname as dirname2, join as join2, parse, relative, resolve as resolve2, sep } from "path";
+import { dirname as dirname2, join as join2, parse, relative, sep } from "path";
 
 // src/tools/types.ts
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -63,7 +63,7 @@ async function renameWithRetry(from, to, options = {}) {
     platform = process.platform,
     rename: move = rename,
     exists: present = exists,
-    sleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms)),
+    sleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms)),
     now = Date.now
   } = options;
   const deadline = now() + deadlineMs;
@@ -77,6 +77,21 @@ async function renameWithRetry(from, to, options = {}) {
       await sleep(delay);
     }
   }
+}
+
+// src/platform/paths.ts
+import path2 from "path";
+function pathFor(platform = process.platform) {
+  return platform === "win32" ? path2.win32 : path2.posix;
+}
+function resolveToolPath(cwd, input, platform = process.platform) {
+  const api = pathFor(platform);
+  if (platform !== "win32") return api.resolve(cwd, input);
+  const drive = /^\/([A-Za-z])(?:\/(.*))?$/s.exec(input);
+  return api.resolve(cwd, drive ? `${drive[1].toUpperCase()}:\\${drive[2] ?? ""}` : input);
+}
+function slashPath(value, platform = process.platform) {
+  return platform === "win32" ? value.replaceAll("\\", "/") : value;
 }
 
 // src/tools/file-patch.ts
@@ -104,13 +119,13 @@ var code = (error) => {
   const candidate = error instanceof PatchError ? error.code : error?.code;
   return typeof candidate === "string" && /^[a-zA-Z0-9_]{1,80}$/.test(candidate) ? candidate : "patch_io_error";
 };
-function parseFilePatch(source, cwd) {
-  return parsePatch(source, cwd, true);
+function parseFilePatch(source, cwd, platform = process.platform) {
+  return parsePatch(source, cwd, true, platform);
 }
 function validateFilePatchSyntax(source) {
   parsePatch(source, "/", false);
 }
-function parsePatch(source, cwd, checkResolvedTargets) {
+function parsePatch(source, cwd, checkResolvedTargets, platform = process.platform) {
   if (typeof source !== "string" || Buffer.byteLength(source) > PATCH_BYTES || source.includes("\0")) fail("patch_invalid_size_or_binary");
   const lines2 = source.split("\n").map((line) => line.endsWith("\r") ? line.slice(0, -1) : line);
   if (lines2.at(-1) === "") lines2.pop();
@@ -120,14 +135,16 @@ function parsePatch(source, cwd, checkResolvedTargets) {
   let targetCount = 0;
   const target = (raw) => {
     if (!raw || raw.trim() !== raw || /[\r\n\0]/.test(raw)) fail("patch_invalid_path");
-    const path2 = resolve2(cwd, raw);
+    const path3 = resolveToolPath(cwd, raw, platform);
     if (++targetCount > 64) fail("patch_too_many_paths");
-    if (!checkResolvedTargets) return path2;
-    if (targets.has(path2)) fail("patch_repeated_target");
-    for (const other of targets) if (path2.startsWith(other + sep) || other.startsWith(path2 + sep)) fail("patch_conflicting_targets");
-    targets.add(path2);
+    if (!checkResolvedTargets) return path3;
+    const key = platform === "win32" ? path3.toLowerCase() : path3;
+    const separator = pathFor(platform).sep;
+    if (targets.has(key)) fail("patch_repeated_target");
+    for (const other of targets) if (key.startsWith(other + separator) || other.startsWith(key + separator)) fail("patch_conflicting_targets");
+    targets.add(key);
     if (targets.size > 64) fail("patch_too_many_paths");
-    return path2;
+    return path3;
   };
   let cursor = 0;
   while (cursor < lines2.length) {
@@ -172,10 +189,10 @@ function parsePatch(source, cwd, checkResolvedTargets) {
 function describePatchEffects(parsed) {
   return { files: parsed.changes.flatMap((change) => change.destination ? [{ path: change.path, operation: "rename_source" }, { path: change.destination, operation: "rename_destination" }] : [{ path: change.path, operation: change.kind === "delete" ? "delete" : "write" }]) };
 }
-async function safeParents(path2) {
-  const root = parse(path2).root;
+async function safeParents(path3) {
+  const root = parse(path3).root;
   let current = root;
-  const parts = relative(root, dirname2(path2)).split(sep).filter(Boolean);
+  const parts = relative(root, dirname2(path3)).split(sep).filter(Boolean);
   for (const component of ["", ...parts]) {
     if (component) current = join2(current, component);
     try {
@@ -188,22 +205,22 @@ async function safeParents(path2) {
     }
   }
 }
-async function absent(path2) {
-  await safeParents(path2);
+async function absent(path3) {
+  await safeParents(path3);
   try {
-    await lstat(path2);
+    await lstat(path3);
   } catch (error) {
     if (error.code === "ENOENT") return;
     throw error;
   }
   fail("patch_destination_exists");
 }
-async function snapshot(path2) {
-  await safeParents(path2);
-  const before = await lstat(path2);
+async function snapshot(path3) {
+  await safeParents(path3);
+  const before = await lstat(path3);
   if (before.isSymbolicLink()) fail("patch_symlink_path");
   if (!before.isFile()) fail("patch_not_regular_file");
-  const handle = await open(path2, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  const handle = await open(path3, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const info = await handle.stat();
     if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) fail("patch_source_changed");
@@ -439,7 +456,6 @@ import { constants as fsConstants } from "fs";
 
 // src/tools/write-changes.ts
 import { homedir } from "os";
-import { isAbsolute as isAbsolute2, relative as relative2, sep as sep2 } from "path";
 
 // src/panels/contract.ts
 var PANEL_LIMITS = {
@@ -626,7 +642,7 @@ function lineCounts(before, after) {
 // src/tools/write-changes.ts
 var HOST_DIFF_BYTES = 64 * 1024;
 var ENTRY_DIFF_BYTES = 8 * 1024;
-var clean = (text) => text.replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "\uFFFD");
+var clean = (text) => text.replaceAll("\r\n", "\n").replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "\uFFFD");
 var omittedKey = "Omitted history entries";
 var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
 function undiffable(change) {
@@ -643,10 +659,11 @@ function counts(change) {
   if ([change.before, change.after].some((bytes) => bytes?.subarray(0, 8192).includes(0))) return void 0;
   return lineCounts(change.before?.toString("utf8") ?? "", change.after?.toString("utf8") ?? "");
 }
-var within = (inside) => !!inside && inside !== ".." && !inside.startsWith(`..${sep2}`) && !isAbsolute2(inside);
-function displayPath(path2, cwd) {
-  const inside = relative2(cwd, path2);
-  return within(inside) ? inside : path2;
+var within = (inside, api = pathFor()) => !!inside && inside !== ".." && !inside.startsWith(`..${api.sep}`) && !api.isAbsolute(inside);
+function displayPath(path3, cwd, platform = process.platform) {
+  const api = pathFor(platform);
+  const inside = api.relative(cwd, path3);
+  return slashPath(within(inside, api) ? inside : path3, platform);
 }
 function changeHostData(changes, cwd, withDiff) {
   const files = changes.map((change) => {
@@ -667,30 +684,31 @@ ${body}`;
   const diff = parts.join("\n");
   return Buffer.byteLength(diff) <= HOST_DIFF_BYTES ? { files, diff } : { files, diffOmitted: true };
 }
-function homeLabel(path2) {
+function homeLabel(path3) {
   const home = homedir();
-  const inside = home ? relative2(home, path2) : "";
-  return isAbsolute2(path2) && within(inside) ? `~/${inside.split(sep2).join("/")}` : void 0;
+  const api = pathFor();
+  const inside = home ? api.relative(home, path3) : "";
+  return api.isAbsolute(path3) && within(inside, api) ? `~/${inside.split(api.sep).join("/")}` : void 0;
 }
 function buildWriteChanges(previous, changes, cwd) {
   const files = previous?.blocks.find((b) => b.id === "files" && b.kind === "files");
   const retention = previous?.blocks.find((b) => b.id === "retention" && b.kind === "key_value");
   let omitted = Number(retention?.entries.find((e) => e.key === omittedKey)?.value ?? 0) || 0;
   const byPath = new Map((files?.entries ?? []).map((e) => [e.path, { ...e }]));
-  const put = (path2, status, label, change) => {
-    if ([...path2].length > 500 || /[\u0000-\u001F\u007F]/.test(path2)) {
+  const put = (path3, status, label, change) => {
+    if ([...path3].length > 500 || /[\u0000-\u001F\u007F]/.test(path3)) {
       omitted++;
       return;
     }
-    const old = byPath.get(path2);
-    byPath.delete(path2);
+    const old = byPath.get(path3);
+    byPath.delete(path3);
     const latest = change ? counts(change) : { added: 0, removed: 0 };
     const known = latest && (!old || old.added !== void 0);
     const reason = change && undiffable(change);
     const diff = change && !reason ? unifiedDiff(...sides(change), ENTRY_DIFF_BYTES) : void 0;
-    const shownLabel = label ?? homeLabel(path2);
-    byPath.set(path2, {
-      path: path2,
+    const shownLabel = label ?? homeLabel(path3);
+    byPath.set(path3, {
+      path: path3,
       status: status === "modified" && old?.status === "added" ? "added" : status,
       ...shownLabel ? { label: [...clean(shownLabel)].slice(0, 200).join("") } : {},
       ...known ? { added: (old?.added ?? 0) + latest.added, removed: (old?.removed ?? 0) + latest.removed } : {},
@@ -756,7 +774,7 @@ async function publishWriteChanges(context, changes) {
 
 // src/tools/primitives.ts
 import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat } from "fs/promises";
-import { dirname as dirname3, resolve as resolve3 } from "path";
+import { dirname as dirname3 } from "path";
 
 // src/tools/process.ts
 import { spawn } from "child_process";

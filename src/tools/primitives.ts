@@ -6,7 +6,7 @@ import type { ProcessContext } from "../processes/contract.js";
 import type { InteractionContext } from "../interactions/contract.js";
 import type { VariableContext } from "../vars/contract.js";
 import { open, mkdir, writeFile, readFile, stat } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import { runBash } from "./process.js";
 import { errorResult, utf8Prefix } from "./results.js";
 import type { ToolResult } from "./types.js";
@@ -15,6 +15,7 @@ import type { ToolContentPanel } from "./types.js";
 import type { SelectedSkill } from "../skills/contract.js";
 import type { HookDispatchResult } from "../hooks/dispatcher.js";
 import type { HookEventName } from "../hooks/contract.js";
+import { resolveToolPath } from "../platform/paths.js";
 
 export interface ToolApprovalRequest {
   identity: string;
@@ -74,7 +75,7 @@ const errorCode = (error: unknown, fallback: string) => {
  * `[lines 120–199 of 431; next: offset 200]`. Lines stop at the output budget; a first line longer than it is cut.
  */
 export async function readFileTool(args: ReadFileArgs, context: ToolContext): Promise<ToolResult> {
-  const path = resolve(context.cwd, args.path);
+  const path = resolveToolPath(context.cwd, args.path);
   const shown = displayPath(path, context.cwd);
   const offset = args.offset ?? 1;
   const last = args.limit === undefined ? offset + READ_DEFAULT_LIMIT - 1 : offset + args.limit - 1;
@@ -188,7 +189,7 @@ const changeResult = (text: string, shown: string, changes: readonly CompletedWr
 
 /** Creates or overwrites one file, creating parent directories (docs/tool-ux-design.md §4.2). */
 export async function writeFileTool(args: { path: string; content: string }, context: ToolContext): Promise<ToolResult> {
-  const path = resolve(context.cwd, args.path);
+  const path = resolveToolPath(context.cwd, args.path);
   const shown = displayPath(path, context.cwd);
   try {
     const before = await writeSnapshot(path);
@@ -277,7 +278,7 @@ function nearestLines(text: string, needle: string): string {
 
 /** Replaces one exact occurrence of `old_string`, or all of them with `replace_all` (docs/tool-ux-design.md §4.2). */
 export async function editFileTool(args: EditFileArgs, context: ToolContext): Promise<ToolResult> {
-  const path = resolve(context.cwd, args.path);
+  const path = resolveToolPath(context.cwd, args.path);
   const shown = displayPath(path, context.cwd);
   const failed = (code: string, message: string): ToolResult => ({ ...errorResult(code, message), host: { summary: shown, status: "error" } });
   let source: Buffer;
@@ -358,7 +359,7 @@ function seconds(ms: number): string { return `${(ms / 1000).toFixed(1)}s`; }
  * `[exit 0 · 1.2s]`. A nonzero exit is not an error; a timeout or abort is, and stops the process group.
  */
 export async function bashTool(args: BashArgs, context: ToolContext): Promise<ToolResult> {
-  const cwd = args.workdir === undefined ? context.cwd : resolve(context.cwd, args.workdir);
+  const cwd = args.workdir === undefined ? context.cwd : resolveToolPath(context.cwd, args.workdir);
   const requested = args.timeout ?? BASH_DEFAULT_TIMEOUT_MS;
   const timeout = Math.min(requested, BASH_MAX_TIMEOUT_MS);
   const summary = utf8Prefix(args.command.split("\n", 1)[0]!, 200).text;

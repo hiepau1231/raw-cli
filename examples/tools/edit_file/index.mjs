@@ -5,7 +5,7 @@ import { constants as fsConstants } from "fs";
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 import { constants } from "fs";
 import { chmod, link, lstat, mkdir, open, unlink } from "fs/promises";
-import { dirname as dirname2, join as join2, parse, relative, resolve as resolve2, sep } from "path";
+import { dirname as dirname2, join as join2, parse, relative, sep } from "path";
 
 // src/tools/types.ts
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -44,6 +44,21 @@ import { closeSync as closeSync2, fsyncSync, openSync as openSync2 } from "fs";
 import { access, readFile, rename } from "fs/promises";
 import path from "path";
 
+// src/platform/paths.ts
+import path2 from "path";
+function pathFor(platform = process.platform) {
+  return platform === "win32" ? path2.win32 : path2.posix;
+}
+function resolveToolPath(cwd, input, platform = process.platform) {
+  const api = pathFor(platform);
+  if (platform !== "win32") return api.resolve(cwd, input);
+  const drive = /^\/([A-Za-z])(?:\/(.*))?$/s.exec(input);
+  return api.resolve(cwd, drive ? `${drive[1].toUpperCase()}:\\${drive[2] ?? ""}` : input);
+}
+function slashPath(value, platform = process.platform) {
+  return platform === "win32" ? value.replaceAll("\\", "/") : value;
+}
+
 // src/tools/file-patch.ts
 var PATCH_BYTES = 1024 * 1024;
 var SOURCE_BYTES = 16 * 1024 * 1024;
@@ -51,7 +66,6 @@ var STAGED_BYTES = 64 * 1024 * 1024;
 
 // src/tools/write-changes.ts
 import { homedir } from "os";
-import { isAbsolute as isAbsolute2, relative as relative2, sep as sep2 } from "path";
 
 // src/panels/contract.ts
 var PANEL_LIMITS = {
@@ -238,7 +252,7 @@ function lineCounts(before, after) {
 // src/tools/write-changes.ts
 var HOST_DIFF_BYTES = 64 * 1024;
 var ENTRY_DIFF_BYTES = 8 * 1024;
-var clean = (text) => text.replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "\uFFFD");
+var clean = (text) => text.replaceAll("\r\n", "\n").replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "\uFFFD");
 var omittedKey = "Omitted history entries";
 var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
 function undiffable(change) {
@@ -255,10 +269,11 @@ function counts(change) {
   if ([change.before, change.after].some((bytes) => bytes?.subarray(0, 8192).includes(0))) return void 0;
   return lineCounts(change.before?.toString("utf8") ?? "", change.after?.toString("utf8") ?? "");
 }
-var within = (inside) => !!inside && inside !== ".." && !inside.startsWith(`..${sep2}`) && !isAbsolute2(inside);
-function displayPath(path2, cwd) {
-  const inside = relative2(cwd, path2);
-  return within(inside) ? inside : path2;
+var within = (inside, api = pathFor()) => !!inside && inside !== ".." && !inside.startsWith(`..${api.sep}`) && !api.isAbsolute(inside);
+function displayPath(path3, cwd, platform = process.platform) {
+  const api = pathFor(platform);
+  const inside = api.relative(cwd, path3);
+  return slashPath(within(inside, api) ? inside : path3, platform);
 }
 function changeHostData(changes, cwd, withDiff) {
   const files = changes.map((change) => {
@@ -279,30 +294,31 @@ ${body}`;
   const diff = parts.join("\n");
   return Buffer.byteLength(diff) <= HOST_DIFF_BYTES ? { files, diff } : { files, diffOmitted: true };
 }
-function homeLabel(path2) {
+function homeLabel(path3) {
   const home = homedir();
-  const inside = home ? relative2(home, path2) : "";
-  return isAbsolute2(path2) && within(inside) ? `~/${inside.split(sep2).join("/")}` : void 0;
+  const api = pathFor();
+  const inside = home ? api.relative(home, path3) : "";
+  return api.isAbsolute(path3) && within(inside, api) ? `~/${inside.split(api.sep).join("/")}` : void 0;
 }
 function buildWriteChanges(previous, changes, cwd) {
   const files = previous?.blocks.find((b) => b.id === "files" && b.kind === "files");
   const retention = previous?.blocks.find((b) => b.id === "retention" && b.kind === "key_value");
   let omitted = Number(retention?.entries.find((e) => e.key === omittedKey)?.value ?? 0) || 0;
   const byPath = new Map((files?.entries ?? []).map((e) => [e.path, { ...e }]));
-  const put = (path2, status, label, change) => {
-    if ([...path2].length > 500 || /[\u0000-\u001F\u007F]/.test(path2)) {
+  const put = (path3, status, label, change) => {
+    if ([...path3].length > 500 || /[\u0000-\u001F\u007F]/.test(path3)) {
       omitted++;
       return;
     }
-    const old = byPath.get(path2);
-    byPath.delete(path2);
+    const old = byPath.get(path3);
+    byPath.delete(path3);
     const latest = change ? counts(change) : { added: 0, removed: 0 };
     const known = latest && (!old || old.added !== void 0);
     const reason = change && undiffable(change);
     const diff = change && !reason ? unifiedDiff(...sides(change), ENTRY_DIFF_BYTES) : void 0;
-    const shownLabel = label ?? homeLabel(path2);
-    byPath.set(path2, {
-      path: path2,
+    const shownLabel = label ?? homeLabel(path3);
+    byPath.set(path3, {
+      path: path3,
       status: status === "modified" && old?.status === "added" ? "added" : status,
       ...shownLabel ? { label: [...clean(shownLabel)].slice(0, 200).join("") } : {},
       ...known ? { added: (old?.added ?? 0) + latest.added, removed: (old?.removed ?? 0) + latest.removed } : {},
@@ -368,7 +384,7 @@ async function publishWriteChanges(context, changes) {
 
 // src/tools/primitives.ts
 import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat } from "fs/promises";
-import { dirname as dirname3, resolve as resolve3 } from "path";
+import { dirname as dirname3 } from "path";
 
 // src/tools/process.ts
 import { spawn } from "child_process";
@@ -445,12 +461,12 @@ Nearest lines:
 ${scored.map((item) => `${item.index + 1}\u2502${[...item.line.replace(/\r$/, "")].slice(0, 200).join("")}`).join("\n")}` : "";
 }
 async function editFileTool(args, context) {
-  const path2 = resolve3(context.cwd, args.path);
-  const shown = displayPath(path2, context.cwd);
+  const path3 = resolveToolPath(context.cwd, args.path);
+  const shown = displayPath(path3, context.cwd);
   const failed = (code, message) => ({ ...errorResult(code, message), host: { summary: shown, status: "error" } });
   let source;
   try {
-    source = await readFile2(path2);
+    source = await readFile2(path3);
   } catch (error) {
     const code = errorCode(error, "file_error");
     return failed(code, code === "ENOENT" ? `${shown} does not exist; create it with write_file` : `cannot read ${shown}: ${code}`);
@@ -476,8 +492,8 @@ async function editFileTool(args, context) {
   }
   try {
     const after = replaceAt(source, found, oldBytes.length, newBytes);
-    await writeFile(path2, after);
-    const change = { path: path2, kind: "modified", before: source, after };
+    await writeFile(path3, after);
+    const change = { path: path3, kind: "modified", before: source, after };
     await publishWriteChanges(context, [change]);
     const result = changeResult("", shown, [change], context.cwd, true);
     const file = result.host.files[0];
@@ -499,7 +515,6 @@ function renameArgument(args, notes, from, to, convert = (value) => value) {
 var PATH_ALIASES = ["file_path", "filePath", "absolute_path"];
 
 // src/tools/bundled/edit_file/index.ts
-import { resolve as resolve4 } from "path";
 var example = { path: "src/app.ts", old_string: "const a = 1;", new_string: "const a = 2;" };
 function normalizeArguments(input) {
   const args = { ...input };
@@ -519,7 +534,7 @@ function normalizeArguments(input) {
   return { args, notes };
 }
 function describeEffects(args, context) {
-  return { files: [{ path: resolve4(context.cwd, String(args.path)), operation: "edit" }] };
+  return { files: [{ path: resolveToolPath(context.cwd, String(args.path)), operation: "edit" }] };
 }
 function validateArgs(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "arguments must be an object";

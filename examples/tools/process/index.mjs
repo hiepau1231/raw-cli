@@ -1,5 +1,5 @@
 // src/tools/bundled/process/index.ts
-import { isAbsolute as isAbsolute2, resolve as resolve2 } from "path";
+import { isAbsolute as isAbsolute2 } from "path";
 
 // src/tools/types.ts
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -20,6 +20,18 @@ var DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 var HOST_CONTENT_BYTES = 1024 * 1024;
 function errorResult(code, message) {
   return { isError: true, code, content: [{ type: "text", text: message }] };
+}
+
+// src/platform/paths.ts
+import path from "path";
+function pathFor(platform = process.platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+function resolveToolPath(cwd, input, platform = process.platform) {
+  const api = pathFor(platform);
+  if (platform !== "win32") return api.resolve(cwd, input);
+  const drive = /^\/([A-Za-z])(?:\/(.*))?$/s.exec(input);
+  return api.resolve(cwd, drive ? `${drive[1].toUpperCase()}:\\${drive[2] ?? ""}` : input);
 }
 
 // src/tools/bundled/process/index.ts
@@ -101,7 +113,7 @@ async function handler(raw, context) {
       }
       const record2 = await context.processes.start({
         command: args.command,
-        cwd: resolve2(context.cwd, args.cwd ?? "."),
+        cwd: resolveToolPath(context.cwd, args.cwd ?? "."),
         ...args.label ? { label: args.label } : {},
         ...args.timeout !== void 0 ? { timeout_ms: args.timeout } : {},
         ...context.signal ? { signal: context.signal } : {},

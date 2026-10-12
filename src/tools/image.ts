@@ -1,5 +1,5 @@
 import { open, constants } from "node:fs/promises";
-import { resolve } from "node:path";
+import { resolveToolPath } from "../platform/paths.js";
 import { errorResult } from "./results.js";
 import type { ToolContext } from "./primitives.js";
 import type { ToolResult } from "./types.js";
@@ -63,7 +63,7 @@ export function detectImageMime(data: Buffer): "image/png" | "image/jpeg" | unde
 }
 
 export async function viewImageTool(args: { path: string }, context: ToolContext): Promise<ToolResult> {
-  const path = resolve(context.cwd, args.path);
+  const path = resolveToolPath(context.cwd, args.path);
   if (context.signal?.aborted) return errorResult("aborted", "image read aborted");
   let handle;
   try {

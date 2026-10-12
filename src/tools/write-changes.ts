@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
-import { isAbsolute, relative, sep } from "node:path";
+import type { PlatformPath } from "node:path";
+import { pathFor, slashPath } from "../platform/paths.js";
 import { PANEL_LIMITS, type FileEntry, type PanelDocument } from "../panels/contract.js";
 import { lineCounts, unifiedDiff } from "./line-diff.js";
 import type { CompletedPatchChange } from "./file-patch.js";
@@ -15,7 +16,8 @@ export const HOST_DIFF_BYTES = 64 * 1024;
 /** Bound of the latest diff one panel entry keeps; older entries lose theirs first when the document is full. */
 const ENTRY_DIFF_BYTES = 8 * 1024;
 
-const clean = (text: string) => text.replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "�");
+// CRLF line endings are not shown as damage: the diff compares lines, and a lone \r still shows as �.
+const clean = (text: string) => text.replaceAll("\r\n", "\n").replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "�");
 export type CompletedWriteChange = CompletedPatchChange & { beforeUnavailable?: boolean; afterUnavailable?: boolean;
   /** The before snapshot holds only a prefix of the file, enough to know it is too large to diff. */ beforePartial?: boolean;
   /** write_file: whether the file existed before. */ overwritten?: boolean };
@@ -47,12 +49,13 @@ function counts(change: CompletedWriteChange): { added: number; removed: number 
 }
 
 /** Whether `inside`, a path relative to some root, stays under it; a name such as `..config` does. */
-const within = (inside: string) => !!inside && inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside);
+const within = (inside: string, api: PlatformPath = pathFor()) => !!inside && inside !== ".." && !inside.startsWith(`..${api.sep}`) && !api.isAbsolute(inside);
 
-/** A path as the session sees it: relative inside the cwd, absolute outside it. */
-export function displayPath(path: string, cwd: string): string {
-  const inside = relative(cwd, path);
-  return within(inside) ? inside : path;
+/** A path as the session sees it: relative inside the cwd, absolute outside it, with `/` on every platform. */
+export function displayPath(path: string, cwd: string, platform: NodeJS.Platform = process.platform): string {
+  const api = pathFor(platform);
+  const inside = api.relative(cwd, path);
+  return slashPath(within(inside, api) ? inside : path, platform);
 }
 
 /** The host data of completed changes (docs/tool-ux-design.md §4.5): one entry per file and, if asked, a bounded diff. */
@@ -78,8 +81,9 @@ export function changeHostData(changes: readonly CompletedWriteChange[], cwd: st
 /** A path outside the cwd as people read it: `~/…` under the home directory; undefined when the path is shown as is. */
 function homeLabel(path: string): string | undefined {
   const home = homedir();
-  const inside = home ? relative(home, path) : "";
-  return isAbsolute(path) && within(inside) ? `~/${inside.split(sep).join("/")}` : undefined;
+  const api = pathFor();
+  const inside = home ? api.relative(home, path) : "";
+  return api.isAbsolute(path) && within(inside, api) ? `~/${inside.split(api.sep).join("/")}` : undefined;
 }
 
 /**

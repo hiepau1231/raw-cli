@@ -1,6 +1,17 @@
 // src/tools/image.ts
 import { open, constants } from "fs/promises";
-import { resolve as resolve2 } from "path";
+
+// src/platform/paths.ts
+import path from "path";
+function pathFor(platform = process.platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+function resolveToolPath(cwd, input, platform = process.platform) {
+  const api = pathFor(platform);
+  if (platform !== "win32") return api.resolve(cwd, input);
+  const drive = /^\/([A-Za-z])(?:\/(.*))?$/s.exec(input);
+  return api.resolve(cwd, drive ? `${drive[1].toUpperCase()}:\\${drive[2] ?? ""}` : input);
+}
 
 // src/tools/types.ts
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -71,38 +82,38 @@ function jpegValid(data) {
   return false;
 }
 async function viewImageTool(args, context) {
-  const path = resolve2(context.cwd, args.path);
+  const path2 = resolveToolPath(context.cwd, args.path);
   if (context.signal?.aborted) return errorResult("aborted", "image read aborted");
   let handle;
   try {
-    handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    handle = await open(path2, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
     const stat = await handle.stat();
-    if (!stat.isFile()) return errorResult("image_read_error", `not a regular file: ${path}`);
-    if (stat.size > MAX_IMAGE_BYTES) return errorResult("image_too_large", `image exceeds 16 MiB: ${path}`);
-    if (stat.size < 4) return errorResult("image_invalid", `unsupported or invalid image: ${path}`);
+    if (!stat.isFile()) return errorResult("image_read_error", `not a regular file: ${path2}`);
+    if (stat.size > MAX_IMAGE_BYTES) return errorResult("image_too_large", `image exceeds 16 MiB: ${path2}`);
+    if (stat.size < 4) return errorResult("image_invalid", `unsupported or invalid image: ${path2}`);
     const data = Buffer.alloc(stat.size);
     let position = 0;
     while (position < data.length) {
       if (context.signal?.aborted) return errorResult("aborted", "image read aborted");
       const { bytesRead } = await handle.read(data, position, data.length - position, position);
-      if (bytesRead === 0) return errorResult("image_read_error", `image changed while reading: ${path}`);
+      if (bytesRead === 0) return errorResult("image_read_error", `image changed while reading: ${path2}`);
       position += bytesRead;
     }
     if (context.signal?.aborted) return errorResult("aborted", "image read aborted");
     let mimeType;
     if (pngValid(data)) mimeType = "image/png";
     else if (jpegValid(data)) mimeType = "image/jpeg";
-    else return errorResult("image_invalid", `unsupported or invalid image: ${path}`);
+    else return errorResult("image_invalid", `unsupported or invalid image: ${path2}`);
     const encoded = data.toString("base64");
     return {
       isError: false,
-      content: [{ type: "image", mimeType, data: encoded, path, byteSize: data.length }],
+      content: [{ type: "image", mimeType, data: encoded, path: path2, byteSize: data.length }],
       observedBytes: data.length,
       retainedBytes: encoded.length,
       truncated: false
     };
   } catch (error) {
-    return errorResult("image_read_error", `cannot read image ${path}: ${error.message}`);
+    return errorResult("image_read_error", `cannot read image ${path2}: ${error.message}`);
   } finally {
     await handle?.close();
   }

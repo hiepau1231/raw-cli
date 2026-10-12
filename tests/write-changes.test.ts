@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileTool } from "../src/tools/primitives.js";
-import { buildWriteChanges as buildFor } from "../src/tools/write-changes.js";
+import { buildWriteChanges as buildFor, changeHostData, displayPath } from "../src/tools/write-changes.js";
 import { unifiedDiff } from "../src/tools/line-diff.js";
 import { validateDocument } from "../src/panels/validate.js";
 import type { PanelDocument, PanelContext, FileEntry } from "../src/panels/contract.js";
@@ -252,4 +252,16 @@ test("unified diff keeps sparse edits apart in large files, marks a missing fina
   const everything = unifiedDiff(Array.from({ length: 300000 }, (_, i) => `a${i}`).join("\n"), Array.from({ length: 300000 }, (_, i) => `b${i}`).join("\n"), 6144);
   assert.equal(everything.truncated, true);
   assert.ok(Buffer.byteLength(everything.text) <= 6144);
+});
+
+test("displayed paths use / on Windows and a CRLF file's diff shows its lines without a carriage return", () => {
+  assert.equal(displayPath("C:\\work\\src\\a.ts", "C:\\work", "win32"), "src/a.ts");
+  assert.equal(displayPath("c:\\WORK\\src\\a.ts", "C:\\work", "win32"), "src/a.ts");
+  assert.equal(displayPath("D:\\other\\b.ts", "C:\\work", "win32"), "D:/other/b.ts");
+  assert.equal(displayPath("C:\\work\\..config\\c", "C:\\work", "win32"), "..config/c");
+  assert.equal(displayPath("/work/src/a.ts", "/work", "linux"), "src/a.ts");
+  assert.equal(displayPath("/work/a\\b.ts", "/work", "linux"), "a\\b.ts");
+  const data = changeHostData([{ path: join(process.cwd(), "crlf.txt"), kind: "modified",
+    before: Buffer.from("one\r\ntwo\r\n"), after: Buffer.from("one\r\nTWO\r\n") }], process.cwd(), true);
+  assert.equal(data.diff, "--- a/crlf.txt\n+++ b/crlf.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO");
 });

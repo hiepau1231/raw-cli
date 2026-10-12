@@ -5,7 +5,7 @@ import { constants as fsConstants } from "fs";
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 import { constants } from "fs";
 import { chmod, link, lstat, mkdir, open, unlink } from "fs/promises";
-import { dirname as dirname2, join as join2, parse, relative, resolve as resolve2, sep } from "path";
+import { dirname as dirname2, join as join2, parse, relative, sep } from "path";
 
 // src/tools/types.ts
 var MAX_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -44,6 +44,21 @@ import { closeSync as closeSync2, fsyncSync, openSync as openSync2 } from "fs";
 import { access, readFile, rename } from "fs/promises";
 import path from "path";
 
+// src/platform/paths.ts
+import path2 from "path";
+function pathFor(platform = process.platform) {
+  return platform === "win32" ? path2.win32 : path2.posix;
+}
+function resolveToolPath(cwd, input, platform = process.platform) {
+  const api = pathFor(platform);
+  if (platform !== "win32") return api.resolve(cwd, input);
+  const drive = /^\/([A-Za-z])(?:\/(.*))?$/s.exec(input);
+  return api.resolve(cwd, drive ? `${drive[1].toUpperCase()}:\\${drive[2] ?? ""}` : input);
+}
+function slashPath(value, platform = process.platform) {
+  return platform === "win32" ? value.replaceAll("\\", "/") : value;
+}
+
 // src/tools/file-patch.ts
 var PATCH_BYTES = 1024 * 1024;
 var SOURCE_BYTES = 16 * 1024 * 1024;
@@ -51,7 +66,6 @@ var STAGED_BYTES = 64 * 1024 * 1024;
 
 // src/tools/write-changes.ts
 import { homedir } from "os";
-import { isAbsolute as isAbsolute2, relative as relative2, sep as sep2 } from "path";
 
 // src/panels/contract.ts
 var PANEL_LIMITS = {
@@ -76,15 +90,16 @@ var PANEL_LIMITS = {
 var HOST_DIFF_BYTES = 64 * 1024;
 var ENTRY_DIFF_BYTES = 8 * 1024;
 var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
-var within = (inside) => !!inside && inside !== ".." && !inside.startsWith(`..${sep2}`) && !isAbsolute2(inside);
-function displayPath(path2, cwd) {
-  const inside = relative2(cwd, path2);
-  return within(inside) ? inside : path2;
+var within = (inside, api = pathFor()) => !!inside && inside !== ".." && !inside.startsWith(`..${api.sep}`) && !api.isAbsolute(inside);
+function displayPath(path3, cwd, platform = process.platform) {
+  const api = pathFor(platform);
+  const inside = api.relative(cwd, path3);
+  return slashPath(within(inside, api) ? inside : path3, platform);
 }
 
 // src/tools/primitives.ts
 import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat } from "fs/promises";
-import { dirname as dirname3, resolve as resolve3 } from "path";
+import { dirname as dirname3 } from "path";
 
 // src/tools/process.ts
 import { spawn } from "child_process";
@@ -98,8 +113,8 @@ var errorCode = (error, fallback) => {
   return typeof code === "string" && /^[A-Za-z0-9_]+$/.test(code) ? code : fallback;
 };
 async function readFileTool(args, context) {
-  const path2 = resolve3(context.cwd, args.path);
-  const shown = displayPath(path2, context.cwd);
+  const path3 = resolveToolPath(context.cwd, args.path);
+  const shown = displayPath(path3, context.cwd);
   const offset = args.offset ?? 1;
   const last = args.limit === void 0 ? offset + READ_DEFAULT_LIMIT - 1 : offset + args.limit - 1;
   const budget = context.maxOutputBytes - READ_FOOTER_RESERVE;
@@ -107,7 +122,7 @@ async function readFileTool(args, context) {
   const failed = (code, message) => ({ ...errorResult(code, message), host: { summary: shown, status: "error", path: shown } });
   let handle;
   try {
-    handle = await open2(path2, "r");
+    handle = await open2(path3, "r");
   } catch (error) {
     const code = errorCode(error, "file_error");
     return failed(code, code === "ENOENT" ? `${shown} does not exist` : `cannot read ${shown}: ${code}`);

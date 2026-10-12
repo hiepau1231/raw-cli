@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { delegate } from "../src/tools/bundled/bash/index.js";
 import { createAgent, type RunEvent } from "../src/agent.js";
 import { HookDispatcher } from "../src/hooks/dispatcher.js";
 import type { HookEventName, SelectedHook } from "../src/hooks/contract.js";
@@ -368,4 +369,16 @@ test("a copied bash tool without delegation runs in the foreground and says so",
   const result = await tools.dispatch("bash", { command: `touch ${join(cwd, "ran")}`, run_in_background: true }, { cwd, maxOutputBytes: 8192 });
   assert.equal(existsSync(join(cwd, "ran")), true);
   assert.ok(text(result).endsWith(BACKGROUND_NOTE));
+});
+
+test("a background workdir is passed on as a relative cwd, or absolute when no relative path reaches it", () => {
+  const cwd = (args: Record<string, unknown>, base: string, platform: NodeJS.Platform) =>
+    (delegate({ command: "x", run_in_background: true, ...args }, { cwd: base }, platform)!.arguments as { cwd?: string }).cwd;
+  assert.equal(cwd({ workdir: "sub" }, "C:\\work", "win32"), "sub");
+  assert.equal(cwd({ workdir: "D:\\data" }, "C:\\work", "win32"), "D:\\data");
+  assert.equal(cwd({ workdir: "/d/data" }, "C:\\work", "win32"), "D:\\data");
+  assert.equal(cwd({ workdir: "C:\\work" }, "C:\\work", "win32"), undefined);
+  assert.equal(cwd({}, "C:\\work", "win32"), undefined);
+  assert.equal(cwd({ workdir: "../x" }, "/work/a", "linux"), "../x");
+  assert.equal(cwd({ workdir: "/srv" }, "/work", "linux"), "../srv");
 });

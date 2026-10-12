@@ -2,7 +2,7 @@ import { writeFileTool, type ToolContext } from "../../primitives.js";
 import type { NormalizedArguments } from "../../registry.js";
 import type { ToolResult } from "../../types.js";
 import { PATH_ALIASES, renameArgument } from "../../normalize.js";
-import { resolve } from "node:path";
+import { resolveToolPath } from "../../../platform/paths.js";
 
 export const example = { path: "notes/todo.md", content: "# Todo\n" };
 export const renamedArguments = { operations: "path" };
@@ -20,7 +20,7 @@ export function normalizeArguments(input: Record<string, unknown>): NormalizedAr
 }
 
 export function describeEffects(args: Record<string, unknown>, context: { cwd: string }): Record<string, unknown> {
-  return { files: [{ path: resolve(context.cwd, String(args.path)), operation: "write" }] };
+  return { files: [{ path: resolveToolPath(context.cwd, String(args.path)), operation: "write" }] };
 }
 
 export function validateArgs(value: unknown): string | undefined {
