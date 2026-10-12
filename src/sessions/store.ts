@@ -966,7 +966,8 @@ export class SessionStore {
     chmodSync(directory, 0o700);
     const absolutePath = join(dirname(this.path), relativePath);
     writeFileSync(absolutePath, json, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    const file = openSync(absolutePath, "r");
+    // Windows flushes a file only through a handle that may write.
+    const file = openSync(absolutePath, "r+");
     try { fsyncSync(file); } finally { closeSync(file); }
     fsyncDirectory(directory);
     return { id, relativePath, byteLength };

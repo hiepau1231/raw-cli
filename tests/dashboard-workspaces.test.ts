@@ -138,7 +138,8 @@ test("browse lists only sub-directories with filtering, ordering, parents and er
   const f = await dashboardFixture({ responses: [reply] });
   const home = tempDir("raw-ws-home-"); const outside = tempDir("raw-ws-outside-");
   try {
-    (f.env as Record<string, string | undefined>).HOME = home;
+    // Windows takes the home from USERPROFILE.
+    Object.assign(f.env, { HOME: home, USERPROFILE: home });
     for (const dir of ["b", "A", "c", ".hidden", "target-dir"]) mkdirSync(join(home, dir));
     mkdirSync(join(home, "b", "inner"));
     writeFileSync(join(home, "secret-file.txt"), "x"); writeFileSync(join(outside, "file-target"), "x");
