@@ -256,4 +256,3 @@ test("a leader that exits takes the processes it left behind with it", { skip: o
     assert.deepEqual(await waitForNoMarked(marker), []);
   } finally { child.kill(); }
 });
-
