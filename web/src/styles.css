@@ -1170,10 +1170,19 @@ main > .error-banner {
   font-size: 23px;
   letter-spacing: -0.5px;
 }
-.load-earlier {
+/* The loader row above the first entry while older history remains (docs/chat-design.md §10). */
+.history-loader {
   display: flex;
-  margin: 0 auto 24px;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+  margin: 0 0 24px;
   font-size: 12px;
+  color: var(--muted);
+}
+.history-loader .error-banner {
+  align-self: stretch;
 }
 .working-status {
   display: flex;

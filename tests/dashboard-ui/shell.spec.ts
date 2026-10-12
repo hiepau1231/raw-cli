@@ -215,6 +215,17 @@ test("history pagination preserves the viewport and does not dispatch historical
         input: `Message ${index} with saved content`,
       },
     });
+  // The earlier page is held until the test has measured the first message in view.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let asked = 0;
+  await page.route(/\/history\?before=/, async (route) => {
+    asked++;
+    await held;
+    await route.continue();
+  });
   await page.goto(
     `${raw.server.launchUrl.replace("/#", `/chat/${session.id}#`)}`,
   );
@@ -244,16 +255,18 @@ test("history pagination preserves the viewport and does not dispatch historical
   await viewport.evaluate((element) => {
     element.scrollTop = 0;
   });
+  // Scrolling to the top asks for the earlier page; the first message in view keeps its place when it lands.
+  await expect.poll(() => asked).toBe(1);
   const anchor = page.getByText("Message 25 with saved content", {
     exact: true,
   });
   const before = await anchor.boundingBox();
-  await page.getByRole("button", { name: "Load earlier" }).click();
+  release();
   await expect(
     page.getByText("Message 0 with saved content", { exact: true }),
   ).toHaveCount(1);
   const after = await anchor.boundingBox();
-  expect(Math.abs(after!.y - before!.y)).toBeLessThan(15);
+  expect(Math.abs(after!.y - before!.y)).toBeLessThan(2);
   await expect(
     page.getByRole("button", { name: "Jump to latest" }),
   ).toBeVisible();

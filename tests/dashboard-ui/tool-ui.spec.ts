@@ -27,11 +27,11 @@ test("repeated inline views retain their snapshots after reload and backward pag
   }
   await page.reload();
   await expect(page.locator(".inline-tool-view").first()).toBeVisible();
-  const older = page.getByRole("button", { name: "Load earlier" });
-  for (let attempts = 0; attempts < 30 && await older.count(); attempts++) {
-    await older.click();
-    await page.waitForTimeout(50);
-  }
+  // Scrolling to the top loads the earlier pages.
+  await expect.poll(async () => {
+    await page.locator(".conversation-scroll").evaluate((element) => { element.scrollTop = 0; });
+    return page.locator(".history-loader").count();
+  }, { timeout: 30000, intervals: [50] }).toBe(0);
   await expect(page.locator(".inline-tool-view")).toHaveCount(20);
   const snapshots = await page.locator(".inline-tool-view [data-kind=markdown]").allTextContents();
   expect(snapshots.map(text => text.trim()).sort()).toEqual(Array.from({ length: 20 }, (_, index) => `Snapshot ${index}`).sort());

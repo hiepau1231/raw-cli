@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type Ref } from "react";
 import {
   Activity,
   ArrowDown,
@@ -69,23 +69,39 @@ function ComposerArea({
   return <Composer {...composer} draft={draft} onDraft={store.set} sendDisabled={blocked || (!draft.trim() && !hasContent)} />;
 }
 
-/** Load earlier, memoized so a streamed answer does not render it again. */
-const LoadEarlier = memo(function LoadEarlier({ onLoad }: { onLoad: () => void }) {
+/**
+ * The row above the first entry while older history remains (docs/chat-design.md §10): a status while a page loads, the
+ * error and Retry after a page failed. Memoized so a streamed answer does not render it again.
+ */
+const HistoryLoader = memo(function HistoryLoader({ rowRef, loading, error, onRetry }: {
+  rowRef: Ref<HTMLDivElement>;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+}) {
   return (
-    <button className="load-earlier" onClick={onLoad}>
-      Load earlier
-    </button>
+    <div className="history-loader" ref={rowRef} role="status">
+      {loading && "Loading earlier messages…"}
+      {error && (
+        <>
+          <ErrorMessage>{error}</ErrorMessage>
+          <button type="button" onClick={onRetry}>
+            Retry
+          </button>
+        </>
+      )}
+    </div>
   );
 });
 
 /** How far `entry` is below the top of the conversation viewport. */
 const entryOffset = (entry: Element, viewport: HTMLElement) =>
   entry.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
-/** The first conversation entry that reaches into the viewport, and its offset. Load earlier stays first, so it is no anchor. */
+/** The first conversation entry that reaches into the viewport, and its offset. The loader row stays first, so it is no anchor. */
 function firstEntryInView(viewport: HTMLElement) {
   const entries = viewport.querySelector(".conversation")?.children ?? [];
   for (const element of entries) {
-    if (element.classList.contains("load-earlier")) continue;
+    if (element.classList.contains("history-loader")) continue;
     const offset = entryOffset(element, viewport);
     if (offset + element.getBoundingClientRect().height > 0) return { element, offset };
   }
@@ -377,15 +393,35 @@ export function Chat({
       setPending(false);
     }
   };
+  /** One earlier page at a time; after a failure, loading on scroll waits for Retry. */
+  const loadingHistory = useRef(false);
+  const historyFailed = useRef(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const loaderRow = useRef<HTMLDivElement>(null);
+  /** Whether the loader row is within 600 px of the top of the viewport (docs/chat-design.md §10). */
+  const loaderNear = () => {
+    const row = loaderRow.current;
+    const element = scroll.current;
+    return !!row && !!element && row.getBoundingClientRect().bottom > element.getBoundingClientRect().top - 600;
+  };
   const loadEarlier = async () => {
-    if (!scroll.current) return;
-    prepending.current = true;
+    if (!scroll.current || loadingHistory.current || historyFailed.current) return;
+    loadingHistory.current = true;
+    setHistoryLoading(true);
+    const done = () => {
+      prepending.current = false;
+      keepInPlace.current = undefined;
+      loadingHistory.current = false;
+      setHistoryLoading(false);
+    };
     // Taken when the page has arrived, so scrolling while it loads is not undone. The first entry in view keeps its place
     // from the commit that adds the page; entries that render for the first time replace their size estimate on the next
     // frames (docs/chat-design.md §10), so the place is kept for three more frames.
     try {
       await earlier(() => {
         const element = scroll.current;
+        prepending.current = true;
         if (element) keepInPlace.current = { anchor: firstEntryInView(element), top: element.scrollTop, height: element.scrollHeight };
       });
       let left = 4;
@@ -396,19 +432,42 @@ export function Chat({
           element.scrollTop += entryOffset(kept.anchor.element, element) - kept.anchor.offset;
         else if (element && kept && left === 4) element.scrollTop = kept.top + element.scrollHeight - kept.height;
         if (element && kept?.anchor && --left > 0) return void requestAnimationFrame(settle);
-        prepending.current = false;
-        keepInPlace.current = undefined;
+        done();
+        // The observer reports only changes: a loader that is still near the top asks for the next page here.
+        if (loaderNear()) void loadEarlierRef.current();
       };
       requestAnimationFrame(settle);
     } catch (cause) {
-      prepending.current = false;
-      keepInPlace.current = undefined;
-      setError(errorText(cause));
+      done();
+      historyFailed.current = true;
+      setHistoryError(errorText(cause));
     }
   };
   const loadEarlierRef = useRef(loadEarlier);
   loadEarlierRef.current = loadEarlier;
-  const onLoadEarlier = useCallback(() => void loadEarlierRef.current(), []);
+  const retryEarlier = useCallback(() => {
+    historyFailed.current = false;
+    setHistoryError("");
+    void loadEarlierRef.current();
+  }, []);
+  const hasEarlier = !!state?.history.nextCursor;
+  useEffect(() => {
+    historyFailed.current = false;
+    setHistoryError("");
+  }, [id]);
+  useEffect(() => {
+    const row = loaderRow.current;
+    const root = scroll.current;
+    if (!row || !root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadEarlierRef.current();
+      },
+      { root, rootMargin: "600px 0px 0px 0px" },
+    );
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [id, hasEarlier]);
   const title_ = state?.session.title ?? summary?.title;
   const cwd_ = state?.session.cwd ?? summary?.cwd;
   const home = useHome();
@@ -590,7 +649,9 @@ export function Chat({
           >
             <div className="conversation">
               <ErrorMessage>{streamError}</ErrorMessage>
-              {state?.history.nextCursor && <LoadEarlier onLoad={onLoadEarlier} />}
+              {(hasEarlier || historyError) && (
+                <HistoryLoader rowRef={loaderRow} loading={historyLoading} error={historyError} onRetry={retryEarlier} />
+              )}
               {!state && !streamError && <TimelineSkeleton />}
               {state && <Timeline state={state} preferences={preferences} onOpenPanel={panels.show} actions={panelActions} onInsert={insertRef} />}
               {state && !state.history.items.length && !current && (
@@ -632,7 +693,7 @@ export function Chat({
                 className="jump-latest"
                 onClick={() => {
                   following.current = true;
-                  // Leaving for the bottom ends a Load earlier that still keeps an entry in place.
+                  // Leaving for the bottom ends the correction of an earlier page that still keeps an entry in place.
                   keepInPlace.current = undefined;
                   scrollToBottom();
                   setAtBottom(true);

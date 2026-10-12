@@ -93,6 +93,36 @@ async function openSide(page: Page) {
   await expect(page.locator(".inspector")).toBeVisible();
 }
 const streamDone = (page: Page) => expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0, { timeout: 60000 });
+const frames = (page: Page, count: number) => page.evaluate((n) => new Promise<void>((resolve) => {
+  const step = (left: number) => (left ? requestAnimationFrame(() => step(left - 1)) : resolve());
+  step(n);
+}), count);
+/**
+ * Holds each earlier-history response until `release` (or for good after `open`), and records the requests' cursors and
+ * how many were in flight at once.
+ */
+async function holdHistory(page: Page, delayMs = 0) {
+  const held = { cursors: [] as string[], inFlight: 0, most: 0, open: false, gates: [] as Array<() => void> };
+  await page.route(/\/history\?before=/, async (route) => {
+    held.cursors.push(new URL(route.request().url()).searchParams.get("before") ?? "");
+    held.most = Math.max(held.most, ++held.inFlight);
+    if (!held.open) await new Promise<void>((resolve) => held.gates.push(resolve));
+    if (delayMs) await sleep(delayMs);
+    const response = await route.fetch();
+    held.inFlight--;
+    await route.fulfill({ response });
+  });
+  const release = () => { for (const go of held.gates.splice(0)) go(); };
+  return { held, release, open: () => { held.open = true; release(); } };
+}
+/** Scrolls to the top until the whole history has loaded. */
+async function loadAll(page: Page) {
+  const scroller = page.locator(".conversation-scroll");
+  await expect.poll(async () => {
+    await scroller.evaluate((element) => { element.scrollTop = 0; });
+    return page.locator(".history-loader").count();
+  }, { timeout: 60000, intervals: [50] }).toBe(0);
+}
 
 test("typing changes no node in the conversation or the side panel", async ({ page, raw }) => {
   await openLong(page, raw);
@@ -125,13 +155,13 @@ test("a streaming answer changes no node before the last message you sent", asyn
 
 test("an open group, an open tool card and a typed answer survive a streamed turn and a reconnect", async ({ page, raw }) => {
   await openLong(page, raw);
-  // An older turn's Work group and its edit's card.
-  const group = page.locator(".work-group").nth(1);
+  // An older turn's Work group and its edit's card, marked first: near the top, earlier pages load in above them.
+  await mark(page.locator(".work-group").nth(1), "group");
+  const group = kept(page, "group");
   await openGroup(group);
   const card = group.locator('.tool-row[data-kind="edit"]');
-  const cardState = await flipCard(card);
-  await mark(group, "group");
   await mark(card, "card");
+  const cardState = await flipCard(kept(page, "card"));
   await startStream(page);
   await streamDone(page);
   await send(page, ASK);
@@ -184,6 +214,7 @@ test("the last turn's open group and card stay open when it settles under the ne
 });
 
 test("a Work group cut by the history page keeps its state when the earlier page arrives", async ({ page, raw }) => {
+  const history = await holdHistory(page);
   await openLong(page, raw, 10);
   // The snapshot's 50 records start inside a turn's Work group: the timeline begins with that group.
   const conversation = page.locator(".conversation");
@@ -195,7 +226,8 @@ test("a Work group cut by the history page keeps its state when the earlier page
   const cardState = await flipCard(card);
   await mark(first, "group");
   await mark(card, "card");
-  await page.getByRole("button", { name: "Load earlier" }).click();
+  // Opening the group at the top asked for the earlier page; it arrives now.
+  history.open();
   await expect(kept(page, "group").locator(".tool-row")).not.toHaveCount(rows);
   expect(await kept(page, "group").locator(".tool-row").count()).toBeGreaterThan(rows);
   await expect(kept(page, "group").locator(".work-toggle")).toHaveAttribute("aria-expanded", "true");
@@ -214,22 +246,12 @@ test.describe("off-screen entries", () => {
   async function openAll(page: Page, raw: Raw) {
     await openLong(page, raw);
     const scroller = page.locator(".conversation-scroll");
-    const button = page.locator(".load-earlier");
-    while (await button.count()) {
-      const before = await page.getByTestId("assistant-message").count();
-      await scroller.evaluate((element) => { element.scrollTop = 0; });
-      await button.click();
-      await expect.poll(async () => (await page.getByTestId("assistant-message").count()) > before || !(await button.count())).toBe(true);
-    }
+    await loadAll(page);
     await expect(page.getByTestId("assistant-message")).toHaveCount(60);
     await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight; });
     await frames(page, 3);
     return scroller;
   }
-  const frames = (page: Page, count: number) => page.evaluate((n) => new Promise<void>((resolve) => {
-    const step = (left: number) => (left ? requestAnimationFrame(() => step(left - 1)) : resolve());
-    step(n);
-  }), count);
   /** Whether `locator`'s element intersects the scroller's viewport. */
   const inView = (locator: Locator) => locator.evaluate((element) => {
     const box = element.getBoundingClientRect();
@@ -308,80 +330,6 @@ test.describe("off-screen entries", () => {
     expect(await scroller.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(80);
   });
 
-  test("Load earlier keeps the first entry in view in place while new entries replace their estimates", async ({ page, raw }) => {
-    await openLong(page, raw);
-    const scroller = page.locator(".conversation-scroll");
-    await scroller.evaluate((element) => { element.scrollTop = 0; });
-    await frames(page, 2);
-    const first = page.getByTestId("assistant-message").first();
-    const tag = (await first.locator("h2").textContent())!;
-    const anchored = page.getByTestId("assistant-message").filter({ hasText: tag });
-    const offset = () => anchored.evaluate((element) =>
-      element.getBoundingClientRect().top - element.closest(".conversation-scroll")!.getBoundingClientRect().top);
-    const before = await offset();
-    const count = await page.getByTestId("assistant-message").count();
-    await page.locator(".load-earlier").click();
-    await expect.poll(() => page.getByTestId("assistant-message").count()).toBeGreaterThan(count);
-    // Past the settling frames, and again later: the place holds.
-    await frames(page, 5);
-    expect(Math.abs((await offset()) - before)).toBeLessThan(15);
-    await sleep(300);
-    expect(Math.abs((await offset()) - before)).toBeLessThan(15);
-  });
-
-  test("scrolling while an earlier page loads is not undone when it arrives", async ({ page, raw }) => {
-    await openLong(page, raw);
-    let release = () => {};
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    await page.route(/\/history\?before=/, async (route) => { await held; await route.continue(); });
-    const scroller = page.locator(".conversation-scroll");
-    await scroller.evaluate((element) => { element.scrollTop = 0; });
-    await frames(page, 2);
-    const count = await page.getByTestId("assistant-message").count();
-    await page.locator(".load-earlier").click();
-    // The reader moves on to the middle of the loaded turns while the page is on its way.
-    await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight / 2; element.dispatchEvent(new Event("scroll")); });
-    await frames(page, 2);
-    const tag = await page.evaluate(() => {
-      const view = document.querySelector(".conversation-scroll")!.getBoundingClientRect();
-      const inView = [...document.querySelectorAll('[data-testid="assistant-message"]')]
-        .find((element) => element.getBoundingClientRect().top >= view.top);
-      return inView!.querySelector("h2")!.textContent!;
-    });
-    const anchored = page.getByTestId("assistant-message").filter({ hasText: tag });
-    const offset = () => anchored.evaluate((element) =>
-      element.getBoundingClientRect().top - element.closest(".conversation-scroll")!.getBoundingClientRect().top);
-    const before = await offset();
-    release();
-    await expect.poll(() => page.getByTestId("assistant-message").count()).toBeGreaterThan(count);
-    await frames(page, 5);
-    expect(Math.abs((await offset()) - before)).toBeLessThan(15);
-  });
-
-  test("Jump to latest right as an earlier page arrives stays at the bottom", async ({ page, raw }) => {
-    await openLong(page, raw);
-    let release = () => {};
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    await page.route(/\/history\?before=/, async (route) => { await held; await route.continue(); });
-    const scroller = page.locator(".conversation-scroll");
-    await scroller.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
-    await expect(page.locator(".jump-latest")).toBeVisible();
-    const count = await page.getByTestId("assistant-message").count();
-    await page.locator(".load-earlier").click();
-    // Clicked from the commit that adds the page, before the next frame.
-    await page.evaluate(() => {
-      const observer = new MutationObserver(() => {
-        observer.disconnect();
-        document.querySelector<HTMLButtonElement>(".jump-latest")!.click();
-      });
-      observer.observe(document.querySelector(".conversation")!, { childList: true });
-    });
-    release();
-    await expect.poll(() => page.getByTestId("assistant-message").count()).toBeGreaterThan(count);
-    await frames(page, 5);
-    expect(await scroller.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(80);
-  });
-
   test("an open Work group keeps its state and size when scrolled away and back", async ({ page, raw }) => {
     const scroller = await openAll(page, raw);
     const group = page.locator(".conversation > .work-group").nth(4);
@@ -436,5 +384,172 @@ test.describe("off-screen entries", () => {
     for (let index = 0; index < data.length; index += 4)
       if (Math.abs(data[index]! - r!) + Math.abs(data[index + 1]! - g!) + Math.abs(data[index + 2]! - b!) < 60) ringPixels++;
     expect(ringPixels).toBeGreaterThan(0);
+  });
+});
+
+// Earlier history loads as you scroll up and keeps your place (docs/chat-design.md §10).
+test.describe("earlier history", () => {
+  const scroller = (page: Page) => page.locator(".conversation-scroll");
+  const toTop = (page: Page) => scroller(page).evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
+  /** Marks the first entry in view and returns its offset from the top of the viewport. */
+  const firstInView = (page: Page) => page.evaluate(() => {
+    const view = document.querySelector(".conversation-scroll")!.getBoundingClientRect();
+    const entries = [...document.querySelectorAll(".conversation > .message, .conversation > .work-group")];
+    const element = entries.find((entry) => entry.getBoundingClientRect().bottom > view.top)!;
+    element.setAttribute("data-anchor", "");
+    return element.getBoundingClientRect().top - view.top;
+  });
+  /** The marked entry's offset now; a remounted entry has lost the mark and fails. */
+  const anchorOffset = (page: Page) => page.locator("[data-anchor]").evaluate((element) =>
+    element.getBoundingClientRect().top - element.closest(".conversation-scroll")!.getBoundingClientRect().top);
+  const answers = (page: Page) => page.getByTestId("assistant-message").count();
+
+  test("scrolling up fast asks for each page once, one at a time", async ({ page, raw }) => {
+    const history = await holdHistory(page, 300);
+    await openLong(page, raw);
+    history.open();
+    const box = (await scroller(page).boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    for (let burst = 0; burst < 3; burst++) {
+      for (let step = 0; step < 10; step++) await page.mouse.wheel(0, -3000);
+      await sleep(100);
+    }
+    await loadAll(page);
+    await expect(page.getByTestId("assistant-message")).toHaveCount(60);
+    expect(history.held.cursors.length).toBeGreaterThan(1);
+    expect(new Set(history.held.cursors).size).toBe(history.held.cursors.length);
+    expect(history.held.most).toBe(1);
+  });
+
+  test("a failed page shows its error and Retry, and scrolling does not retry it", async ({ page, raw }) => {
+    let fail = true;
+    let requests = 0;
+    await page.route(/\/history\?before=/, async (route) => {
+      requests++;
+      if (!fail) return route.continue();
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: { code: "internal", message: "History is unavailable" } }) });
+    });
+    await openLong(page, raw);
+    const count = await answers(page);
+    await toTop(page);
+    const loader = page.locator(".history-loader");
+    await expect(loader.getByRole("alert")).toContainText("History is unavailable");
+    await expect(loader.getByRole("button", { name: "Retry" })).toBeVisible();
+    for (const top of [400, 0, 300, 0]) {
+      await scroller(page).evaluate((element, value) => { element.scrollTop = value; }, top);
+      await frames(page, 2);
+    }
+    await sleep(500);
+    expect(requests).toBe(1);
+    fail = false;
+    await loader.getByRole("button", { name: "Retry" }).click();
+    await expect.poll(() => answers(page)).toBeGreaterThan(count);
+    await expect(page.locator(".history-loader [role=alert]")).toHaveCount(0);
+    // Loading on scroll goes on.
+    await loadAll(page);
+    await expect(page.getByTestId("assistant-message")).toHaveCount(60);
+  });
+
+  test("a short window keeps loading until the history ends, without scrolling", async ({ page, raw }) => {
+    await page.setViewportSize({ width: 1440, height: 2000 });
+    const store = raw.server.context.store!;
+    const session = store.createSession({ cwd: raw.root, title: "Short window", agentName: "raw" });
+    store.appendHistory({ sessionId: session.id, kind: "user", payload: { text: "First request", input: "First request" } });
+    for (let index = 1; index < 60; index++) store.appendHistory({ sessionId: session.id, kind: "reasoning", payload: { text: `Thought ${index}` } });
+    let requests = 0;
+    page.on("request", (request) => { if (request.url().includes("/history?before=")) requests++; });
+    await page.goto(raw.server.launchUrl.replace("/#", `/chat/${encodeURIComponent(session.id)}#`));
+    // The snapshot's 50 thoughts are one collapsed Work group, far shorter than the window: the rest loads by itself.
+    await expect(page.getByTestId("user-message")).toContainText("First request");
+    await expect(page.locator(".history-loader")).toHaveCount(0);
+    expect(requests).toBe(1);
+  });
+
+  test("the first entry in view stays put in every frame as a page lands, and the loader is a status", async ({ page, raw }) => {
+    const history = await holdHistory(page);
+    await openLong(page, raw);
+    await toTop(page);
+    await expect.poll(() => history.held.cursors.length).toBe(1);
+    const loader = page.locator(".history-loader");
+    await expect(loader).toHaveAttribute("role", "status");
+    await expect(loader).toHaveText("Loading earlier messages…");
+    const start = await firstInView(page);
+    await page.evaluate(() => {
+      const w = window as unknown as { offsets: number[] };
+      w.offsets = [];
+      const anchor = document.querySelector("[data-anchor]")!;
+      const view = document.querySelector(".conversation-scroll")!;
+      const sample = () => {
+        w.offsets.push(anchor.getBoundingClientRect().top - view.getBoundingClientRect().top);
+        if (w.offsets.length < 40) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    const count = await answers(page);
+    history.release();
+    await expect.poll(() => answers(page)).toBeGreaterThan(count);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { offsets: number[] }).offsets.length)).toBe(40);
+    const offsets = await page.evaluate(() => (window as unknown as { offsets: number[] }).offsets);
+    for (const offset of offsets) expect(Math.abs(offset - start), offsets.join(",")).toBeLessThan(2);
+    expect(Math.abs((await anchorOffset(page)) - start)).toBeLessThan(2);
+  });
+
+  test("scrolling while a page loads is not undone when it lands", async ({ page, raw }) => {
+    const history = await holdHistory(page);
+    await openLong(page, raw);
+    await toTop(page);
+    await expect.poll(() => history.held.cursors.length).toBe(1);
+    await scroller(page).evaluate((element) => { element.scrollTop += 300; });
+    await frames(page, 2);
+    expect(await scroller(page).evaluate((element) => element.scrollTop)).toBe(300);
+    const start = await firstInView(page);
+    await sleep(800);
+    const count = await answers(page);
+    history.release();
+    await expect.poll(() => answers(page)).toBeGreaterThan(count);
+    await frames(page, 5);
+    expect(Math.abs((await anchorOffset(page)) - start)).toBeLessThan(2);
+  });
+
+  test("an answer streaming below does not move the first entry in view as a page lands", async ({ page, raw }) => {
+    const history = await holdHistory(page);
+    await openLong(page, raw);
+    await startStream(page);
+    await toTop(page);
+    await expect.poll(() => history.held.cursors.length).toBe(1);
+    await frames(page, 2);
+    const start = await firstInView(page);
+    const streamed = await page.getByTestId("assistant-message").last().textContent();
+    await sleep(800);
+    expect(await page.getByTestId("assistant-message").last().textContent(), "the answer streamed on while the page loaded").not.toBe(streamed);
+    const count = await answers(page);
+    history.release();
+    await expect.poll(() => answers(page)).toBeGreaterThan(count);
+    await frames(page, 5);
+    expect(Math.abs((await anchorOffset(page)) - start)).toBeLessThan(2);
+    // Following stays off.
+    expect(await scroller(page).evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeGreaterThan(1000);
+    await streamDone(page);
+  });
+
+  test("Jump to latest right as a page lands stays at the bottom", async ({ page, raw }) => {
+    const history = await holdHistory(page);
+    await openLong(page, raw);
+    await toTop(page);
+    await expect.poll(() => history.held.cursors.length).toBe(1);
+    await expect(page.locator(".jump-latest")).toBeVisible();
+    const count = await answers(page);
+    // Clicked from the commit that adds the page, before the next frame.
+    await page.evaluate(() => {
+      const observer = new MutationObserver(() => {
+        observer.disconnect();
+        document.querySelector<HTMLButtonElement>(".jump-latest")!.click();
+      });
+      observer.observe(document.querySelector(".conversation")!, { childList: true });
+    });
+    history.release();
+    await expect.poll(() => answers(page)).toBeGreaterThan(count);
+    await frames(page, 5);
+    expect(await scroller(page).evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(80);
   });
 });

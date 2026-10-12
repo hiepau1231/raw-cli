@@ -91,17 +91,17 @@ try {
   const side = page.getByRole("button", { name: "Side panel", exact: true });
   if ((await side.getAttribute("aria-expanded")) !== "true") await side.click();
 
-  // The whole history: scroll to the top and load earlier pages until there are none.
+  // The whole history: scroll to the top while earlier pages load, until there are none.
   const historyStart = Date.now();
   const scroller = page.locator(".conversation-scroll");
-  for (let guard = 0; guard < 1000; guard++) {
+  const loader = page.locator(".history-loader");
+  // A scroll that lands while a page is in flight asks for nothing, and the page keeps the reader's place: scroll again.
+  for (let guard = 0; guard < 1000 && (await loader.count()); guard++) {
     const before = await assistants.count();
-    await scroller.evaluate((element) => { element.scrollTop = 0; });
-    const button = page.locator(".load-earlier");
-    const loader = page.locator(".history-loader");
-    if (!(await button.count()) && !(await loader.count())) break;
-    if (await button.count()) await button.click();
-    await expect.poll(async () => (await assistants.count()) > before || !((await button.count()) + (await loader.count())), { timeout: 60000 }).toBe(true);
+    await expect.poll(async () => {
+      await scroller.evaluate((element) => { element.scrollTop = 0; });
+      return (await assistants.count()) > before || !(await loader.count());
+    }, { timeout: 60000, intervals: [50] }).toBe(true);
   }
   const historyMs = Date.now() - historyStart;
   const loaded = await assistants.count();
