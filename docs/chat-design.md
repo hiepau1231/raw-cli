@@ -84,3 +84,27 @@ The composer is a card under the conversation, in the same 720 px column with 28
 - **Stress session.** `tests/dashboard-ui/chat-stress.ts` runs a real-length session through the mock provider: a long Vietnamese request, reasoning, a todo, a successful command, an edit with a diff, a failing `npm run lint`, an answer with a heading, a table, inline code, a code block with `!==` and `<=`, and a list; a second turn whose write waits for approval; a third with a pending `ask_user` question.
 - **Geometry.** `tests/dashboard-ui/chat-layout.spec.ts` asserts the contract of each section at 1440 px (side panel open and closed), 800 px and 390 px, in both themes, plus axe.
 - **Gallery.** After `npm run build`, `npx tsx tests/dashboard-ui/capture-chat.ts` writes `test-results/chat/chat-<view>-<scheme>.png`; `npx tsx tests/dashboard-ui/compare-chat.ts` reads the local mockups (`RAW_CHAT_MOCKUPS`, default `test-results/chat-mock/`; it does nothing when they are absent) and writes `test-results/chat/compare-<mockup>-<scheme>.png`, the mockup on the left and the dashboard on the right at the same CSS size. They are compared by eye, not as pixel assertions.
+- **Performance.** A long session is measured, not judged by eye: §10.
+
+## 10. Performance
+
+A long chat stays responsive: typing never waits for the timeline, and a streaming answer never makes the composer lag.
+
+- **Stress session.** `tests/dashboard-ui/chat-long.ts` runs the first turn of the chat stress session (§9) once through the mock provider. It then copies that turn's history records 300 times into a new session, with fresh segment, turn, operation and tool call ids, so every copy is a distinct turn: a request, reasoning, a todo, commands, an edit with a diff, a failed lint and an answer with a table and a code block. A live turn then streams a long Markdown answer in 2400 small frames, 10 ms apart. The stress agent's auto compaction is off, and the script checks that the live turn made exactly one provider request.
+- **Measuring.** After `npm run build`, run `npx tsx tests/dashboard-ui/measure-chat.ts --label <name>`.
+  - The script opens the session at 1440 × 900 with the side panel open, loads the whole history, types while idle, starts the live turn, and types while it streams. Then it scrolls from the bottom to the top.
+  - It writes `test-results/chat-perf/report-<name>.json` and prints a table.
+  - `--cpu 4` slows the CPU four times through the DevTools protocol; that run only reports.
+- **What it measures.**
+  - **Keypress to paint.** One sample per keystroke. Keys are typed through the DevTools protocol, one character at a time. A keystroke's sample is the longest Event Timing duration among its `keydown`, `keypress` and `input` events, which runs from the key press to the next paint. Event Timing reports only durations of 16 ms or more, so a keystroke without an entry counts as under 16 ms, but only when the observation is known to be complete. That means the observer is attached and its entries are drained, and the calibration passed.
+  - **Calibration.** Each run starts with 5 keystrokes against a listener that blocks for 80 ms. Each must measure at least 80 ms, so a probe that sees nothing cannot pass.
+  - **Overlap.** Typing counts as "while streaming" only if the answer grew while the keys were typed and the turn was still running after the last one.
+  - **Long animation frames** over 50 ms: their count and total while idle, while streaming and while scrolling.
+  - **Re-rendered nodes.** A test-only React DevTools hook counts the DOM nodes whose props changed in each commit. It counts them in three regions: the conversation, the conversation before the last message you sent, and the side panel. The script installs the hook; the dashboard ships nothing for it.
+  - **History.** The time to load the whole history.
+- **Budgets.** `--assert` fails the run when a budget is missed:
+  - the 95th percentile of keypress to paint is under 50 ms, both while idle and while streaming, at 300 turns;
+  - typing changes no node in the conversation or the side panel;
+  - while an answer streams, no node before the last message you sent changes;
+  - no long animation frame over 100 ms while streaming. `--strict-frames` lowers this to 50 ms; this applies once off-screen messages skip rendering.
+- **Validity.** Whatever the flags, a run fails as invalid when the calibration fails, a keystroke has no sample without complete observation, or the typing did not overlap the stream.
