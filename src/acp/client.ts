@@ -111,7 +111,8 @@ export async function createAcpClient(options: AcpClientOptions): Promise<AcpPar
       const timer = setTimeout(() => { child!.off("exit", onExit); resolve(exited()); }, timeoutMs);
       child!.once("exit", onExit);
     });
-    if (await waitForExit(5000)) return;
+    // Longer than the child's own shutdown: stopping its managed processes takes up to 2 s, 5.5 s on Windows.
+    if (await waitForExit(process.platform === "win32" ? 8000 : 5000)) return;
     stopChild(child, "SIGTERM");
     if (await waitForExit(1000)) return;
     stopChild(child, "SIGKILL");

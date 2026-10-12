@@ -157,7 +157,9 @@ export class ProcessSupervisor {
       await new Promise(resolve => setTimeout(resolve, 500));
       (this.options.signalGroup ?? signalShellGroup)(job.child!, "SIGKILL", this.options.platform);
       let timer: NodeJS.Timeout | undefined;
-      try { await Promise.race([job.closed, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ProcessError("process_cleanup_failed", "cannot confirm process group cleanup")), 1500); })]); }
+      // A killed Windows tree can take seconds to release its pipes (a .NET PowerShell on a loaded machine).
+      const confirmMs = (this.options.platform ?? process.platform) === "win32" ? 5000 : 1500;
+      try { await Promise.race([job.closed, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ProcessError("process_cleanup_failed", "cannot confirm process group cleanup")), confirmMs); })]); }
       finally { if (timer) clearTimeout(timer); }
       job.record.state = outcome; job.record.endedAt = this.now(); const failure = this.flush(job); this.trim(sessionId);
       if (failure) throw failure;
