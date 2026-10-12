@@ -19,7 +19,8 @@ test("Commands projects background output and audited Stop while a model lease i
     const s = await f.json<SessionSummary>("/sessions", "POST", {cwd:f.root,agent:"raw"});
     const store = f.server.context.store!;
     const process = await f.server.context.processes!.forSession(s.id).start({command:"printf '\\033[31mhello\\033[0m'; sleep 0.1; printf 'é' >&2; sleep 20",cwd:f.root});
-    await new Promise(resolve => setTimeout(resolve, 300));
+    // Wait for both writes; Git Bash on Windows takes longer than 300 ms to start.
+    for (let n = 0; n < 200 && f.server.context.processes!.forSession(s.id).output(process.id).cursor < 16; n++) await new Promise(resolve => setTimeout(resolve, 50));
     const owner = store.claimSession(s.id);
     try {
       const rows = await f.json<{items:CommandRecord[]}>(`/sessions/${s.id}/commands`);
