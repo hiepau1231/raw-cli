@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { prepareSpawn, terminateTree } from "../platform/windows.js";
 import { VariableError, matchesType, type JsonValue, type VariableProvider } from "./contract.js";
 export interface VariableRequest { protocol_version: 1; name: string; params: Readonly<Record<string, JsonValue>> }
 export interface VariableResponse { value: JsonValue; observed_at?: string }
@@ -10,9 +11,13 @@ export async function runVariableProvider(spec: VariableProvider, request: Varia
   const input = JSON.stringify(request) + "\n";
   if (Buffer.byteLength(input) > 65537) fail("var_provider_request_too_large");
   const posix = process.platform !== "win32";
+  const env = options.env ?? process.env;
+  // On Windows: .cmd, script and PATH commands start without a shell, inside a job that owns the provider's whole tree.
+  const prepared = prepareSpawn(spec.command, spec.args, { cwd: spec.cwd ?? process.cwd(), env });
+  if (!prepared.ok) return fail("var_provider_spawn");
   let child;
-  try { child = spawn(spec.command, [...spec.args], { cwd: spec.cwd, env: options.env ?? process.env,
-    shell: false, detached: posix, stdio: ["pipe", "pipe", "pipe"] }); }
+  try { child = spawn(prepared.file, prepared.args, { cwd: spec.cwd, env, shell: false, detached: posix, windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"], ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) }); }
   catch { return fail("var_provider_spawn"); }
   let failure: string | undefined;
   let size = 0;
@@ -23,7 +28,8 @@ export async function runVariableProvider(spec: VariableProvider, request: Varia
   let finish!: () => void;
   const completed = new Promise<void>(resolve => { finish = resolve; });
   const signalChild = (signal: NodeJS.Signals) => {
-    if (child.pid) try { process.kill(posix ? -child.pid : child.pid, signal); } catch { /* already exited */ }
+    if (!posix) { terminateTree(child, { jobbed: prepared.jobbed, env }); return; }
+    if (child.pid) try { process.kill(-child.pid, signal); } catch { /* already exited */ }
   };
   const stop = (code: string) => {
     if (failure) return;

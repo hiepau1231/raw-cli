@@ -23,7 +23,7 @@ export async function openDashboardBrowser(url: string, options: { command?: str
   const command = options.command ?? (process.platform === "darwin" ? "open" : process.platform === "win32" ? "rundll32.exe" : "xdg-open");
   const args = process.platform === "win32" && !options.command ? ["url.dll,FileProtocolHandler", url] : [url];
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: "ignore", shell: false });
+    const child = spawn(command, args, { stdio: "ignore", shell: false, windowsHide: true });
     const timer = setTimeout(() => { child.kill(); resolve(false); }, 5_000); timer.unref();
     child.once("error", () => { clearTimeout(timer); resolve(false); });
     child.once("exit", (code) => { clearTimeout(timer); resolve(code === 0); });

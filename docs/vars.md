@@ -85,6 +85,10 @@ Bare commands use PATH. Commands containing a path separator and cwd resolve
 against config directory; absolute paths stay absolute. Args remain literal and
 relative script arguments run from provider cwd. No shell, tilde or template
 expansion. The child inherits the resolver environment (normally process.env).
+On Windows commands start as for [hooks](hooks.md): PATH with PATHEXT but never
+the cwd, Node scripts with Raw's Node, `.ps1` with PowerShell, `.sh` with Git
+Bash and `.cmd`/`.bat` through cmd.exe. `{"command":"node","args":["./x.mjs"]}`
+works everywhere.
 No inline-code field or provider-specific env map exists in v1.
 
 Raw writes one JSON line to stdin, then closes stdin:
@@ -120,8 +124,9 @@ invalid timestamp/type, output overflow, timeout and abort. Errors identify the
 variable and failure class without dumping raw provider output. There is no
 automatic retry or stale-on-error fallback. Timeout includes process/pipe close.
 POSIX cancellation terminates the owned process group with TERM then KILL;
-Windows uses direct-child termination. Processes escaping the group are outside
-that guarantee. This is not a background job API.
+processes escaping the group are outside that guarantee. On Windows the provider
+runs inside a job, so cancellation, timeout or the provider's exit stops every
+process it started. This is not a background job API.
 
 ## Model tools and Bash
 

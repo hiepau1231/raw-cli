@@ -1,17 +1,19 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { createAgent } from "../src/agent.js";
 import { createProvider } from "../src/llm/client.js";
-import { connectMcpServers } from "../src/tools/mcp-client.js";
+import { connectMcpServers, stdioLaunch } from "../src/tools/mcp-client.js";
+import { jobLauncher, resetJobLauncherForTests, stateDirectory } from "../src/platform/windows.js";
 import { loadConfig } from "../src/config.js";
 import { createRuntimeTools } from "../src/tools/plugins/runtime.js";
 import { createTestToolRegistry } from "./fixtures/registry.js";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
 import { startMcpHttp } from "./fixtures/mcp-http.js";
+import { processesWithMarker, waitForNoMarked } from "./fixtures/windows-processes.js";
 
 const stdio = (label: string, count = 2) => ({ command: process.execPath, args: ["--import", "tsx", "tests/fixtures/mcp-stdio.ts"],
   env: { MCP_LABEL: label, MCP_COUNT: String(count) }, tools: ["selected"] });
@@ -437,4 +439,83 @@ test("an MCP tool whose schema cannot bind a selected hook condition is skipped,
     assert.equal(tools.warnings.length, 1);
     assert.match(tools.warnings[0]!, /skipped$/);
   } finally { await tools.mcp.close(); }
+});
+
+/** Runs `work` with the job launcher unavailable, as on a machine without the .NET Framework compiler. */
+async function withoutJobLauncher<T>(work: () => Promise<T>): Promise<T> {
+  const saved = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = await mkdtemp(join(tmpdir(), "raw-state-"));
+  resetJobLauncherForTests();
+  jobLauncher({ stateDir: stateDirectory(), compile: () => { throw new Error("no compiler in this test"); }, log: () => {} });
+  try { return await work(); } finally {
+    if (saved === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = saved;
+    resetJobLauncherForTests();
+  }
+}
+
+for (const jobbed of [true, false]) {
+  test(`on Windows a .cmd server in a folder with a space gets its arguments, and closing stops its whole tree (${jobbed ? "job launcher" : "taskkill"})`,
+    { skip: process.platform === "win32" ? false : "needs Windows" }, async () => {
+      const dir = await mkdtemp(join(tmpdir(), "raw mcp "));
+      const server = join(dir, "server.cmd");
+      await writeFile(server, `@"${process.execPath}" "${resolve("tests/fixtures/mcp-argv.mjs")}" %*\r\n`);
+      const args = ["a b", "\"q\"", "a&b"];
+      const run = async () => {
+        assert.equal(stdioLaunch(server, args, dir).jobbed, jobbed);
+        // A server that exits when its stdin closes and leaves the grandchild, then one that ignores the close. Without
+        // the launcher a grandchild whose server already exited has no tree left to stop, so only the forced close counts.
+        for (const ignoreEof of jobbed ? [false, true] : [true]) {
+          const marker = `marker-${randomUUID()}`;
+          const connection = await connectMcpServers({ servers: { argv: { command: server, args, tools: "*",
+            env: { MCP_MARKER: marker, ...(ignoreEof ? { MCP_IGNORE_EOF: "1" } : {}) } } }, cwd: process.cwd(), timeoutMs: 30000 });
+          try {
+            const result = await connection.registry.dispatch(connection.exposed[0]!.alias, {}, { cwd: process.cwd(), maxOutputBytes: 8192, autoApprove: true });
+            assert.equal(result.isError, false, JSON.stringify(result));
+            assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), args);
+            for (let i = 0; i < 30 && !processesWithMarker(marker).length; i++) await new Promise((done) => setTimeout(done, 100));
+            assert.equal(processesWithMarker(marker).length, 1, "the grandchild runs while the server does");
+          } finally { await connection.close(); }
+          assert.deepEqual(await waitForNoMarked(marker), [], ignoreEof ? "forced close" : "graceful close");
+        }
+      };
+      if (jobbed) await run(); else await withoutJobLauncher(run);
+    });
+}
+
+test("on Windows without the launcher a .cmd server runs through the system cmd.exe, whatever ComSpec says", { skip: process.platform === "win32" ? false : "needs Windows" }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "raw-mcp-comspec-"));
+  const server = join(dir, "server.cmd");
+  await writeFile(server, `@"${process.execPath}" "${resolve("tests/fixtures/mcp-argv.mjs")}" %*\r\n`);
+  // A planted cmd.exe that is really node.exe fails on cmd's /d /s /c arguments, so starting it loses the connection.
+  await copyFile(process.execPath, join(dir, "cmd.exe"));
+  const saved = process.env.ComSpec;
+  try {
+    await withoutJobLauncher(async () => {
+      for (const comspec of [join(dir, "cmd.exe"), undefined]) {
+        if (comspec === undefined) delete process.env.ComSpec; else process.env.ComSpec = comspec;
+        const connection = await connectMcpServers({ servers: { argv: { command: server, args: ["a b"], tools: "*" } }, cwd: dir, timeoutMs: 30000 });
+        try {
+          const result = await connection.registry.dispatch(connection.exposed[0]!.alias, {}, { cwd: dir, maxOutputBytes: 8192, autoApprove: true });
+          assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), ["a b"], `ComSpec ${comspec ?? "unset"}`);
+        } finally { await connection.close(); }
+        assert.equal(process.env.ComSpec, comspec, "ComSpec is restored after the start");
+      }
+    });
+  } finally { if (saved === undefined) delete process.env.ComSpec; else process.env.ComSpec = saved; }
+});
+
+test("on Windows a server command found only in the cwd is skipped with a warning while the others connect", { skip: process.platform === "win32" ? false : "needs Windows" }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "raw-mcp-cwd-"));
+  await writeFile(join(dir, "raw-mcp-planted.cmd"), `@"${process.execPath}" "${resolve("tests/fixtures/mcp-argv.mjs")}" %*\r\n`);
+  await withoutJobLauncher(async () => {
+    const warnings: string[] = [];
+    const connection = await connectMcpServers({ servers: { planted: { command: "raw-mcp-planted", tools: "*" },
+      good: { command: process.execPath, args: [resolve("tests/fixtures/mcp-argv.mjs")], tools: "*" } },
+    cwd: dir, timeoutMs: 30000, onSkip: (message) => warnings.push(message) });
+    try {
+      assert.deepEqual(connection.exposed.map((tool) => tool.server), ["good"]);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0]!, /^MCP server planted cannot start: command not found: raw-mcp-planted; skipped its tools$/);
+    } finally { await connection.close(); }
+  });
 });

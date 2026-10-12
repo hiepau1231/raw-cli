@@ -103,7 +103,7 @@ export interface BashOptions {
 /** Shared shell spawn/group primitive; lifecycle and output policy belong to its caller. */
 export function spawnShell(options: { command: string; cwd: string; env?: NodeJS.ProcessEnv; bashPath?: string }, platform: NodeJS.Platform = process.platform) {
   return spawn(options.bashPath ?? process.env.RAW_BASH_PATH ?? "bash", ["-c", options.command], {
-    cwd: options.cwd, ...(options.env ? { env: options.env } : {}), stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32",
+    cwd: options.cwd, ...(options.env ? { env: options.env } : {}), stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32", windowsHide: true,
   });
 }
 export function signalShellGroup(child: ChildProcess, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform): void {

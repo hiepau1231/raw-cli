@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { prepareSpawn, terminateTree, type PreparedSpawn } from "../platform/windows.js";
 import { HookError, type HookExecution, type HookRequest, type SelectedHook } from "./contract.js";
 
 /** Safety bounds: a hook's response is a small JSON decision, and its input carries tool arguments and results. */
@@ -15,8 +16,16 @@ export async function runHook(hook: SelectedHook, request: HookRequest,
   if (Buffer.byteLength(input) > MAX_INPUT) fail("input_too_large");
   const started = performance.now();
   const posix = process.platform !== "win32";
-  const child = spawn(hook.command, [...hook.args], { cwd: request.cwd, env: options.env ?? process.env,
-    shell: false, detached: posix, stdio: ["pipe", "pipe", "pipe"] });
+  const env = options.env ?? process.env;
+  // On Windows: .cmd, script and PATH commands start without a shell, inside a job that owns the hook's whole tree.
+  const prepared = prepareSpawn(hook.command, hook.args, { cwd: request.cwd, env });
+  if (!prepared.ok) fail("spawn");
+  const launch = prepared as PreparedSpawn;
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    child = spawn(launch.file, launch.args, { cwd: request.cwd, env, shell: false, detached: posix, windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"], ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) });
+  } catch { return fail("spawn"); }
   let failure: string | undefined;
   let code: number | null = null;
   let size = 0;
@@ -27,11 +36,7 @@ export async function runHook(hook: SelectedHook, request: HookRequest,
   const completed = new Promise<void>((resolve) => { finish = resolve; });
   const signalChild = (signal: NodeJS.Signals) => {
     if (!child.pid) return;
-    if (!posix) {
-      const tree = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
-      tree.on("error", () => { try { child.kill(); } catch { /* exited */ } });
-      return;
-    }
+    if (!posix) { terminateTree(child, { jobbed: launch.jobbed, env }); return; }
     try { process.kill(-child.pid, signal); } catch { /* exited */ }
   };
   const stop = (reason: string) => {

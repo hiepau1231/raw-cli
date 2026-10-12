@@ -5,6 +5,7 @@ import type { ToolContent, ToolHandlerResult } from "../../types.js";
 import { errorResult } from "../../results.js";
 import type { ProcessRecord } from "../../../processes/contract.js";
 import { resolveToolPath } from "../../../platform/paths.js";
+import { mergeEnv } from "../../../platform/windows.js";
 
 interface Input { action: "start" | "list" | "status" | "output" | "stop"; command?: string; cwd?: string; label?: string; timeout?: number;
   env_refs?: Record<string, string>; id?: string; cursor?: number; max_bytes?: number }
@@ -86,7 +87,7 @@ export async function handler(raw: unknown, context: ToolContext): Promise<ToolH
       const record = await context.processes.start({ command: args.command!, cwd: resolveToolPath(context.cwd, args.cwd ?? "."),
         ...(args.label ? { label: args.label } : {}), ...(args.timeout !== undefined ? { timeout_ms: args.timeout } : {}),
         ...(context.signal ? { signal: context.signal } : {}), ...(context.bashPath ? { bashPath: context.bashPath } : {}),
-        ...(bindings ? { env: { ...process.env, ...bindings } } : {}) });
+        ...(bindings ? { env: mergeEnv(process.env, bindings) } : {}) });
       return text(`Started ${record.id} · ${args.label ?? args.command!.split("\n", 1)[0]}`, { summary: args.command!.split("\n", 1)[0]!.slice(0, 200), processId: record.id });
     }
     if (args.action === "list") {

@@ -75,7 +75,7 @@
     "test:phase": "node scripts/test-phase.mjs",
     "test:overhead": "node --import tsx scripts/overhead.mjs",
     "test:package": "npm run build && node --import tsx --test tests/package.test.ts tests/package-agent.test.ts tests/package-sharing-installed.test.ts tests/dashboard-installed.test.ts",
-    "build": "tsup && tsup --config tsup.tools.config.ts && node scripts/copy-tool-manifests.mjs && node scripts/build-tool-examples.mjs && node scripts/copy-bundled-skills.mjs && vite build",
+    "build": "tsup && tsup --config tsup.tools.config.ts && node scripts/copy-tool-manifests.mjs && node scripts/build-tool-examples.mjs && node scripts/copy-bundled-skills.mjs && node scripts/copy-platform-assets.mjs && vite build",
     "check": "npm run typecheck && npm test",
     "test:web": "playwright test"
   },

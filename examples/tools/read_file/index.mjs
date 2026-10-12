@@ -91,19 +91,34 @@ var HOST_DIFF_BYTES = 64 * 1024;
 var ENTRY_DIFF_BYTES = 8 * 1024;
 var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
 var within = (inside, api = pathFor()) => !!inside && inside !== ".." && !inside.startsWith(`..${api.sep}`) && !api.isAbsolute(inside);
-function displayPath(path3, cwd, platform = process.platform) {
+function displayPath(path4, cwd, platform = process.platform) {
   const api = pathFor(platform);
-  const inside = api.relative(cwd, path3);
-  return slashPath(within(inside, api) ? inside : path3, platform);
+  const inside = api.relative(cwd, path4);
+  return slashPath(within(inside, api) ? inside : path4, platform);
 }
 
 // src/tools/primitives.ts
 import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat } from "fs/promises";
-import { dirname as dirname3 } from "path";
+import { dirname as dirname4 } from "path";
 
 // src/tools/process.ts
 import { spawn } from "child_process";
 import { StringDecoder } from "string_decoder";
+
+// src/platform/windows.ts
+import { spawn as spawn2, spawnSync } from "child_process";
+import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
+import { existsSync as existsSync2, mkdirSync, readFileSync, renameSync, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "fs";
+import { homedir as homedir2 } from "os";
+import path3 from "path";
+
+// src/package-root.ts
+import { existsSync } from "fs";
+import { dirname as dirname3, join as join3 } from "path";
+import { fileURLToPath } from "url";
+
+// src/platform/windows.ts
+var win32 = path3.win32;
 
 // src/tools/primitives.ts
 var READ_DEFAULT_LIMIT = 2e3;
@@ -113,8 +128,8 @@ var errorCode = (error, fallback) => {
   return typeof code === "string" && /^[A-Za-z0-9_]+$/.test(code) ? code : fallback;
 };
 async function readFileTool(args, context) {
-  const path3 = resolveToolPath(context.cwd, args.path);
-  const shown = displayPath(path3, context.cwd);
+  const path4 = resolveToolPath(context.cwd, args.path);
+  const shown = displayPath(path4, context.cwd);
   const offset = args.offset ?? 1;
   const last = args.limit === void 0 ? offset + READ_DEFAULT_LIMIT - 1 : offset + args.limit - 1;
   const budget = context.maxOutputBytes - READ_FOOTER_RESERVE;
@@ -122,7 +137,7 @@ async function readFileTool(args, context) {
   const failed = (code, message) => ({ ...errorResult(code, message), host: { summary: shown, status: "error", path: shown } });
   let handle;
   try {
-    handle = await open2(path3, "r");
+    handle = await open2(path4, "r");
   } catch (error) {
     const code = errorCode(error, "file_error");
     return failed(code, code === "ENOENT" ? `${shown} does not exist` : `cannot read ${shown}: ${code}`);

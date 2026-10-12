@@ -16,6 +16,7 @@ import type { SelectedSkill } from "../skills/contract.js";
 import type { HookDispatchResult } from "../hooks/dispatcher.js";
 import type { HookEventName } from "../hooks/contract.js";
 import { resolveToolPath } from "../platform/paths.js";
+import { mergeEnv } from "../platform/windows.js";
 
 export interface ToolApprovalRequest {
   identity: string;
@@ -386,7 +387,7 @@ export async function bashTool(args: BashArgs, context: ToolContext): Promise<To
     result = await runBash({ command: args.command, cwd, maxOutputBytes: Math.max(0, context.maxOutputBytes - BASH_STATUS_RESERVE),
       timeoutMs: timeout,
       ...(activity ? { onOutput: activity.output } : {}),
-      ...(bindings ? { env: { ...process.env, ...bindings } } : {}),
+      ...(bindings ? { env: mergeEnv(process.env, bindings) } : {}),
       ...(context.signal ? { signal: context.signal } : {}),
       ...(context.bashPath ? { bashPath: context.bashPath } : {}),
     });

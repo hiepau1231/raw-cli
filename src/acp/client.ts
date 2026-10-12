@@ -7,6 +7,7 @@ import { client, ndJsonStream, PROTOCOL_VERSION, type ClientConnection, type Con
   type ListSessionsResponse } from "@agentclientprotocol/sdk";
 import { createWebSocketStream, type WebSocketConstructor } from "@agentclientprotocol/sdk/experimental/ws-client";
 import WebSocket from "ws";
+import { prepareSpawn, terminateTree } from "../platform/windows.js";
 
 export interface ParentToolCall {
   sessionId: string;
@@ -60,11 +61,24 @@ export async function createAcpClient(options: AcpClientOptions): Promise<AcpPar
     activeCalls.get(params.invocationId)?.abort();
   });
   let child: ChildProcessWithoutNullStreams | undefined;
+  // Windows has no signals: the whole tree stops at once, through its job or taskkill.
+  const stopChild = (target: ChildProcessWithoutNullStreams, signal: NodeJS.Signals) => {
+    if (process.platform === "win32") terminateTree(target, { jobbed });
+    else target.kill(signal);
+  };
   let spawnFailure: Promise<never> | undefined;
   let stream;
+  let jobbed = false;
   if ("command" in options) {
-    child = spawn(options.command, [...options.args], { cwd: options.cwd ?? process.cwd(), env: options.env ?? process.env,
-      stdio: ["pipe", "pipe", "pipe"] });
+    const cwd = options.cwd ?? process.cwd();
+    const env = options.env ?? process.env;
+    // On Windows a .cmd or script RAW_BINARY starts without a shell, inside a job that owns the agent's whole tree.
+    const prepared = prepareSpawn(options.command, options.args, { cwd, env });
+    // Reported like Node's own spawn failure, so callers see one error for a missing command on every platform.
+    if (!prepared.ok) throw Object.assign(new Error(`spawn ${options.command} ENOENT: ${prepared.message}`), { code: "ENOENT", syscall: "spawn" });
+    jobbed = prepared.jobbed;
+    child = spawn(prepared.file, prepared.args, { cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
+      ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) });
     spawnFailure = new Promise<never>((_resolve, reject) => child!.once("error", reject));
     child.stderr.on("data", () => {});
     stream = ndJsonStream(Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>,
@@ -82,7 +96,7 @@ export async function createAcpClient(options: AcpClientOptions): Promise<AcpPar
     initializeResult = await (spawnFailure ? Promise.race([initialize, spawnFailure]) : initialize);
   } catch (error) {
     connection.close();
-    child?.kill("SIGTERM");
+    if (child) stopChild(child, "SIGTERM");
     throw error;
   }
   const close = async () => {
@@ -98,9 +112,9 @@ export async function createAcpClient(options: AcpClientOptions): Promise<AcpPar
       child!.once("exit", onExit);
     });
     if (await waitForExit(5000)) return;
-    child.kill("SIGTERM");
+    stopChild(child, "SIGTERM");
     if (await waitForExit(1000)) return;
-    child.kill("SIGKILL");
+    stopChild(child, "SIGKILL");
     if (!(await waitForExit(1000))) throw new Error("raw ACP child did not exit after SIGKILL");
   };
   return {

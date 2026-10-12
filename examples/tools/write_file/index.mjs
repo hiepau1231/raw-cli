@@ -270,10 +270,10 @@ function counts(change) {
   return lineCounts(change.before?.toString("utf8") ?? "", change.after?.toString("utf8") ?? "");
 }
 var within = (inside, api = pathFor()) => !!inside && inside !== ".." && !inside.startsWith(`..${api.sep}`) && !api.isAbsolute(inside);
-function displayPath(path3, cwd, platform = process.platform) {
+function displayPath(path4, cwd, platform = process.platform) {
   const api = pathFor(platform);
-  const inside = api.relative(cwd, path3);
-  return slashPath(within(inside, api) ? inside : path3, platform);
+  const inside = api.relative(cwd, path4);
+  return slashPath(within(inside, api) ? inside : path4, platform);
 }
 function changeHostData(changes, cwd, withDiff) {
   const files = changes.map((change) => {
@@ -294,31 +294,31 @@ ${body}`;
   const diff = parts.join("\n");
   return Buffer.byteLength(diff) <= HOST_DIFF_BYTES ? { files, diff } : { files, diffOmitted: true };
 }
-function homeLabel(path3) {
+function homeLabel(path4) {
   const home = homedir();
   const api = pathFor();
-  const inside = home ? api.relative(home, path3) : "";
-  return api.isAbsolute(path3) && within(inside, api) ? `~/${inside.split(api.sep).join("/")}` : void 0;
+  const inside = home ? api.relative(home, path4) : "";
+  return api.isAbsolute(path4) && within(inside, api) ? `~/${inside.split(api.sep).join("/")}` : void 0;
 }
 function buildWriteChanges(previous, changes, cwd) {
   const files = previous?.blocks.find((b) => b.id === "files" && b.kind === "files");
   const retention = previous?.blocks.find((b) => b.id === "retention" && b.kind === "key_value");
   let omitted = Number(retention?.entries.find((e) => e.key === omittedKey)?.value ?? 0) || 0;
   const byPath = new Map((files?.entries ?? []).map((e) => [e.path, { ...e }]));
-  const put = (path3, status, label, change) => {
-    if ([...path3].length > 500 || /[\u0000-\u001F\u007F]/.test(path3)) {
+  const put = (path4, status, label, change) => {
+    if ([...path4].length > 500 || /[\u0000-\u001F\u007F]/.test(path4)) {
       omitted++;
       return;
     }
-    const old = byPath.get(path3);
-    byPath.delete(path3);
+    const old = byPath.get(path4);
+    byPath.delete(path4);
     const latest = change ? counts(change) : { added: 0, removed: 0 };
     const known = latest && (!old || old.added !== void 0);
     const reason = change && undiffable(change);
     const diff = change && !reason ? unifiedDiff(...sides(change), ENTRY_DIFF_BYTES) : void 0;
-    const shownLabel = label ?? homeLabel(path3);
-    byPath.set(path3, {
-      path: path3,
+    const shownLabel = label ?? homeLabel(path4);
+    byPath.set(path4, {
+      path: path4,
       status: status === "modified" && old?.status === "added" ? "added" : status,
       ...shownLabel ? { label: [...clean(shownLabel)].slice(0, 200).join("") } : {},
       ...known ? { added: (old?.added ?? 0) + latest.added, removed: (old?.removed ?? 0) + latest.removed } : {},
@@ -384,22 +384,37 @@ async function publishWriteChanges(context, changes) {
 
 // src/tools/primitives.ts
 import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat } from "fs/promises";
-import { dirname as dirname3 } from "path";
+import { dirname as dirname4 } from "path";
 
 // src/tools/process.ts
 import { spawn } from "child_process";
 import { StringDecoder } from "string_decoder";
+
+// src/platform/windows.ts
+import { spawn as spawn2, spawnSync } from "child_process";
+import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
+import { existsSync as existsSync2, mkdirSync, readFileSync, renameSync, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "fs";
+import { homedir as homedir2 } from "os";
+import path3 from "path";
+
+// src/package-root.ts
+import { existsSync } from "fs";
+import { dirname as dirname3, join as join3 } from "path";
+import { fileURLToPath } from "url";
+
+// src/platform/windows.ts
+var win32 = path3.win32;
 
 // src/tools/primitives.ts
 var errorCode = (error, fallback) => {
   const code = error?.code;
   return typeof code === "string" && /^[A-Za-z0-9_]+$/.test(code) ? code : fallback;
 };
-async function writeSnapshot(path3) {
+async function writeSnapshot(path4) {
   let file;
   try {
-    if (!(await stat(path3)).isFile()) return { missing: false };
-    file = await open2(path3, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    if (!(await stat(path4)).isFile()) return { missing: false };
+    file = await open2(path4, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
     const info = await file.stat();
     if (!info.isFile()) return { missing: false };
     const bytes = Buffer.alloc(Math.min(info.size, MAX_DIFF_SOURCE_BYTES) + 1);
@@ -419,15 +434,15 @@ async function writeSnapshot(path3) {
 }
 var changeResult = (text, shown, changes, cwd, withDiff) => ({ isError: false, content: [{ type: "text", text }], host: { summary: shown, status: "ok", ...changeHostData(changes, cwd, withDiff) } });
 async function writeFileTool(args, context) {
-  const path3 = resolveToolPath(context.cwd, args.path);
-  const shown = displayPath(path3, context.cwd);
+  const path4 = resolveToolPath(context.cwd, args.path);
+  const shown = displayPath(path4, context.cwd);
   try {
-    const before = await writeSnapshot(path3);
-    await mkdir2(dirname3(path3), { recursive: true });
+    const before = await writeSnapshot(path4);
+    await mkdir2(dirname4(path4), { recursive: true });
     const after = Buffer.from(args.content, "utf8");
-    await writeFile(path3, after);
+    await writeFile(path4, after);
     const change = {
-      path: path3,
+      path: path4,
       kind: before.missing ? "added" : "modified",
       overwritten: !before.missing,
       ...before.bytes ? { before: before.bytes } : !before.missing ? { beforeUnavailable: true } : {},

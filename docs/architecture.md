@@ -16,6 +16,10 @@ One ordinary inference request counts as one step. The default maximum is 25. Wh
 
 The shared session-operation service owns durable submit receipts, startup leases, per-turn runtime attachment and cleanup. Transports observe it without owning execution. User-input consumption commits with the first model/history write; retries return the receipt instead of running again. Successful compact summaries commit with replacement context while visible history remains available. See [Sessions](sessions.md) for identities, interrupted outcomes and read-only projections.
 
+## Windows process trees
+
+Windows has no process groups that Raw can signal, and Git Bash re-parents its children, so `taskkill /T` misses grandchildren whose parent has exited. Raw therefore starts hooks, variable providers, MCP stdio servers and the ACP child through a small job launcher: `src/platform/job-launcher.cs`, compiled on first use with the .NET Framework C# compiler that ships with Windows and cached as `<state dir>/bin/raw-job-<hash>.exe`. The launcher puts itself in a Job Object with kill-on-close and runs the command, which Raw has already quoted, from base64 arguments; stopping the launcher, or the command exiting, ends every process left in the job. When the compiler is missing or the build fails, Raw logs once and stops trees with the system `taskkill.exe /T` instead (`src/platform/windows.ts`).
+
 ## Agent session loop
 
 ```mermaid

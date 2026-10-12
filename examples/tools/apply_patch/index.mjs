@@ -135,16 +135,16 @@ function parsePatch(source, cwd, checkResolvedTargets, platform = process.platfo
   let targetCount = 0;
   const target = (raw) => {
     if (!raw || raw.trim() !== raw || /[\r\n\0]/.test(raw)) fail("patch_invalid_path");
-    const path3 = resolveToolPath(cwd, raw, platform);
+    const path4 = resolveToolPath(cwd, raw, platform);
     if (++targetCount > 64) fail("patch_too_many_paths");
-    if (!checkResolvedTargets) return path3;
-    const key = platform === "win32" ? path3.toLowerCase() : path3;
+    if (!checkResolvedTargets) return path4;
+    const key = platform === "win32" ? path4.toLowerCase() : path4;
     const separator = pathFor(platform).sep;
     if (targets.has(key)) fail("patch_repeated_target");
     for (const other of targets) if (key.startsWith(other + separator) || other.startsWith(key + separator)) fail("patch_conflicting_targets");
     targets.add(key);
     if (targets.size > 64) fail("patch_too_many_paths");
-    return path3;
+    return path4;
   };
   let cursor = 0;
   while (cursor < lines2.length) {
@@ -189,10 +189,10 @@ function parsePatch(source, cwd, checkResolvedTargets, platform = process.platfo
 function describePatchEffects(parsed) {
   return { files: parsed.changes.flatMap((change) => change.destination ? [{ path: change.path, operation: "rename_source" }, { path: change.destination, operation: "rename_destination" }] : [{ path: change.path, operation: change.kind === "delete" ? "delete" : "write" }]) };
 }
-async function safeParents(path3) {
-  const root = parse(path3).root;
+async function safeParents(path4) {
+  const root = parse(path4).root;
   let current = root;
-  const parts = relative(root, dirname2(path3)).split(sep).filter(Boolean);
+  const parts = relative(root, dirname2(path4)).split(sep).filter(Boolean);
   for (const component of ["", ...parts]) {
     if (component) current = join2(current, component);
     try {
@@ -205,22 +205,22 @@ async function safeParents(path3) {
     }
   }
 }
-async function absent(path3) {
-  await safeParents(path3);
+async function absent(path4) {
+  await safeParents(path4);
   try {
-    await lstat(path3);
+    await lstat(path4);
   } catch (error) {
     if (error.code === "ENOENT") return;
     throw error;
   }
   fail("patch_destination_exists");
 }
-async function snapshot(path3) {
-  await safeParents(path3);
-  const before = await lstat(path3);
+async function snapshot(path4) {
+  await safeParents(path4);
+  const before = await lstat(path4);
   if (before.isSymbolicLink()) fail("patch_symlink_path");
   if (!before.isFile()) fail("patch_not_regular_file");
-  const handle = await open(path3, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  const handle = await open(path4, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const info = await handle.stat();
     if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) fail("patch_source_changed");
@@ -660,10 +660,10 @@ function counts(change) {
   return lineCounts(change.before?.toString("utf8") ?? "", change.after?.toString("utf8") ?? "");
 }
 var within = (inside, api = pathFor()) => !!inside && inside !== ".." && !inside.startsWith(`..${api.sep}`) && !api.isAbsolute(inside);
-function displayPath(path3, cwd, platform = process.platform) {
+function displayPath(path4, cwd, platform = process.platform) {
   const api = pathFor(platform);
-  const inside = api.relative(cwd, path3);
-  return slashPath(within(inside, api) ? inside : path3, platform);
+  const inside = api.relative(cwd, path4);
+  return slashPath(within(inside, api) ? inside : path4, platform);
 }
 function changeHostData(changes, cwd, withDiff) {
   const files = changes.map((change) => {
@@ -684,31 +684,31 @@ ${body}`;
   const diff = parts.join("\n");
   return Buffer.byteLength(diff) <= HOST_DIFF_BYTES ? { files, diff } : { files, diffOmitted: true };
 }
-function homeLabel(path3) {
+function homeLabel(path4) {
   const home = homedir();
   const api = pathFor();
-  const inside = home ? api.relative(home, path3) : "";
-  return api.isAbsolute(path3) && within(inside, api) ? `~/${inside.split(api.sep).join("/")}` : void 0;
+  const inside = home ? api.relative(home, path4) : "";
+  return api.isAbsolute(path4) && within(inside, api) ? `~/${inside.split(api.sep).join("/")}` : void 0;
 }
 function buildWriteChanges(previous, changes, cwd) {
   const files = previous?.blocks.find((b) => b.id === "files" && b.kind === "files");
   const retention = previous?.blocks.find((b) => b.id === "retention" && b.kind === "key_value");
   let omitted = Number(retention?.entries.find((e) => e.key === omittedKey)?.value ?? 0) || 0;
   const byPath = new Map((files?.entries ?? []).map((e) => [e.path, { ...e }]));
-  const put = (path3, status, label, change) => {
-    if ([...path3].length > 500 || /[\u0000-\u001F\u007F]/.test(path3)) {
+  const put = (path4, status, label, change) => {
+    if ([...path4].length > 500 || /[\u0000-\u001F\u007F]/.test(path4)) {
       omitted++;
       return;
     }
-    const old = byPath.get(path3);
-    byPath.delete(path3);
+    const old = byPath.get(path4);
+    byPath.delete(path4);
     const latest = change ? counts(change) : { added: 0, removed: 0 };
     const known = latest && (!old || old.added !== void 0);
     const reason = change && undiffable(change);
     const diff = change && !reason ? unifiedDiff(...sides(change), ENTRY_DIFF_BYTES) : void 0;
-    const shownLabel = label ?? homeLabel(path3);
-    byPath.set(path3, {
-      path: path3,
+    const shownLabel = label ?? homeLabel(path4);
+    byPath.set(path4, {
+      path: path4,
       status: status === "modified" && old?.status === "added" ? "added" : status,
       ...shownLabel ? { label: [...clean(shownLabel)].slice(0, 200).join("") } : {},
       ...known ? { added: (old?.added ?? 0) + latest.added, removed: (old?.removed ?? 0) + latest.removed } : {},
@@ -774,11 +774,26 @@ async function publishWriteChanges(context, changes) {
 
 // src/tools/primitives.ts
 import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat } from "fs/promises";
-import { dirname as dirname3 } from "path";
+import { dirname as dirname4 } from "path";
 
 // src/tools/process.ts
 import { spawn } from "child_process";
 import { StringDecoder } from "string_decoder";
+
+// src/platform/windows.ts
+import { spawn as spawn2, spawnSync } from "child_process";
+import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
+import { existsSync as existsSync2, mkdirSync, readFileSync, renameSync, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "fs";
+import { homedir as homedir2 } from "os";
+import path3 from "path";
+
+// src/package-root.ts
+import { existsSync } from "fs";
+import { dirname as dirname3, join as join3 } from "path";
+import { fileURLToPath } from "url";
+
+// src/platform/windows.ts
+var win32 = path3.win32;
 
 // src/tools/primitives.ts
 var LETTERS = { added: "A", modified: "M", deleted: "D", renamed: "R" };

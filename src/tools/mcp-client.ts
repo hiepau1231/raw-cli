@@ -1,10 +1,12 @@
+import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { DEFAULT_REQUEST_TIMEOUT_MS } from "../llm/types.js";
 import AjvDraft7 from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { DEFAULT_INHERITED_ENV_VARS, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { mergeEnv, prepareSpawn, systemBinary, terminateTree } from "../platform/windows.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -20,7 +22,9 @@ const MAX_MCP_BYTES = 16 * 1024 * 1024;
 
 // SDK initialization failure also invokes close(), without awaiting it. Keep all
 // callers on one cleanup promise and wait for the stdio child's close event.
-function ownTransportClose(transport: Transport, stdio: StdioClientTransport | undefined): void {
+// `treeStop`: a Windows server started without the job launcher. The SDK would only kill its direct child (cmd.exe for
+// an npx server), so after the same stdin-close grace a server still running is stopped with its whole tree first.
+function ownTransportClose(transport: Transport, stdio: StdioClientTransport | undefined, treeStop = false): void {
   const original = transport.close.bind(transport);
   let closing: Promise<void> | undefined;
   let exited!: () => void;
@@ -29,10 +33,55 @@ function ownTransportClose(transport: Transport, stdio: StdioClientTransport | u
   transport.onclose = () => { exited(); priorClose?.(); };
   transport.close = () => closing ??= (async () => {
     const pid = stdio?.pid;
+    // The SDK keeps no public handle on its child; this one is read only while the child is open.
+    const child = treeStop ? (stdio as unknown as { _process?: ChildProcess })._process : undefined;
+    if (child) {
+      try { child.stdin?.end(); } catch { /* already closed */ }
+      await deadline(exit, 2000).catch(() => {});
+      terminateTree(child, { jobbed: false });
+    }
     await original();
     if (pid) await deadline(exit, 5000);
   })();
 }
+/**
+ * The SDK's cross-spawn runs a batch file through `process.env.ComSpec`, or a bare `cmd.exe` that Windows may find in the
+ * server's cwd. Starting the transport spawns synchronously, so for that one call ComSpec names the system cmd.exe.
+ */
+function pinSystemShell(transport: StdioClientTransport): void {
+  const start = transport.start.bind(transport);
+  transport.start = () => {
+    const saved = process.env.ComSpec;
+    process.env.ComSpec = systemBinary("cmd.exe");
+    try { return start(); } finally {
+      if (saved === undefined) delete process.env.ComSpec; else process.env.ComSpec = saved;
+    }
+  };
+}
+
+/**
+ * How the SDK starts a stdio server. On Windows the command is resolved by Raw (PATH and PATHEXT, never the cwd) and the
+ * server runs inside Raw's job launcher, so the SDK's kill of the launcher stops the whole tree (an npx server's node.exe
+ * included). Without the launcher the SDK starts the resolved program, or for a batch file the resolved file, which it
+ * runs through cmd.exe itself (see pinSystemShell); `jobbed` false tells the caller to stop that tree. The SDK adds its default variables
+ * under upper-case names, so each is given one spelling here. Throws when the command cannot be started.
+ */
+export function stdioLaunch(command: string, args: readonly string[], cwd: string, overrides: Readonly<Record<string, string>> = {},
+  platform: NodeJS.Platform = process.platform): { command: string; args: string[]; env: Record<string, string>; jobbed: boolean } {
+  const env = Object.fromEntries(Object.entries(mergeEnv(process.env, overrides, platform))
+    .filter((entry): entry is [string, string] => entry[1] !== undefined));
+  if (platform !== "win32") return { command, args: [...args], env, jobbed: false };
+  for (const name of DEFAULT_INHERITED_ENV_VARS) {
+    const spelling = Object.keys(env).find((key) => key !== name && key.toUpperCase() === name.toUpperCase());
+    if (spelling !== undefined) { env[name] = env[spelling]!; delete env[spelling]; }
+  }
+  const prepared = prepareSpawn(command, args, { cwd, env, platform });
+  if (!prepared.ok) throw new Error(prepared.message);
+  if (prepared.jobbed) return { command: prepared.file, args: prepared.args, env, jobbed: true };
+  return prepared.batch ? { command: prepared.batch, args: [...args], env, jobbed: false }
+    : { command: prepared.file, args: prepared.args, env, jobbed: false };
+}
+
 type Selection = "*" | readonly string[];
 
 /** A panel declaration for one tool of an MCP server; `tool` is the server's original tool name. */
@@ -315,12 +364,21 @@ export async function connectMcpServers(options: ConnectMcpOptions = {}): Promis
   try {
     for (const [name, spec] of specs) {
       if (options.signal?.aborted) throw new Error("MCP startup aborted");
+      let launch: ReturnType<typeof stdioLaunch> | undefined;
+      if ("command" in spec) {
+        try { launch = stdioLaunch(spec.command, spec.args ?? [], options.cwd ?? process.cwd(), spec.env); }
+        catch (error) {
+          const message = `MCP server ${name} cannot start: ${(error as Error).message}`;
+          if (!options.onSkip) throw new Error(message);
+          options.onSkip(`${message}; skipped its tools`);
+          continue;
+        }
+      }
       const client = new Client({ name: "raw-cli", version: VERSION }, { capabilities: {} });
       owners.push(client);
       const timeoutMs = spec.timeoutMs ?? defaultTimeoutMs;
       const transport = "command" in spec
-        ? new StdioClientTransport({ command: spec.command, args: [...(spec.args ?? [])],
-          env: { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), ...spec.env },
+        ? new StdioClientTransport({ command: launch!.command, args: launch!.args, env: launch!.env,
           cwd: options.cwd ?? process.cwd(), stderr: "pipe", maxBufferSize: MAX_MCP_BYTES })
         : spec.transport === "streamable-http"
           ? new StreamableHTTPClientTransport(new URL(spec.url), { ...(spec.headers ? { requestInit: { headers: { ...spec.headers } } } : {}),
@@ -333,7 +391,9 @@ export async function connectMcpServers(options: ConnectMcpOptions = {}): Promis
               return boundedFetch(url, { ...init, headers } as RequestInit);
             } } } : { eventSourceInit: { fetch: (url, init) => boundedFetch(url, init as RequestInit) } }),
             fetch: boundedFetch });
-      ownTransportClose(transport as unknown as Transport, transport instanceof StdioClientTransport ? transport : undefined);
+      const unjobbed = process.platform === "win32" && launch?.jobbed === false;
+      if (unjobbed && transport instanceof StdioClientTransport) pinSystemShell(transport);
+      ownTransportClose(transport as unknown as Transport, transport instanceof StdioClientTransport ? transport : undefined, unjobbed);
       if (transport instanceof StdioClientTransport) transport.stderr?.on("data", () => {});
       let ready = false;
       if (transport instanceof SSEClientTransport || transport instanceof StreamableHTTPClientTransport) {

@@ -34,6 +34,31 @@ function resolveToolPath(cwd, input, platform = process.platform) {
   return api.resolve(cwd, drive ? `${drive[1].toUpperCase()}:\\${drive[2] ?? ""}` : input);
 }
 
+// src/platform/windows.ts
+import { spawn, spawnSync } from "child_process";
+import { createHash, randomUUID as randomUUID2 } from "crypto";
+import { existsSync as existsSync2, mkdirSync, readFileSync, renameSync, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "fs";
+import { homedir } from "os";
+import path2 from "path";
+
+// src/package-root.ts
+import { existsSync } from "fs";
+import { dirname as dirname2, join as join2 } from "path";
+import { fileURLToPath } from "url";
+
+// src/platform/windows.ts
+var win32 = path2.win32;
+function mergeEnv(base, overrides = {}, platform = process.platform) {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (platform === "win32") for (const existing of Object.keys(merged)) {
+      if (existing !== key && existing.toUpperCase() === key.toUpperCase()) delete merged[existing];
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
+
 // src/tools/bundled/process/index.ts
 var ACTIONS = ["start", "list", "status", "output", "stop"];
 var FIELDS = {
@@ -118,7 +143,7 @@ async function handler(raw, context) {
         ...args.timeout !== void 0 ? { timeout_ms: args.timeout } : {},
         ...context.signal ? { signal: context.signal } : {},
         ...context.bashPath ? { bashPath: context.bashPath } : {},
-        ...bindings ? { env: { ...process.env, ...bindings } } : {}
+        ...bindings ? { env: mergeEnv(process.env, bindings) } : {}
       });
       return text(`Started ${record2.id} \xB7 ${args.label ?? args.command.split("\n", 1)[0]}`, { summary: args.command.split("\n", 1)[0].slice(0, 200), processId: record2.id });
     }

@@ -45,10 +45,10 @@ function sweep(root) {
     const cutoff = Date.now() - SPILL_RETENTION_MS;
     for (const name of readdirSync(root)) {
       if (!name.startsWith(PREFIX)) continue;
-      const path3 = join(root, name);
-      if (path3 === directory) continue;
+      const path4 = join(root, name);
+      if (path4 === directory) continue;
       try {
-        if (statSync(path3).mtimeMs < cutoff) rmSync(path3, { recursive: true, force: true });
+        if (statSync(path4).mtimeMs < cutoff) rmSync(path4, { recursive: true, force: true });
       } catch {
       }
     }
@@ -91,10 +91,10 @@ var OutputSpill = class {
     const buffer = typeof data === "string" ? Buffer.from(data) : data;
     try {
       if (this.fd === void 0) {
-        const path3 = join(spillDirectory(), `${this.label}-${randomUUID().slice(0, 8)}.log`);
-        this.fd = openSync(path3, "wx", 384);
-        this.path = path3;
-        this.entry = { path: path3, bytes: 0 };
+        const path4 = join(spillDirectory(), `${this.label}-${randomUUID().slice(0, 8)}.log`);
+        this.fd = openSync(path4, "wx", 384);
+        this.path = path4;
+        this.entry = { path: path4, bytes: 0 };
         saved.push(this.entry);
       }
       const room = SPILL_MAX_BYTES - this.bytes;
@@ -118,8 +118,8 @@ var OutputSpill = class {
     this.fd = void 0;
   }
 };
-function savedLabel(path3, capped = false) {
-  return path3 && capped ? `${path3} (first ${SPILL_MAX_BYTES} bytes only)` : path3;
+function savedLabel(path4, capped = false) {
+  return path4 && capped ? `${path4} (first ${SPILL_MAX_BYTES} bytes only)` : path4;
 }
 
 // src/tools/results.ts
@@ -191,7 +191,7 @@ var MAX_DIFF_SOURCE_BYTES = 8 * 1024 * 1024;
 
 // src/tools/primitives.ts
 import { open as open2, mkdir as mkdir2, writeFile, readFile as readFile2, stat } from "fs/promises";
-import { dirname as dirname3 } from "path";
+import { dirname as dirname4 } from "path";
 
 // src/tools/process.ts
 import { spawn } from "child_process";
@@ -280,7 +280,8 @@ function spawnShell(options, platform = process.platform) {
     cwd: options.cwd,
     ...options.env ? { env: options.env } : {},
     stdio: ["ignore", "pipe", "pipe"],
-    detached: platform !== "win32"
+    detached: platform !== "win32",
+    windowsHide: true
   });
 }
 function signalShellGroup(child, signal, platform = process.platform) {
@@ -406,6 +407,31 @@ async function runBash(options) {
   };
 }
 
+// src/platform/windows.ts
+import { spawn as spawn2, spawnSync } from "child_process";
+import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
+import { existsSync as existsSync2, mkdirSync, readFileSync, renameSync, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "fs";
+import { homedir as homedir2 } from "os";
+import path3 from "path";
+
+// src/package-root.ts
+import { existsSync } from "fs";
+import { dirname as dirname3, join as join3 } from "path";
+import { fileURLToPath } from "url";
+
+// src/platform/windows.ts
+var win32 = path3.win32;
+function mergeEnv(base, overrides = {}, platform = process.platform) {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (platform === "win32") for (const existing of Object.keys(merged)) {
+      if (existing !== key && existing.toUpperCase() === key.toUpperCase()) delete merged[existing];
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
+
 // src/tools/primitives.ts
 var BASH_DEFAULT_TIMEOUT_MS = 12e4;
 var BASH_MAX_TIMEOUT_MS = 6e5;
@@ -445,7 +471,7 @@ async function bashTool(args, context) {
       maxOutputBytes: Math.max(0, context.maxOutputBytes - BASH_STATUS_RESERVE),
       timeoutMs: timeout,
       ...activity ? { onOutput: activity.output } : {},
-      ...bindings ? { env: { ...process.env, ...bindings } } : {},
+      ...bindings ? { env: mergeEnv(process.env, bindings) } : {},
       ...context.signal ? { signal: context.signal } : {},
       ...context.bashPath ? { bashPath: context.bashPath } : {}
     });
