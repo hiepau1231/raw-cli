@@ -205,8 +205,9 @@ test("HTTP Stop during actual MCP initialization terminates its child before con
   try {
     const session = await f.json<SessionSummary>("/sessions", "POST", { cwd: f.root });
     const op = await f.json<SessionOperation>(`/sessions/${session.id}/operations`, "POST", { clientRequestId: "mcp-stop", kind: "turn", agent: "raw", input: "pending input" });
-    for (let i = 0; i < 400 && !existsSync(marker); i++) await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.ok(existsSync(marker)); const pid = Number(readFileSync(marker, "utf8"));
+    // Up to 10 s for the server to start on a loaded machine; the file can exist before its pid is written.
+    await until(() => existsSync(marker) && readFileSync(marker, "utf8").trim().length > 0, "the MCP server to start");
+    const pid = Number(readFileSync(marker, "utf8"));
     await f.json(`/operations/${op.id}/cancel`, "POST"); const end = await f.wait(op.id);
     assert.equal(end.state, "cancelled"); assert.equal(end.committedUserPosition, undefined);
     assert.throws(() => process.kill(pid, 0)); assert.equal(f.provider.requests.length, 0);
@@ -385,9 +386,10 @@ const operationFor = async (f: Awaited<ReturnType<typeof dashboardFixture>>, ses
 };
 
 test("an interrupt during a Bash sleep ends its process at once and starts the message as the next turn", async () => {
+  // In Git Bash `$$` is an MSYS process id; /proc/$$/winpid holds the Windows one that process.kill checks.
   const f = await dashboardFixture({ agent: { tools: { use: ["builtin/bash"] } }, responses: [
     { frames: [openAiFrame({ tool_calls: [{ index: 0, id: "sleep", type: "function", function: { name: "bash",
-      arguments: JSON.stringify({ command: "echo $$ > sleep.pid; sleep 5" }) } }] }, "tool_calls"), openAiDone] },
+      arguments: JSON.stringify({ command: "(cat /proc/$$/winpid 2>/dev/null || echo $$) > sleep.pid; sleep 5" }) } }] }, "tool_calls"), openAiDone] },
     { frames: [openAiFrame({ content: "changed course" }, "stop"), openAiDone] },
   ] });
   try {
