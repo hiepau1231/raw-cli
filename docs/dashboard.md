@@ -74,6 +74,7 @@ The dashboard bundles its type, so it looks the same on every system and loads n
 ## Layout examples
 
 These screenshots use a disposable workspace and a mock provider. Reproduce them after building with `node --import tsx tests/dashboard-ui/capture.ts`.
+The README screenshot, `dashboard/overview-dark.png`, comes from `node --import tsx tests/dashboard-ui/capture-readme.ts`.
 
 ![Dark chat workspace](dashboard/chat-dark-desktop.png)
 

@@ -4,6 +4,8 @@
 
 `raw` is the agent harness you can fork. The parts every agent needs already work: the tool loop, context compaction, saved sessions, approvals, a terminal REPL, a local browser dashboard and the Agent Client Protocol for editors. Everything an agent does is a file you can change, so you build an internal agent, a coding agent or an ops agent by editing parts instead of starting from an empty loop.
 
+![The Raw dashboard: a turn's tool calls, a file write waiting for approval, and the agent's todo list in the side panel](https://raw.githubusercontent.com/lploc94/raw-cli/main/docs/dashboard/overview-dark.png)
+
 - **Fork a tool.** Built-in tools are plain plugins. Copy one with Fork to local, or write your own as one `index.mjs`.
 - **Teach a procedure.** Skills are Markdown files the agent lists and loads when it needs them.
 - **Set the rules.** Ordered policy rules allow, ask or deny a tool or a pattern, and hooks run your scripts on session, prompt and tool events.
