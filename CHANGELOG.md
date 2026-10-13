@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-10-13
+
 - Raw runs natively on Windows 10/11 without WSL. The `bash` tool finds Git
   for Windows' Bash (`RAW_BASH_PATH` still wins) and never picks WSL's
   launcher; commands, hooks, variable providers and MCP servers start with
@@ -91,7 +93,8 @@ First public release.
 - Portable `.rawpkg` packages for sharing agents, tools and skills.
 - Runtime variables from config, environment, files or executable providers.
 
-[Unreleased]: https://github.com/lploc94/raw-cli/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/lploc94/raw-cli/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/lploc94/raw-cli/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/lploc94/raw-cli/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/lploc94/raw-cli/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/lploc94/raw-cli/compare/v0.1.1...v0.1.2
