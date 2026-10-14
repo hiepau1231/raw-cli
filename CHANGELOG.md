@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- The dashboard has a **Files** tab beside Chat, Agents and Library: a read-only
+  tree of the selected workspace (the same git-aware view the agent's `@`
+  references use) with a filter, and a viewer for code, Markdown (Source and
+  Preview) and raster images. It never writes, a path that leaves the workspace
+  stays unreachable, and the open file lives in the address so a reload keeps
+  the place.
+
 ## [0.1.5] - 2026-10-13
 
 - Raw runs natively on Windows 10/11 without WSL. The `bash` tool finds Git

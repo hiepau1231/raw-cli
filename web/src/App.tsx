@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   Command,
+  FolderTree,
   Library,
   Menu,
   MessageSquare,
@@ -54,6 +55,7 @@ import { PackagesPage } from "./pages/Packages.js";
 import { ComponentsPage } from "./pages/Components.js";
 import { DefinitionsPage } from "./pages/Definitions.js";
 import { SettingsPage, SettingsSearch } from "./pages/Settings.js";
+import { FilesNav, FilesPage } from "./pages/Files.js";
 import { FolderBrowser } from "./workspace/FolderBrowser.js";
 import { WorkspaceSwitcher } from "./workspace/WorkspaceSwitcher.js";
 import { loadState, recordOpened, relativeTime, saveState, type WorkspaceState } from "./workspace/workspace-state.js";
@@ -480,6 +482,8 @@ export function App() {
         </nav>
       ) : page === "library" ? (
         <LibraryNav current={librarySection} />
+      ) : page === "files" ? (
+        <FilesNav workspace={workspace} />
       ) : (
         <AgentsNav bootstrap={bootstrap} current={currentAgent} />
       )}
@@ -504,6 +508,7 @@ export function App() {
               { id: "chat", label: "Chat", Icon: MessageSquare },
               { id: "agents", label: "Agents", Icon: Bot },
               { id: "library", label: "Library", Icon: Library },
+              { id: "files", label: "Files", Icon: FolderTree },
             ] as const
           ).map(({ id, label, Icon }) => (
             <Link
@@ -683,6 +688,8 @@ export function App() {
                       : `Choose an agent and work on a task in ${workspace}.`}
                 </Empty>
               )
+            ) : page === "files" ? (
+              <FilesPage key={path} workspace={workspace} />
             ) : page === "settings" &&
               (path.endsWith("/appearance") || path.endsWith("/chat")) ? (
               <PreferencesPage
@@ -763,6 +770,7 @@ export function App() {
               { label: "Chat", path: "/chat" },
               { label: "Agents", path: "/agents" },
               { label: "Library", path: "/library" },
+              { label: "Files", path: "/files" },
               { label: "Settings", path: "/settings/general" },
               { label: "Appearance", path: "/settings/appearance" },
               { label: "Chat preferences", path: "/settings/chat" },

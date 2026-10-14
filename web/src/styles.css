@@ -2900,6 +2900,25 @@ code.tool-summary {
     inset: 0;
   }
 }
+@media (max-width: 420px) {
+  /* D8 (docs/files-tab-spec.md): a fifth rail item does not fit a 320 px row, so the labels become visually
+     hidden - the same technique as `.sr-only` - while every link keeps its accessible name and a 36 px target. */
+  .rail a {
+    min-width: 36px;
+    justify-content: center;
+  }
+  .rail a span {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+}
 @media (max-width: 380px) {
   .rail {
     gap: 2px;
@@ -2919,6 +2938,22 @@ code.tool-summary {
     padding-inline: 4px;
   }
 }
+/* The Files tab (docs/files-tab-spec.md D6): the read-only page for the selected workspace. */
+.files-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+}
+.files-page-hint,
+.files-nav-path {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
 
 /* Resource editors keep actions visible while long source content scrolls. */
 .editor-actions {
