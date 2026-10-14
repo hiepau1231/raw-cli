@@ -12,11 +12,27 @@ import { chatScenario, installChatWorkspace, seedChat } from "./chat-stress.js";
 test.use({ scenario: chatScenario });
 
 const REPORT = "reports/links.md";
+const PREFERENCES = "raw.dashboard.preferences.v1";
 const tabOf = (page: Page) => page.getByRole("tab", { name: "Approvals", exact: true });
 const panelOf = (page: Page) => page.locator('[data-tab-panel="__approvals"]');
 const reviewOf = (page: Page) => panelOf(page).locator(".review-card");
 const axe = async (page: Page) =>
   expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
+/** Layout faults inside the tab: the panel and its rows must not overflow, and a cut value keeps its full text. */
+function panelFaults(page: Page) {
+  return page.getByRole("tabpanel").evaluate((root) => {
+    const faults: string[] = [];
+    if (root.scrollWidth > root.clientWidth) faults.push(`tab content overflows by ${root.scrollWidth - root.clientWidth}px`);
+    for (const card of root.querySelectorAll<HTMLElement>(".review-card"))
+      if (card.scrollWidth > card.clientWidth) faults.push("a review card overflows");
+    for (const row of root.querySelectorAll<HTMLElement>(".review-file-row")) {
+      if (row.scrollWidth > row.clientWidth) faults.push(`a file row overflows: "${row.textContent}"`);
+      for (const text of row.querySelectorAll<HTMLElement>(".review-file-name, .review-file-folder"))
+        if (text.scrollWidth > text.clientWidth + 1 && !text.closest("[title]")) faults.push(`a cut value has no full text: "${text.textContent}"`);
+    }
+    return faults;
+  });
+}
 /** Opens the side panel on the Approvals tab the way the in-chat card offers it. */
 async function openReview(page: Page) {
   await page.locator("section.approval").getByRole("button", { name: "Review", exact: true }).click();
@@ -94,3 +110,36 @@ test("a waiting approval survives a reload and is reviewed without the mouse", a
   await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
   await axe(page);
 });
+
+// The panel's own widths (docs/side-panel-design.md §10): the same geometry and target-size gates the other tabs get.
+for (const width of [320, 360]) {
+  test(`at ${width} px the review fits the panel, keeps its values and answers with full-size controls`, async ({ page, raw }) => {
+    installChatWorkspace(raw);
+    await page.addInitScript(([key, value]) => {
+      if (!localStorage.getItem(key!)) localStorage.setItem(key!, JSON.stringify({ version: 1, inspectorWidth: Number(value) }));
+    }, [PREFERENCES, String(width)]);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await seedChat(page, raw, "approval");
+    await openReview(page);
+    expect(Math.round((await page.locator(".inspector").boundingBox())!.width)).toBe(width);
+    const card = reviewOf(page);
+    // A long path stays one ellipsised row whose full value is its title.
+    const file = card.getByRole("button", { name: /links\.md/ });
+    await expect(file).toHaveAttribute("title", /reports[\\/]links\.md$/);
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      expect(await panelFaults(page)).toEqual([]);
+      await axe(page);
+    }
+    // The lines the call would write scroll inside their block, and the panel still does not overflow.
+    await file.click();
+    await expect(card.locator(".diff-view")).toContainText("+++ b/reports/links.md");
+    expect(await panelFaults(page)).toEqual([]);
+    // Every control keeps the dashboard's 32 px target.
+    const small = await panelOf(page).locator("button:visible").evaluateAll((buttons) => buttons
+      .map((button) => ({ label: button.getAttribute("aria-label") ?? button.textContent ?? "", box: button.getBoundingClientRect() }))
+      .filter((item) => item.box.width < 32 || item.box.height < 32)
+      .map((item) => item.label));
+    expect(small).toEqual([]);
+  });
+}
