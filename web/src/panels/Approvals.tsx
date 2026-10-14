@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronRight, ShieldAlert } from "lucide-react";
 import type { Approval } from "../../../src/dashboard/approvals.js";
 import { errorText } from "../api.js";
@@ -49,7 +49,8 @@ function ReviewCard({ approval, cwd }: { approval: Approval; cwd: string | undef
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [showArguments, setShowArguments] = useState(false);
-  const entries = approvalPreviews(approval, cwd);
+  // A patch can be large: the preview is rebuilt when the request changes, not on every frame of the turn.
+  const { entries, omitted } = useMemo(() => approvalPreviews(approval, cwd), [approval, cwd]);
   const deadline = new Date(approval.deadline);
   const answer = async (allow: boolean) => {
     setBusy(true);
@@ -78,6 +79,7 @@ function ReviewCard({ approval, cwd }: { approval: Approval; cwd: string | undef
         {approval.summary && <code className="review-summary">{approval.summary}</code>}
       </p>
       {entries.length > 0 && <ul className="review-files">{entries.map((entry) => <IntendedFile key={entry.key} entry={entry} />)}</ul>}
+      {omitted > 0 && <p className="review-note">… and {omitted} more {omitted === 1 ? "file" : "files"}</p>}
       {showArguments && (
         <div className="review-arguments">
           <CodeBlock code={JSON.stringify(approval.arguments, null, 2)} language="json" />

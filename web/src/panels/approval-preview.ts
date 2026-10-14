@@ -1,7 +1,11 @@
 import type { Approval } from "../../../src/dashboard/approvals.js";
 
-/** The bounds of one preview: the work stays bounded however large an argument is. */
-export const MAX_PREVIEW_ENTRIES = 64;
+/**
+ * The bounds of one preview: the work stays bounded however large an argument is. The entry bound is the effects
+ * schema's own maximum (`maxItems: 128` in the three editing tools' manifests), so a declared tool's change is never
+ * cut silently; anything beyond it is reported as `omitted`.
+ */
+export const MAX_PREVIEW_ENTRIES = 128;
 export const MAX_PREVIEW_LINES = 2000;
 export const MAX_PREVIEW_BYTES = 64 * 1024;
 export const PREVIEW_TRUNCATED = "… [preview truncated]";
@@ -20,6 +24,12 @@ export interface ApprovalPreviewEntry {
   added?: number;
   removed?: number;
   note?: string;
+}
+
+export interface ApprovalPreviewList {
+  entries: ApprovalPreviewEntry[];
+  /** Intended files beyond the entry bound, which the panel says out loud rather than dropping silently. */
+  omitted: number;
 }
 
 const OPERATIONS = new Set<string>(["write", "edit", "delete", "rename_source", "rename_destination"]);
@@ -59,9 +69,12 @@ function entry(index: number, path: string, cwd: string | undefined, rest: Omit<
   return { key: `${index}:${path}`, path, display: displayOf(path, cwd).display, ...rest };
 }
 
-/** A diff-shaped preview: file headers, then the body lines as the call wrote them, cut at the first bound reached. */
-function buildDiff(shown: string, body: readonly string[]): { diff: string; cut: boolean } {
-  const head = `--- a/${shown}\n+++ b/${shown}`;
+/**
+ * A diff-shaped preview: file headers, then the body lines as the call wrote them, cut at the first bound reached.
+ * A file the call creates is headed against `/dev/null`, the way the host's own diffs report a new file.
+ */
+function buildDiff(shown: string, body: readonly string[], from = `a/${shown}`): { diff: string; cut: boolean } {
+  const head = `--- ${from}\n+++ b/${shown}`;
   let budget = MAX_PREVIEW_BYTES - byteLength(head);
   const kept: string[] = [];
   let cut = false;
@@ -71,8 +84,8 @@ function buildDiff(shown: string, body: readonly string[]): { diff: string; cut:
     kept.push(line);
     budget -= size;
   }
-  const body_ = kept.length ? `\n${kept.join("\n")}` : "";
-  return { diff: cut ? `${head}${body_}\n${PREVIEW_TRUNCATED}` : `${head}${body_}`, cut };
+  const rest = kept.length ? `\n${kept.join("\n")}` : "";
+  return { diff: cut ? `${head}${rest}\n${PREVIEW_TRUNCATED}` : `${head}${rest}`, cut };
 }
 
 /** The files an approval intends to change, as the host's effects projection reported them. */
@@ -90,33 +103,33 @@ function effectFiles(effects: Record<string, unknown> | undefined): Array<{ path
   return files;
 }
 
-function writeEntries(args: Record<string, unknown>, files: Array<{ path: string; operation?: PreviewOperation }>, cwd: string | undefined): ApprovalPreviewEntry[] {
+function writeEntries(args: Record<string, unknown>, files: Array<{ path: string; operation?: PreviewOperation }>, cwd: string | undefined): ApprovalPreviewList {
   const path = files[0]?.path ?? stringArg(args.path);
-  if (!path) return [];
+  if (!path) return { entries: [], omitted: 0 };
   const content = typeof args.content === "string" ? args.content : undefined;
   const contentLines = content === undefined ? [] : lines(content);
   const built = content === undefined ? undefined : buildDiff(displayOf(path, cwd).shown, contentLines.map((line) => `+${line}`));
-  return [entry(0, path, cwd, {
+  return { entries: [entry(0, path, cwd, {
     operation: files[0]?.operation ?? "write",
     ...(built ? { diff: built.diff, added: contentLines.length } : {}),
     note: "The file's previous content is not read; the preview shows what will be written.",
-  })];
+  })], omitted: Math.max(0, files.length - 1) };
 }
 
-function editEntries(args: Record<string, unknown>, files: Array<{ path: string; operation?: PreviewOperation }>, cwd: string | undefined): ApprovalPreviewEntry[] {
+function editEntries(args: Record<string, unknown>, files: Array<{ path: string; operation?: PreviewOperation }>, cwd: string | undefined): ApprovalPreviewList {
   const path = files[0]?.path ?? stringArg(args.path);
-  if (!path) return [];
+  if (!path) return { entries: [], omitted: 0 };
   const oldText = typeof args.old_string === "string" ? args.old_string : undefined;
   const newText = typeof args.new_string === "string" ? args.new_string : undefined;
   const known = oldText !== undefined && newText !== undefined;
   const oldLines = oldText === undefined ? [] : lines(oldText);
   const newLines = newText === undefined ? [] : lines(newText);
   const built = known ? buildDiff(displayOf(path, cwd).shown, [...oldLines.map((line) => `-${line}`), ...newLines.map((line) => `+${line}`)]) : undefined;
-  return [entry(0, path, cwd, {
+  return { entries: [entry(0, path, cwd, {
     operation: files[0]?.operation ?? "edit",
     ...(built ? { diff: built.diff, added: newLines.length, removed: oldLines.length } : {}),
     ...(args.replace_all === true ? { note: "Every occurrence is replaced." } : {}),
-  })];
+  })], omitted: Math.max(0, files.length - 1) };
 }
 
 interface PatchSection { kind: "add" | "update" | "delete"; path: string; destination?: string; body: string[] }
@@ -142,14 +155,17 @@ function patchSections(patch: string): PatchSection[] {
   return sections;
 }
 
-function patchEntries(args: Record<string, unknown>, files: Array<{ path: string; operation?: PreviewOperation }>, cwd: string | undefined): ApprovalPreviewEntry[] {
+function patchEntries(args: Record<string, unknown>, files: Array<{ path: string; operation?: PreviewOperation }>, cwd: string | undefined): ApprovalPreviewList {
   const patch = typeof args.patch === "string" ? args.patch : undefined;
   const sections = patch === undefined ? [] : patchSections(patch);
-  if (!sections.length)
-    return files.slice(0, MAX_PREVIEW_ENTRIES).map((file, index) => entry(index, file.path, cwd, {
+  if (!sections.length) return {
+    // A patch the client cannot read: the host's own projection still names every file it covers.
+    entries: files.slice(0, MAX_PREVIEW_ENTRIES).map((file, index) => entry(index, file.path, cwd, {
       ...(file.operation ? { operation: file.operation } : {}),
       note: "The intended change cannot be shown; the raw patch is in the arguments below.",
-    }));
+    })),
+    omitted: Math.max(0, files.length - MAX_PREVIEW_ENTRIES),
+  };
   // A rename reports both paths, so the host's projection covers one entry per section plus one per destination.
   const covered = sections.reduce((total, section) => total + (section.destination ? 2 : 1), 0);
   const authoritative = files.length === covered ? files : undefined;
@@ -158,24 +174,27 @@ function patchEntries(args: Record<string, unknown>, files: Array<{ path: string
   const push = (item: ApprovalPreviewEntry) => { if (entries.length < MAX_PREVIEW_ENTRIES) entries.push(item); };
   for (const section of sections) {
     if (entries.length >= MAX_PREVIEW_ENTRIES) break;
-    const source = absoluteTo(section.path, cwd);
+    // The host resolves a patch target lexically against the session directory; its projection is the path that
+    // will actually be written, so it wins whenever it lines up with the patch's own sections.
+    const source = authoritative?.[at]?.path ?? absoluteTo(section.path, cwd);
+    const destination = section.destination === undefined ? undefined : authoritative?.[at + 1]?.path ?? absoluteTo(section.destination, cwd);
     const shown = displayOf(source, cwd).shown;
-    const built = section.kind === "delete" ? undefined : buildDiff(shown, section.body);
+    const built = section.kind === "delete" ? undefined : buildDiff(shown, section.body, section.kind === "add" ? "/dev/null" : undefined);
     push(entry(entries.length, source, cwd, {
-      operation: authoritative?.[at]?.operation ?? (section.kind === "delete" ? "delete" : section.destination ? "rename_source" : "write"),
+      operation: authoritative?.[at]?.operation ?? (section.kind === "delete" ? "delete" : destination ? "rename_source" : "write"),
       ...(built ? { diff: built.diff, added: section.body.filter((line) => line.startsWith("+")).length, removed: section.body.filter((line) => line.startsWith("-")).length } : {}),
-      ...(section.kind === "delete" ? { note: "The file will be deleted." } : section.destination ? { note: `Renamed to ${section.destination}.` } : {}),
+      ...(section.kind === "delete" ? { note: "The file will be deleted." }
+        : destination ? { note: `Renamed to ${displayOf(destination, cwd).shown}.` } : {}),
     }));
     at++;
-    if (!section.destination) continue;
-    const destination = absoluteTo(section.destination, cwd);
+    if (destination === undefined) continue;
     push(entry(entries.length, destination, cwd, {
       operation: authoritative?.[at]?.operation ?? "rename_destination",
       note: `Renamed from ${shown}.`,
     }));
     at++;
   }
-  return entries;
+  return { entries, omitted: Math.max(0, covered - entries.length) };
 }
 
 /**
@@ -185,15 +204,18 @@ function patchEntries(args: Record<string, unknown>, files: Array<{ path: string
  * sent, which is the invoked name (`write_file`) or a canonical `<owner>/<id>`; anything else falls back to the
  * intended files alone. Pure, so it is unit tested.
  */
-export function approvalPreviews(approval: Approval, cwd: string | undefined): ApprovalPreviewEntry[] {
+export function approvalPreviews(approval: Approval, cwd: string | undefined): ApprovalPreviewList {
   const args = approval.arguments ?? {};
   const files = effectFiles(approval.effects);
   const tool = approval.name.split(/[/#]/).pop();
   if (tool === "apply_patch") return patchEntries(args, files, cwd);
   if (tool === "write_file") return writeEntries(args, files, cwd);
   if (tool === "edit_file") return editEntries(args, files, cwd);
-  return files.slice(0, MAX_PREVIEW_ENTRIES).map((file, index) => entry(index, file.path, cwd, {
-    ...(file.operation ? { operation: file.operation } : {}),
-    note: "No file preview for this tool.",
-  }));
+  return {
+    entries: files.slice(0, MAX_PREVIEW_ENTRIES).map((file, index) => entry(index, file.path, cwd, {
+      ...(file.operation ? { operation: file.operation } : {}),
+      note: "No file preview for this tool.",
+    })),
+    omitted: Math.max(0, files.length - MAX_PREVIEW_ENTRIES),
+  };
 }

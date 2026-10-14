@@ -14,10 +14,12 @@ function approval(over: Partial<Approval> & { name: string; arguments: Record<st
 }
 
 const effectsOf = (...files: Array<{ path: string; operation: string }>) => ({ files }) as Record<string, unknown>;
+/** The file entries of a preview: what most cases assert on; the omitted count has its own cases. */
+const previews = (item: Approval, cwd: string | undefined) => approvalPreviews(item, cwd).entries;
 
 test("the tool name the host sends, and a canonical one, both preview", () => {
   // `Approval.name` is the invoked name (`write_file`), not the canonical id the registry also knows.
-  const short = approvalPreviews(approval({
+  const short = previews(approval({
     name: "write_file",
     arguments: { path: "reports/links.md", content: "one\ntwo\n" },
     effects: effectsOf({ path: `${CWD}/reports/links.md`, operation: "write" }),
@@ -25,18 +27,18 @@ test("the tool name the host sends, and a canonical one, both preview", () => {
   assert.equal(short[0]?.diff, "--- a/reports/links.md\n+++ b/reports/links.md\n+one\n+two");
   assert.equal(short[0]?.added, 2);
   assert.equal(short[0]?.operation, "write");
-  const edited = approvalPreviews(approval({
+  const edited = previews(approval({
     name: "edit_file", arguments: { path: "src/a.ts", old_string: "a", new_string: "b" },
     effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "edit" }),
   }), CWD);
   assert.equal(edited[0]?.diff, "--- a/src/a.ts\n+++ b/src/a.ts\n-a\n+b");
-  const patched = approvalPreviews(approval({ name: "apply_patch", arguments: { patch: "*** Begin Patch\n*** Delete File: src/c.ts\n*** End Patch" } }), CWD);
+  const patched = previews(approval({ name: "apply_patch", arguments: { patch: "*** Begin Patch\n*** Delete File: src/c.ts\n*** End Patch" } }), CWD);
   assert.equal(patched[0]?.operation, "delete");
   assert.match(patched[0]?.note ?? "", /deleted/i);
 });
 
 test("write_file previews the new content as added lines", () => {
-  const [entry] = approvalPreviews(approval({
+  const [entry] = previews(approval({
     name: "builtin/write_file", title: "Write file", summary: "reports/links.md",
     arguments: { path: "reports/links.md", content: "one\ntwo\n" },
     effects: effectsOf({ path: `${CWD}/reports/links.md`, operation: "write" }),
@@ -52,7 +54,7 @@ test("write_file previews the new content as added lines", () => {
 });
 
 test("edit_file previews the replaced text as a removed and an added line", () => {
-  const [entry] = approvalPreviews(approval({
+  const [entry] = previews(approval({
     name: "builtin/edit_file", title: "Edit", summary: "src/a.ts",
     arguments: { path: "src/a.ts", old_string: "const a = 1;", new_string: "const a = 2;" },
     effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "edit" }),
@@ -67,7 +69,7 @@ test("edit_file previews the replaced text as a removed and an added line", () =
 });
 
 test("edit_file says when every occurrence is replaced", () => {
-  const [entry] = approvalPreviews(approval({
+  const [entry] = previews(approval({
     name: "builtin/edit_file",
     arguments: { path: "src/a.ts", old_string: "a", new_string: "b", replace_all: true },
     effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "edit" }),
@@ -77,7 +79,7 @@ test("edit_file says when every occurrence is replaced", () => {
 });
 
 test("a file directly in the session directory has no folder", () => {
-  const [entry] = approvalPreviews(approval({
+  const [entry] = previews(approval({
     name: "builtin/write_file",
     arguments: { path: "notes.md", content: "hi" },
     effects: effectsOf({ path: `${CWD}/notes.md`, operation: "write" }),
@@ -99,7 +101,7 @@ test("apply_patch previews every file of the patch in patch order", () => {
     "*** Delete File: src/c.ts",
     "*** End Patch",
   ].join("\n");
-  const entries = approvalPreviews(approval({
+  const entries = previews(approval({
     name: "builtin/apply_patch", title: "Apply patch", summary: "3 files",
     arguments: { patch },
     effects: effectsOf(
@@ -114,7 +116,7 @@ test("apply_patch previews every file of the patch in patch order", () => {
   assert.equal(entries[0]?.diff, "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new");
   assert.equal(entries[0]?.added, 1);
   assert.equal(entries[0]?.removed, 1);
-  assert.equal(entries[1]?.diff, "--- a/src/b.ts\n+++ b/src/b.ts\n+fresh");
+  assert.equal(entries[1]?.diff, "--- /dev/null\n+++ b/src/b.ts\n+fresh");
   assert.equal(entries[2]?.diff, undefined);
   assert.match(entries[2]?.note ?? "", /deleted/i);
 });
@@ -129,7 +131,7 @@ test("a patch that moves a file reports both paths", () => {
     "+new",
     "*** End Patch",
   ].join("\n");
-  const entries = approvalPreviews(approval({
+  const entries = previews(approval({
     name: "builtin/apply_patch",
     arguments: { patch },
     effects: effectsOf(
@@ -148,7 +150,7 @@ test("a patch that moves a file reports both paths", () => {
 });
 
 test("an unreadable patch still lists the intended files without a preview", () => {
-  const entries = approvalPreviews(approval({
+  const entries = previews(approval({
     name: "builtin/apply_patch",
     arguments: { patch: "not a patch" },
     effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "write" }),
@@ -162,7 +164,7 @@ test("an unreadable patch still lists the intended files without a preview", () 
 });
 
 test("arguments of the wrong shape never throw and keep the intended files", () => {
-  const entries = approvalPreviews(approval({
+  const entries = previews(approval({
     name: "builtin/write_file",
     arguments: { path: 42, content: { nested: true } },
     effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "write" }),
@@ -174,14 +176,14 @@ test("arguments of the wrong shape never throw and keep the intended files", () 
 });
 
 test("a tool that changes no file reports nothing", () => {
-  assert.deepEqual(approvalPreviews(approval({
+  assert.deepEqual(previews(approval({
     name: "builtin/bash", title: "Run command", summary: "$ npm test",
     arguments: { command: "npm test" },
   }), CWD), []);
 });
 
 test("another tool with intended files is listed without a preview", () => {
-  const entries = approvalPreviews(approval({
+  const entries = previews(approval({
     name: "local/deploy", title: "Deploy",
     arguments: { target: "prod" },
     effects: effectsOf({ path: `${CWD}/out/bundle.js`, operation: "write" }),
@@ -195,7 +197,7 @@ test("another tool with intended files is listed without a preview", () => {
 
 test("a long preview is cut and says so, while the counts stay complete", () => {
   const content = Array.from({ length: MAX_PREVIEW_LINES + 500 }, (_, index) => `line ${index}`).join("\n");
-  const [entry] = approvalPreviews(approval({
+  const [entry] = previews(approval({
     name: "builtin/write_file",
     arguments: { path: "big.txt", content },
     effects: effectsOf({ path: `${CWD}/big.txt`, operation: "write" }),
@@ -209,7 +211,7 @@ test("a long preview is cut and says so, while the counts stay complete", () => 
 
 test("a preview of very long lines is cut by bytes", () => {
   const content = Array.from({ length: 4 }, () => "x".repeat(40_000)).join("\n");
-  const [entry] = approvalPreviews(approval({
+  const [entry] = previews(approval({
     name: "builtin/write_file",
     arguments: { path: "huge.txt", content },
     effects: effectsOf({ path: `${CWD}/huge.txt`, operation: "write" }),
@@ -223,16 +225,75 @@ test("a preview of very long lines is cut by bytes", () => {
   assert.equal(entry?.added, 4);
 });
 
+test("an aligned patch takes its paths from the host's projection, not from the patch text", () => {
+  // The patch's own spelling can be lexical: `/c/tmp` and `..` are what the host resolves, not what it writes.
+  const patch = ["*** Begin Patch", "*** Add File: ../outside/y.ts", "+x", "*** Add File: /c/tmp/x.ts", "+y", "*** End Patch"].join("\n");
+  const entries = previews(approval({
+    name: "apply_patch", arguments: { patch },
+    effects: effectsOf(
+      { path: "D:/projects/outside/y.ts", operation: "write" },
+      { path: "C:/tmp/x.ts", operation: "write" },
+    ),
+  }), CWD);
+
+  assert.deepEqual(entries.map((entry) => entry.path), ["D:/projects/outside/y.ts", "C:/tmp/x.ts"]);
+  assert.deepEqual(entries.map((entry) => entry.display.folder), ["D:/projects/outside", "C:/tmp"]);
+  assert.equal(entries[0]?.diff, "--- /dev/null\n+++ b/D:/projects/outside/y.ts\n+x");
+});
+
+test("a rename names the paths the host will move between", () => {
+  const patch = ["*** Begin Patch", "*** Update File: ../outside/y.ts", "*** Move to: /c/tmp/z.ts", "@@", "-old", "+new", "*** End Patch"].join("\n");
+  const entries = previews(approval({
+    name: "apply_patch", arguments: { patch },
+    effects: effectsOf(
+      { path: "D:/projects/outside/y.ts", operation: "rename_source" },
+      { path: "C:/tmp/z.ts", operation: "rename_destination" },
+    ),
+  }), CWD);
+
+  assert.deepEqual(entries.map((entry) => entry.path), ["D:/projects/outside/y.ts", "C:/tmp/z.ts"]);
+  assert.match(entries[0]?.note ?? "", /renamed to C:\/tmp\/z\.ts/i);
+  assert.match(entries[1]?.note ?? "", /renamed from D:\/projects\/outside\/y\.ts/i);
+});
+
+test("a list cut by the bound reports how many files it left out", () => {
+  const files = Array.from({ length: MAX_PREVIEW_ENTRIES + 7 }, (_, index) => ({ path: `${CWD}/src/f${index}.ts`, operation: "write" }));
+  const result = approvalPreviews(approval({ name: "local/deploy", arguments: {}, effects: effectsOf(...files) }), CWD);
+
+  assert.equal(result.entries.length, MAX_PREVIEW_ENTRIES);
+  assert.equal(result.omitted, 7);
+});
+
+test("a complete list reports nothing left out", () => {
+  const result = approvalPreviews(approval({
+    name: "write_file", arguments: { path: "a.ts", content: "x" },
+    effects: effectsOf({ path: `${CWD}/a.ts`, operation: "write" }),
+  }), CWD);
+
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.omitted, 0);
+});
+
+test("an added file is previewed against no previous version", () => {
+  const patch = ["*** Begin Patch", "*** Add File: src/b.ts", "+fresh", "*** End Patch"].join("\n");
+  const [entry] = previews(approval({
+    name: "apply_patch", arguments: { patch },
+    effects: effectsOf({ path: `${CWD}/src/b.ts`, operation: "write" }),
+  }), CWD);
+
+  assert.equal(entry?.diff, "--- /dev/null\n+++ b/src/b.ts\n+fresh");
+});
+
 test("a patch with more files than the limit is cut at the limit", () => {
   const sections = Array.from({ length: MAX_PREVIEW_ENTRIES + 5 }, (_, index) => `*** Add File: src/f${index}.ts\n+x`);
   const patch = ["*** Begin Patch", ...sections, "*** End Patch"].join("\n");
-  const entries = approvalPreviews(approval({ name: "builtin/apply_patch", arguments: { patch } }), CWD);
+  const entries = previews(approval({ name: "builtin/apply_patch", arguments: { patch } }), CWD);
 
   assert.equal(entries.length, MAX_PREVIEW_ENTRIES);
 });
 
 test("a file outside the session directory keeps its absolute folder", () => {
-  const [entry] = approvalPreviews(approval({
+  const [entry] = previews(approval({
     name: "builtin/write_file",
     arguments: { path: "../elsewhere/x.md", content: "hi" },
     effects: effectsOf({ path: "D:/other/x.md", operation: "write" }),
@@ -244,7 +305,7 @@ test("a file outside the session directory keeps its absolute folder", () => {
 });
 
 test("Windows separators are read like any other", () => {
-  const [entry] = approvalPreviews(approval({
+  const [entry] = previews(approval({
     name: "builtin/write_file",
     arguments: { path: "src\\win.ts", content: "hi" },
     effects: effectsOf({ path: "D:\\projects\\app\\src\\win.ts", operation: "write" }),
@@ -255,7 +316,7 @@ test("Windows separators are read like any other", () => {
 });
 
 test("without a session directory every path stays absolute", () => {
-  const [entry] = approvalPreviews(approval({
+  const [entry] = previews(approval({
     name: "builtin/write_file",
     arguments: { path: "src/a.ts", content: "hi" },
     effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "write" }),
