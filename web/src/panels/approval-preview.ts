@@ -181,14 +181,17 @@ function patchEntries(args: Record<string, unknown>, files: Array<{ path: string
 /**
  * What an approval intends to change, for the side panel's Approvals tab (docs/side-panel-design.md §3.3). The
  * arguments carry the proposed text and the effects name the files, so nothing is read from disk and no hunk
- * numbering is invented: a header and the lines as the call wrote them. Pure, so it is unit tested.
+ * numbering is invented: a header and the lines as the call wrote it. The tool is recognised by the name the host
+ * sent, which is the invoked name (`write_file`) or a canonical `<owner>/<id>`; anything else falls back to the
+ * intended files alone. Pure, so it is unit tested.
  */
 export function approvalPreviews(approval: Approval, cwd: string | undefined): ApprovalPreviewEntry[] {
   const args = approval.arguments ?? {};
   const files = effectFiles(approval.effects);
-  if (approval.name === "builtin/apply_patch") return patchEntries(args, files, cwd);
-  if (approval.name === "builtin/write_file") return writeEntries(args, files, cwd);
-  if (approval.name === "builtin/edit_file") return editEntries(args, files, cwd);
+  const tool = approval.name.split(/[/#]/).pop();
+  if (tool === "apply_patch") return patchEntries(args, files, cwd);
+  if (tool === "write_file") return writeEntries(args, files, cwd);
+  if (tool === "edit_file") return editEntries(args, files, cwd);
   return files.slice(0, MAX_PREVIEW_ENTRIES).map((file, index) => entry(index, file.path, cwd, {
     ...(file.operation ? { operation: file.operation } : {}),
     note: "No file preview for this tool.",

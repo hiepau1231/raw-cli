@@ -15,6 +15,26 @@ function approval(over: Partial<Approval> & { name: string; arguments: Record<st
 
 const effectsOf = (...files: Array<{ path: string; operation: string }>) => ({ files }) as Record<string, unknown>;
 
+test("the tool name the host sends, and a canonical one, both preview", () => {
+  // `Approval.name` is the invoked name (`write_file`), not the canonical id the registry also knows.
+  const short = approvalPreviews(approval({
+    name: "write_file",
+    arguments: { path: "reports/links.md", content: "one\ntwo\n" },
+    effects: effectsOf({ path: `${CWD}/reports/links.md`, operation: "write" }),
+  }), CWD);
+  assert.equal(short[0]?.diff, "--- a/reports/links.md\n+++ b/reports/links.md\n+one\n+two");
+  assert.equal(short[0]?.added, 2);
+  assert.equal(short[0]?.operation, "write");
+  const edited = approvalPreviews(approval({
+    name: "edit_file", arguments: { path: "src/a.ts", old_string: "a", new_string: "b" },
+    effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "edit" }),
+  }), CWD);
+  assert.equal(edited[0]?.diff, "--- a/src/a.ts\n+++ b/src/a.ts\n-a\n+b");
+  const patched = approvalPreviews(approval({ name: "apply_patch", arguments: { patch: "*** Begin Patch\n*** Delete File: src/c.ts\n*** End Patch" } }), CWD);
+  assert.equal(patched[0]?.operation, "delete");
+  assert.match(patched[0]?.note ?? "", /deleted/i);
+});
+
 test("write_file previews the new content as added lines", () => {
   const [entry] = approvalPreviews(approval({
     name: "builtin/write_file", title: "Write file", summary: "reports/links.md",
