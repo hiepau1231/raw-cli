@@ -228,3 +228,56 @@ test("the copy buttons copy the path and the contents", async ({ page, raw, cont
   // The clipboard keeps the platform's line endings (CRLF on Windows); the file's text is unchanged.
   expect((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, "\n")).toBe("const answer = 42;\n");
 });
+
+for (const width of [320, 360]) {
+  test(`at ${width} px the page fits, keeps its values and every control is a target`, async ({ page, raw }) => {
+    const deep = "src/deeply/nested/very-long-file-name-that-keeps-going-and-going.ts";
+    workspaceFile(raw.root, deep, "const deep = true;\n");
+    workspaceFile(raw.root, "docs/README.md", "# Readme\n");
+    await page.setViewportSize({ width, height: 900 });
+    await openFiles(page, raw);
+
+    // The panes stack: the viewer sits below the tree, and neither widens the page.
+    const treeBox = await page.locator(".files-tree-pane").boundingBox();
+    const viewerBox = await page.locator(".files-viewer-pane").boundingBox();
+    expect(viewerBox!.y, "the viewer is below the tree").toBeGreaterThanOrEqual(treeBox!.y + treeBox!.height - 1);
+    expect(treeBox!.x + treeBox!.width, "the tree pane fits").toBeLessThanOrEqual(width);
+    expect(viewerBox!.x + viewerBox!.width, "the viewer pane fits").toBeLessThanOrEqual(width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no sideways scroll").toBe(true);
+
+    // A deeply nested file: its name is cut in the tree but keeps its full value, and the row still fits.
+    await page.getByRole("textbox", { name: "Filter files" }).fill("very-long-file-name");
+    const row = treeOf(page).locator(`button[data-file="${deep}"]`);
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAttribute("title", deep);
+    expect(await row.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), "the row fits").toBe(true);
+    await row.click();
+
+    const viewer = page.locator("[data-files-viewer]");
+    await expect(viewer).toContainText("const deep = true;");
+    await expect(page.locator(".files-viewer-path")).toHaveAttribute("title", deep);
+    /** Nothing in the pane may stick out of it; a name that is cut with an ellipsis is meant to be wider inside. */
+    const overflowing = await viewer.evaluate((element) => {
+      const limit = element.getBoundingClientRect().right;
+      return Array.from(element.querySelectorAll<HTMLElement>("*"))
+        .filter((node) => node.getBoundingClientRect().right > limit + 1)
+        .map((node) => `${node.tagName}.${node.className}`);
+    });
+    expect(overflowing, "nothing in the viewer sticks out of the pane").toEqual([]);
+
+    // Every control the page shows is at least a 32 px target (the dashboard's own rule).
+    const small = await page.locator(".files-page button:visible").evaluateAll((items) =>
+      items
+        .map((item) => {
+          const rect = item.getBoundingClientRect();
+          return { label: item.getAttribute("aria-label") ?? (item.textContent ?? "").trim(), width: rect.width, height: rect.height };
+        })
+        .filter((item) => item.width < 32 || item.height < 32));
+    expect(small).toEqual([]);
+
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      await axe(page);
+    }
+  });
+}
