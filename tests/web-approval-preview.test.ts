@@ -1,0 +1,246 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import type { Approval } from "../src/dashboard/approvals.js";
+import { MAX_PREVIEW_BYTES, MAX_PREVIEW_ENTRIES, MAX_PREVIEW_LINES, PREVIEW_TRUNCATED, approvalPreviews } from "../web/src/panels/approval-preview.js";
+
+const CWD = "D:/projects/app";
+
+/** One pending approval, with only the fields the preview reads given explicitly. */
+function approval(over: Partial<Approval> & { name: string; arguments: Record<string, unknown> }): Approval {
+  return {
+    id: "a1", sessionId: "s1", operationId: "op1", callId: "call1", title: "Write",
+    summary: "src/a.ts", createdAt: 1, deadline: 2, ...over,
+  } as Approval;
+}
+
+const effectsOf = (...files: Array<{ path: string; operation: string }>) => ({ files }) as Record<string, unknown>;
+
+test("write_file previews the new content as added lines", () => {
+  const [entry] = approvalPreviews(approval({
+    name: "builtin/write_file", title: "Write file", summary: "reports/links.md",
+    arguments: { path: "reports/links.md", content: "one\ntwo\n" },
+    effects: effectsOf({ path: `${CWD}/reports/links.md`, operation: "write" }),
+  }), CWD);
+
+  assert.equal(entry?.operation, "write");
+  assert.equal(entry?.path, `${CWD}/reports/links.md`);
+  assert.deepEqual(entry?.display, { name: "links.md", folder: "reports" });
+  assert.equal(entry?.diff, "--- a/reports/links.md\n+++ b/reports/links.md\n+one\n+two");
+  assert.equal(entry?.added, 2);
+  assert.equal(entry?.removed, undefined);
+  assert.match(entry?.note ?? "", /previous content is not read/i);
+});
+
+test("edit_file previews the replaced text as a removed and an added line", () => {
+  const [entry] = approvalPreviews(approval({
+    name: "builtin/edit_file", title: "Edit", summary: "src/a.ts",
+    arguments: { path: "src/a.ts", old_string: "const a = 1;", new_string: "const a = 2;" },
+    effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "edit" }),
+  }), CWD);
+
+  assert.equal(entry?.operation, "edit");
+  assert.deepEqual(entry?.display, { name: "a.ts", folder: "src" });
+  assert.equal(entry?.diff, "--- a/src/a.ts\n+++ b/src/a.ts\n-const a = 1;\n+const a = 2;");
+  assert.equal(entry?.added, 1);
+  assert.equal(entry?.removed, 1);
+  assert.equal(entry?.note, undefined);
+});
+
+test("edit_file says when every occurrence is replaced", () => {
+  const [entry] = approvalPreviews(approval({
+    name: "builtin/edit_file",
+    arguments: { path: "src/a.ts", old_string: "a", new_string: "b", replace_all: true },
+    effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "edit" }),
+  }), CWD);
+
+  assert.match(entry?.note ?? "", /every occurrence/i);
+});
+
+test("a file directly in the session directory has no folder", () => {
+  const [entry] = approvalPreviews(approval({
+    name: "builtin/write_file",
+    arguments: { path: "notes.md", content: "hi" },
+    effects: effectsOf({ path: `${CWD}/notes.md`, operation: "write" }),
+  }), CWD);
+
+  assert.deepEqual(entry?.display, { name: "notes.md", folder: "project root" });
+  assert.equal(entry?.diff, "--- a/notes.md\n+++ b/notes.md\n+hi");
+});
+
+test("apply_patch previews every file of the patch in patch order", () => {
+  const patch = [
+    "*** Begin Patch",
+    "*** Update File: src/a.ts",
+    "@@",
+    "-old",
+    "+new",
+    "*** Add File: src/b.ts",
+    "+fresh",
+    "*** Delete File: src/c.ts",
+    "*** End Patch",
+  ].join("\n");
+  const entries = approvalPreviews(approval({
+    name: "builtin/apply_patch", title: "Apply patch", summary: "3 files",
+    arguments: { patch },
+    effects: effectsOf(
+      { path: `${CWD}/src/a.ts`, operation: "write" },
+      { path: `${CWD}/src/b.ts`, operation: "write" },
+      { path: `${CWD}/src/c.ts`, operation: "delete" },
+    ),
+  }), CWD);
+
+  assert.equal(entries.length, 3);
+  assert.deepEqual(entries.map((entry) => [entry.display.name, entry.operation]), [["a.ts", "write"], ["b.ts", "write"], ["c.ts", "delete"]]);
+  assert.equal(entries[0]?.diff, "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new");
+  assert.equal(entries[0]?.added, 1);
+  assert.equal(entries[0]?.removed, 1);
+  assert.equal(entries[1]?.diff, "--- a/src/b.ts\n+++ b/src/b.ts\n+fresh");
+  assert.equal(entries[2]?.diff, undefined);
+  assert.match(entries[2]?.note ?? "", /deleted/i);
+});
+
+test("a patch that moves a file reports both paths", () => {
+  const patch = [
+    "*** Begin Patch",
+    "*** Update File: src/a.ts",
+    "*** Move to: src/nested/d.ts",
+    "@@",
+    "-old",
+    "+new",
+    "*** End Patch",
+  ].join("\n");
+  const entries = approvalPreviews(approval({
+    name: "builtin/apply_patch",
+    arguments: { patch },
+    effects: effectsOf(
+      { path: `${CWD}/src/a.ts`, operation: "rename_source" },
+      { path: `${CWD}/src/nested/d.ts`, operation: "rename_destination" },
+    ),
+  }), CWD);
+
+  assert.deepEqual(entries.map((entry) => [entry.path, entry.operation]), [
+    [`${CWD}/src/a.ts`, "rename_source"],
+    [`${CWD}/src/nested/d.ts`, "rename_destination"],
+  ]);
+  assert.match(entries[0]?.note ?? "", /renamed to src\/nested\/d\.ts/i);
+  assert.match(entries[1]?.note ?? "", /renamed from src\/a\.ts/i);
+  assert.equal(entries[1]?.diff, undefined);
+});
+
+test("an unreadable patch still lists the intended files without a preview", () => {
+  const entries = approvalPreviews(approval({
+    name: "builtin/apply_patch",
+    arguments: { patch: "not a patch" },
+    effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "write" }),
+  }), CWD);
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.path, `${CWD}/src/a.ts`);
+  assert.equal(entries[0]?.operation, "write");
+  assert.equal(entries[0]?.diff, undefined);
+  assert.match(entries[0]?.note ?? "", /cannot be shown/i);
+});
+
+test("arguments of the wrong shape never throw and keep the intended files", () => {
+  const entries = approvalPreviews(approval({
+    name: "builtin/write_file",
+    arguments: { path: 42, content: { nested: true } },
+    effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "write" }),
+  }), CWD);
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.path, `${CWD}/src/a.ts`);
+  assert.equal(entries[0]?.diff, undefined);
+});
+
+test("a tool that changes no file reports nothing", () => {
+  assert.deepEqual(approvalPreviews(approval({
+    name: "builtin/bash", title: "Run command", summary: "$ npm test",
+    arguments: { command: "npm test" },
+  }), CWD), []);
+});
+
+test("another tool with intended files is listed without a preview", () => {
+  const entries = approvalPreviews(approval({
+    name: "local/deploy", title: "Deploy",
+    arguments: { target: "prod" },
+    effects: effectsOf({ path: `${CWD}/out/bundle.js`, operation: "write" }),
+  }), CWD);
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0]?.display, { name: "bundle.js", folder: "out" });
+  assert.equal(entries[0]?.diff, undefined);
+  assert.match(entries[0]?.note ?? "", /no file preview/i);
+});
+
+test("a long preview is cut and says so, while the counts stay complete", () => {
+  const content = Array.from({ length: MAX_PREVIEW_LINES + 500 }, (_, index) => `line ${index}`).join("\n");
+  const [entry] = approvalPreviews(approval({
+    name: "builtin/write_file",
+    arguments: { path: "big.txt", content },
+    effects: effectsOf({ path: `${CWD}/big.txt`, operation: "write" }),
+  }), CWD);
+
+  const lines = entry?.diff?.split("\n") ?? [];
+  assert.equal(lines.at(-1), PREVIEW_TRUNCATED);
+  assert.equal(lines.length, 2 + MAX_PREVIEW_LINES + 1);
+  assert.equal(entry?.added, MAX_PREVIEW_LINES + 500);
+});
+
+test("a preview of very long lines is cut by bytes", () => {
+  const content = Array.from({ length: 4 }, () => "x".repeat(40_000)).join("\n");
+  const [entry] = approvalPreviews(approval({
+    name: "builtin/write_file",
+    arguments: { path: "huge.txt", content },
+    effects: effectsOf({ path: `${CWD}/huge.txt`, operation: "write" }),
+  }), CWD);
+
+  const diff = entry?.diff ?? "";
+  const lines = diff.split("\n");
+  assert.equal(lines.at(-1), PREVIEW_TRUNCATED);
+  assert.ok(lines.length < 6, `expected the body to be cut, got ${lines.length} lines`);
+  assert.ok(Buffer.byteLength(diff) <= MAX_PREVIEW_BYTES + Buffer.byteLength(PREVIEW_TRUNCATED) + 1);
+  assert.equal(entry?.added, 4);
+});
+
+test("a patch with more files than the limit is cut at the limit", () => {
+  const sections = Array.from({ length: MAX_PREVIEW_ENTRIES + 5 }, (_, index) => `*** Add File: src/f${index}.ts\n+x`);
+  const patch = ["*** Begin Patch", ...sections, "*** End Patch"].join("\n");
+  const entries = approvalPreviews(approval({ name: "builtin/apply_patch", arguments: { patch } }), CWD);
+
+  assert.equal(entries.length, MAX_PREVIEW_ENTRIES);
+});
+
+test("a file outside the session directory keeps its absolute folder", () => {
+  const [entry] = approvalPreviews(approval({
+    name: "builtin/write_file",
+    arguments: { path: "../elsewhere/x.md", content: "hi" },
+    effects: effectsOf({ path: "D:/other/x.md", operation: "write" }),
+  }), CWD);
+
+  assert.equal(entry?.path, "D:/other/x.md");
+  assert.deepEqual(entry?.display, { name: "x.md", folder: "D:/other" });
+  assert.equal(entry?.diff, "--- a/D:/other/x.md\n+++ b/D:/other/x.md\n+hi");
+});
+
+test("Windows separators are read like any other", () => {
+  const [entry] = approvalPreviews(approval({
+    name: "builtin/write_file",
+    arguments: { path: "src\\win.ts", content: "hi" },
+    effects: effectsOf({ path: "D:\\projects\\app\\src\\win.ts", operation: "write" }),
+  }), "D:\\projects\\app");
+
+  assert.deepEqual(entry?.display, { name: "win.ts", folder: "src" });
+  assert.equal(entry?.diff, "--- a/src/win.ts\n+++ b/src/win.ts\n+hi");
+});
+
+test("without a session directory every path stays absolute", () => {
+  const [entry] = approvalPreviews(approval({
+    name: "builtin/write_file",
+    arguments: { path: "src/a.ts", content: "hi" },
+    effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "write" }),
+  }), undefined);
+
+  assert.equal(entry?.path, `${CWD}/src/a.ts`);
+  assert.deepEqual(entry?.display, { name: "a.ts", folder: "D:/projects/app/src" });
+});
