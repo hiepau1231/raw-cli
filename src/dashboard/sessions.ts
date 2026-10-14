@@ -26,7 +26,7 @@ import { Approvals, type Approval } from "./approvals.js";
 import { DashboardError, readBody, textField } from "./errors.js";
 import { AttachmentStaging, type AttachmentInfo } from "./attachments.js";
 import { sendFullOutput, storedFullOutput } from "./full-results.js";
-import { listWorkspaceFiles, readWorkspaceFileText, searchWorkspaceFiles, workspaceFileLink, workspaceLinkPath } from "./files.js";
+import { listWorkspaceFiles, readWorkspaceFileText, readWorkspaceImage, searchWorkspaceFiles, workspaceFileLink, workspaceLinkPath } from "./files.js";
 import { browseDirectory, listWorkspaces } from "./workspaces.js";
 import { LiveOutput, type LiveSegment } from "./live-output.js";
 import { SessionStreams } from "./streams.js";
@@ -206,6 +206,13 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
     if (path === "/api/workspaces/file" && method === "GET") {
       const wanted = url.searchParams.get("path");
       if (wanted === null || wanted === "") throw new DashboardError(400, "invalid_input", "path is required");
+      if (url.searchParams.get("raw") === "1") {
+        const image = await readWorkspaceImage(context.cwd, wanted);
+        response.writeHead(200, { "Content-Type": image.mediaType, "Content-Length": image.bytes.length,
+          "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store" });
+        response.end(image.bytes);
+        return true;
+      }
       return reply(await readWorkspaceFileText(context.cwd, wanted));
     }
     if (path === "/api/workspaces/validate" && method === "POST") return reply({ cwd: workspacePath((await context.readJson(request)).cwd, context.cwd) });

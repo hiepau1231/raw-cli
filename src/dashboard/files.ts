@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { open, readdir, realpath, stat } from "node:fs/promises";
+import { open, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { UserBlock } from "../llm/types.js";
+import { MAX_IMAGE_BYTES } from "../tools/types.js";
 import { DashboardError } from "./errors.js";
 
 // Only version-control internals and dependency trees are noise everywhere; a git repository's own ignore rules decide the rest.
@@ -130,35 +131,66 @@ export type WorkspaceFileText =
   | { path: string; bytes: number; text: string; truncated: boolean }
   | { path: string; bytes: number; binary: true };
 
+/** The raster formats the viewer can render; SVG is deliberately absent (docs/dashboard-api.md, spec D5). */
+const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+
+/** The media type a workspace file is served as in raw mode, or undefined when it is not one of the raster formats. */
+export function imageMediaType(name: string): string | undefined {
+  const extension = /\.([^.\\/]+)$/.exec(name)?.[1]?.toLowerCase();
+  return extension === undefined ? undefined : IMAGE_TYPES[extension];
+}
+
+interface ResolvedFile { real: string; path: string; size: number }
+
 /**
- * One workspace file for display (docs/dashboard-api.md): its text, cut at `MAX_TEXT_BYTES`, or the report that it
- * is binary. Confinement is the rule `workspaceFileLink` already applies, so a path that leaves the workspace,
- * names a directory, or has since been deleted is an invalid file rather than a read.
+ * Resolves a client-supplied workspace-relative path, applying the rule `workspaceFileLink` already applies: a path
+ * that leaves the workspace, names the workspace root itself, is not a regular file, or has since been deleted is an
+ * invalid file rather than a read. Both readers below go through it so the rule has one home.
  */
-export async function readWorkspaceFileText(root: string, relative_: unknown): Promise<WorkspaceFileText> {
+async function resolveWorkspaceFile(root: string, raw: unknown): Promise<ResolvedFile> {
   const invalid = (message: string) => new DashboardError(422, "invalid_file", message);
-  if (typeof relative_ !== "string" || !relative_.trim() || relative_.length > 4096 || relative_.includes("\0")) throw invalid("Choose a file inside this workspace");
-  if (isAbsolute(relative_) || relative_.split(/[\\/]/).some((part) => part === "..")) throw invalid("Files must be inside the workspace");
+  if (typeof raw !== "string" || !raw.trim() || raw.length > 4096 || raw.includes("\0")) throw invalid("Choose a file inside this workspace");
+  if (isAbsolute(raw) || raw.split(/[\\/]/).some((part) => part === "..")) throw invalid("Files must be inside the workspace");
   let real: string; let base: string;
-  try { base = await realpath(root); real = await realpath(join(base, relative_)); } catch { throw invalid("That file no longer exists"); }
+  try { base = await realpath(root); real = await realpath(join(base, raw)); } catch { throw invalid("That file no longer exists"); }
   if (real === base || !within(base, real)) throw invalid("Files must be inside the workspace");
   let info; try { info = await stat(real); } catch { throw invalid("That file no longer exists"); }
   if (!info.isFile()) throw invalid("Only files can be opened");
-  const path = relative(base, real).split(sep).join("/");
+  return { real, path: relative(base, real).split(sep).join("/"), size: info.size };
+}
+
+/**
+ * One workspace file for display (docs/dashboard-api.md): its text, cut at `MAX_TEXT_BYTES`, or the report that it
+ * is binary and was not decoded at all.
+ */
+export async function readWorkspaceFileText(root: string, raw: unknown): Promise<WorkspaceFileText> {
+  const { real, path, size } = await resolveWorkspaceFile(root, raw);
   const handle = await open(real, "r");
   try {
-    const window = Buffer.alloc(Math.min(BINARY_WINDOW, info.size));
+    const window = Buffer.alloc(Math.min(BINARY_WINDOW, size));
     await handle.read(window, 0, window.length, 0);
-    if (window.includes(0)) return { path, bytes: info.size, binary: true };
-    const size = Math.min(info.size, MAX_TEXT_BYTES);
-    const buffer = Buffer.alloc(size);
-    await handle.read(buffer, 0, size, 0);
-    const truncated = info.size > MAX_TEXT_BYTES;
+    if (window.includes(0)) return { path, bytes: size, binary: true };
+    const length = Math.min(size, MAX_TEXT_BYTES);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, 0);
+    const truncated = size > MAX_TEXT_BYTES;
     let text = new TextDecoder("utf-8").decode(buffer);
     // A cut inside a multi-byte character must not leave a replacement character at the end.
     if (truncated && text.endsWith("\uFFFD")) text = text.slice(0, -1);
-    return { path, bytes: info.size, text, truncated };
+    return { path, bytes: size, text, truncated };
   } finally { await handle.close(); }
+}
+
+/**
+ * One workspace image's bytes for the viewer's `raw=1` mode: the same confinement, the shared `MAX_IMAGE_BYTES`
+ * budget (so this and `view_image` cannot drift apart), and only the raster formats — anything else is 415.
+ */
+export async function readWorkspaceImage(root: string, raw: unknown): Promise<{ bytes: Buffer; mediaType: string }> {
+  const { real, path, size } = await resolveWorkspaceFile(root, raw);
+  const mediaType = imageMediaType(path);
+  if (!mediaType) throw new DashboardError(415, "unsupported_media_type", "Only raster images can be shown");
+  if (size > MAX_IMAGE_BYTES) throw new DashboardError(415, "unsupported_media_type", `Images are shown up to ${Math.floor(MAX_IMAGE_BYTES / (1024 * 1024))} MiB`);
+  return { bytes: await readFile(real), mediaType };
 }
 
 /**

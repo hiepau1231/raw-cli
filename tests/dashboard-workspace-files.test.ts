@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { listWorkspaceFiles, readWorkspaceFileText, MAX_TEXT_BYTES, type WorkspaceFileListing, type WorkspaceFileText } from "../src/dashboard/files.js";
+import { listWorkspaceFiles, readWorkspaceFileText, readWorkspaceImage, imageMediaType, MAX_TEXT_BYTES, type WorkspaceFileListing, type WorkspaceFileText } from "../src/dashboard/files.js";
+import { MAX_IMAGE_BYTES } from "../src/tools/types.js";
 import { dashboardFixture } from "./fixtures/dashboard.js";
 
 function tempDir(prefix: string): string { return realpathSync.native(mkdtempSync(join(tmpdir(), prefix))); }
@@ -212,5 +213,76 @@ test("the file route answers text, binary and its error codes", async () => {
     write(f.root, "gone.txt", "bye");
     rmSync(join(f.root, "gone.txt"));
     assert.deepEqual(await error(f, `/workspaces/file?path=${encodeURIComponent("gone.txt")}`), { status: 422, code: "invalid_file" });
+  } finally { await f.close(); }
+});
+
+test("images are offered by extension, case-insensitively, and nothing else is", async () => {
+  const root = tempDir("raw-files-image-");
+  try {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    writeFileSync(join(root, "logo.png"), png);
+    writeFileSync(join(root, "SHOT.PNG"), png);
+    write(root, "notes.txt", "text");
+    write(root, "drawing.svg", "<svg/>");
+    write(root, "photo.jpeg", "not really a jpeg");
+    mkdirSync(join(root, "trap.png"));
+
+    assert.equal(imageMediaType("logo.png"), "image/png");
+    assert.equal(imageMediaType("SHOT.PNG"), "image/png");
+    assert.equal(imageMediaType("photo.JPEG"), "image/jpeg");
+    assert.equal(imageMediaType("scan.jpg"), "image/jpeg");
+    assert.equal(imageMediaType("a.gif"), "image/gif");
+    assert.equal(imageMediaType("a.webp"), "image/webp");
+    for (const name of ["notes.txt", "drawing.svg", "noext", "a.png.txt"]) assert.equal(imageMediaType(name), undefined, name);
+
+    const served = await readWorkspaceImage(root, "logo.png");
+    assert.equal(served.mediaType, "image/png");
+    assert.deepEqual(served.bytes, png);
+    // A .png whose bytes are not an image is still served by extension; noticing is the viewer's job.
+    assert.equal((await readWorkspaceImage(root, "photo.jpeg")).mediaType, "image/jpeg");
+
+    // Raw mode refuses by extension (415) and by path (422), and the two are different answers.
+    for (const [name, value, code] of [
+      ["a text file", "notes.txt", "unsupported_media_type"],
+      ["an svg", "drawing.svg", "unsupported_media_type"],
+      ["a directory named like an image", "trap.png", "invalid_file"],
+      ["a missing image", "gone.png", "invalid_file"],
+    ] as Array<[string, string, string]>)
+      await assert.rejects(() => readWorkspaceImage(root, value), (error: unknown) => {
+        assert.equal((error as { code?: string }).code, code, name);
+        return true;
+      }, name);
+
+    // The cap is the shared image budget rather than a repeated number.
+    writeFileSync(join(root, "huge.png"), Buffer.alloc(MAX_IMAGE_BYTES + 1));
+    await assert.rejects(() => readWorkspaceImage(root, "huge.png"), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "unsupported_media_type");
+      assert.equal((error as { status?: number }).status, 415);
+      return true;
+    });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the raw route serves image bytes with the headers a browser needs", async () => {
+  const f = await dashboardFixture({ responses: [{ hold: true }] });
+  try {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    writeFileSync(join(f.root, "logo.png"), png);
+    write(f.root, "notes.txt", "text");
+    write(f.root, "drawing.svg", "<svg/>");
+
+    const response = await f.api(`/workspaces/file?raw=1&path=${encodeURIComponent("logo.png")}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/png");
+    assert.equal(response.headers.get("content-length"), String(png.length));
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), png);
+
+    // Without raw=1 the same route still answers text, and each refusal keeps its code.
+    assert.equal((await f.json<WorkspaceFileText>(`/workspaces/file?path=${encodeURIComponent("notes.txt")}`)).path, "notes.txt");
+    assert.deepEqual(await error(f, `/workspaces/file?raw=1&path=${encodeURIComponent("notes.txt")}`), { status: 415, code: "unsupported_media_type" });
+    assert.deepEqual(await error(f, `/workspaces/file?raw=1&path=${encodeURIComponent("drawing.svg")}`), { status: 415, code: "unsupported_media_type" });
+    assert.deepEqual(await error(f, `/workspaces/file?raw=1&path=${encodeURIComponent("../secret.png")}`), { status: 422, code: "invalid_file" });
+    assert.deepEqual(await error(f, "/workspaces/file?raw=1"), { status: 400, code: "invalid_input" });
   } finally { await f.close(); }
 });
