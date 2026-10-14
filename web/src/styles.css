@@ -2953,6 +2953,69 @@ code.tool-summary {
   font-size: 12.5px;
   overflow-wrap: anywhere;
 }
+.files-filter {
+  max-width: 360px;
+}
+.files-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.files-tree {
+  min-width: 0;
+  overflow: auto;
+}
+.files-tree-list {
+  margin: 0;
+  padding: 0 0 0 14px;
+  list-style: none;
+}
+.files-page > .files-tree > .files-tree-list {
+  padding-left: 0;
+}
+.files-tree-item {
+  min-width: 0;
+}
+.files-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.files-tree-row:hover {
+  background: var(--panel-hover);
+}
+.files-tree-row[aria-current="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.files-tree-chevron {
+  flex: none;
+  transition: transform 120ms ease;
+}
+.files-tree-row[aria-expanded="true"] .files-tree-chevron {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .files-tree-chevron {
+    transition: none;
+  }
+}
+.files-tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 
 /* Resource editors keep actions visible while long source content scrolls. */

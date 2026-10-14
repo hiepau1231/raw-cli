@@ -17,6 +17,8 @@ export const keys = {
   config: () => "/config",
   activity: () => "/activity",
   workspaces: () => "/workspaces",
+  workspaceFiles: () => "/workspaces/files",
+  workspaceFile: (path: string) => `/workspaces/file?path=${enc(path)}`,
   sessions: ({ cwd, title, limit = 50, before }: SessionsQuery) =>
     `/sessions?cwd=${enc(cwd)}&title=${enc(title)}&limit=${limit}${before ? `&before=${enc(before)}` : ""}`,
   composer: (agent: string) => `/agents/${enc(agent)}/composer`,
