@@ -15,6 +15,8 @@ const REPORT = "reports/links.md";
 const tabOf = (page: Page) => page.getByRole("tab", { name: "Approvals", exact: true });
 const panelOf = (page: Page) => page.locator('[data-tab-panel="__approvals"]');
 const reviewOf = (page: Page) => panelOf(page).locator(".review-card");
+const axe = async (page: Page) =>
+  expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
 /** Opens the side panel on the Approvals tab the way the in-chat card offers it. */
 async function openReview(page: Page) {
   await page.locator("section.approval").getByRole("button", { name: "Review", exact: true }).click();
@@ -92,7 +94,3 @@ test("a waiting approval survives a reload and is reviewed without the mouse", a
   await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
   await axe(page);
 });
-
-async function axe(page: Page) {
-  expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
-}
