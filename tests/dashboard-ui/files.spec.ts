@@ -3,7 +3,7 @@
  * is served rather than 404ed, and adding the fifth rail item keeps every main link on screen at 320 px.
  */
 import { AxeBuilder } from "@axe-core/playwright";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
@@ -124,4 +124,107 @@ test("an empty workspace says so, and a cut listing says how many of how many ar
   await page.reload();
   await expect(page.getByText("Showing 3 of 20005 files")).toBeVisible();
   await expect(treeOf(page).locator('button[data-file="f1.ts"]')).toBeVisible();
+});
+
+/** A one-pixel PNG, so the viewer's image branch is exercised against real bytes. */
+const PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+test("choosing a file shows it, keeps the choice in the address and survives a reload", async ({ page, raw }) => {
+  workspaceFile(raw.root, "src/app.ts", "const answer = 42;\n");
+  workspaceFile(raw.root, "tài liệu/ghi chú #1 100%.md", "# Ghi chú\n");
+  await openFiles(page, raw);
+
+  const tree = treeOf(page);
+  await tree.locator('button[data-folder="src"]').click();
+  await tree.locator('button[data-file="src/app.ts"]').click();
+  const viewer = page.locator("[data-files-viewer]");
+  await expect(viewer).toContainText("const answer = 42;");
+  await expect(page).toHaveURL(/\/files\?path=src%2Fapp\.ts$/);
+
+  // The address carries the choice, so a reload comes back to the same file.
+  await page.reload();
+  await expect(page.locator("[data-files-viewer]")).toContainText("const answer = 42;");
+
+  // A name with a space, a hash, a percent sign and non-ASCII characters round-trips too.
+  const filter = page.getByRole("textbox", { name: "Filter files" });
+  await filter.fill("ghi chú");
+  await treeOf(page).locator('button[data-file="tài liệu/ghi chú #1 100%.md"]').click();
+  await expect(page.locator("[data-files-viewer]")).toContainText("# Ghi chú");
+  await page.reload();
+  await expect(page.locator("[data-files-viewer]")).toContainText("# Ghi chú");
+});
+
+test("markdown renders as source and as a preview", async ({ page, raw }) => {
+  workspaceFile(raw.root, "notes.md", "# Title\n\nSome **bold** text.\n");
+  await openFiles(page, raw);
+  await treeOf(page).locator('button[data-file="notes.md"]').click();
+
+  const viewer = page.locator("[data-files-viewer]");
+  await expect(viewer).toContainText("# Title");
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(viewer.getByRole("heading", { name: "Title" })).toBeVisible();
+  await expect(viewer).not.toContainText("Some **bold** text.");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  await expect(viewer).toContainText("Some **bold** text.");
+});
+
+test("an image renders, and one whose bytes are not an image says so", async ({ page, raw }) => {
+  writeFileSync(join(raw.root, "pixel.png"), PIXEL_PNG);
+  workspaceFile(raw.root, "fake.png", "this is not a png");
+  await openFiles(page, raw);
+
+  const tree = treeOf(page);
+  await tree.locator('button[data-file="pixel.png"]').click();
+  const image = page.locator("[data-files-viewer] img[data-files-image]");
+  await expect(image).toBeVisible();
+  expect(await image.evaluate((element) => (element as HTMLImageElement).naturalWidth)).toBe(1);
+
+  // A .png the browser cannot decode is explained instead of showing a broken image.
+  await tree.locator('button[data-file="fake.png"]').click();
+  await expect(page.locator("[data-files-notice]")).toContainText("cannot be shown");
+});
+
+test("binary, oversized and unreadable files are explained rather than guessed", async ({ page, raw }) => {
+  writeFileSync(join(raw.root, "blob.bin"), Buffer.from([0x01, 0x00, 0x02, 0x03]));
+  writeFileSync(join(raw.root, "big.txt"), "a".repeat(1024 * 1024 + 500));
+  workspaceFile(raw.root, "gone.ts", "bye");
+  await openFiles(page, raw);
+
+  const tree = treeOf(page);
+  const viewer = page.locator("[data-files-viewer]");
+  await tree.locator('button[data-file="blob.bin"]').click();
+  await expect(page.locator("[data-files-notice]")).toContainText("binary file, 4 bytes, not shown");
+
+  await tree.locator('button[data-file="big.txt"]').click();
+  await expect(page.locator("[data-files-notice]")).toContainText(/first 1 MiB of \d+ bytes/);
+
+  // A file the listing showed and something removed before the click: the server's message and a Retry, while the
+  // tree keeps working.
+  await expect(tree.locator('button[data-file="gone.ts"]')).toBeVisible();
+  rmSync(join(raw.root, "gone.ts"));
+  await tree.locator('button[data-file="gone.ts"]').click();
+  await expect(viewer).toContainText("no longer exists");
+  await expect(viewer.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+  await tree.locator('button[data-file="blob.bin"]').click();
+  await expect(viewer).toContainText("binary file, 4 bytes, not shown");
+});
+
+test("the copy buttons copy the path and the contents", async ({ page, raw, context, browserName }) => {
+  test.skip(browserName !== "chromium", "clipboard permissions are Chromium-only");
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  workspaceFile(raw.root, "src/app.ts", "const answer = 42;\n");
+  await openFiles(page, raw);
+  await treeOf(page).locator('button[data-folder="src"]').click();
+  await treeOf(page).locator('button[data-file="src/app.ts"]').click();
+
+  const viewer = page.locator("[data-files-viewer]");
+  await expect(viewer).toContainText("const answer = 42;");
+  await viewer.getByRole("button", { name: "Copy path" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("src/app.ts");
+  await viewer.getByRole("button", { name: "Copy contents" }).click();
+  // The clipboard keeps the platform's line endings (CRLF on Windows); the file's text is unchanged.
+  expect((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, "\n")).toBe("const answer = 42;\n");
 });

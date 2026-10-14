@@ -150,8 +150,10 @@ function AgentsNav({ bootstrap, current }: { bootstrap: DashboardBootstrap | und
 
 export function App() {
   const { path, navigate } = useRouter();
+  // A page's own state can live in the query (the Files tab's open file), so routing reads the pathname alone.
+  const route = path.split("?")[0]!;
   const currentAgent = (() => {
-    const segment = path.split("/")[1] === "agents" ? path.split("/")[2] : undefined;
+    const segment = route.split("/")[1] === "agents" ? route.split("/")[2] : undefined;
     try {
       return segment ? decodeURIComponent(segment) : undefined;
     } catch {
@@ -185,8 +187,8 @@ export function App() {
   const [command, setCommand] = useState("");
   const [activityOpen, setActivityOpen] = useState(false);
   const drafts = useRef(new Map<string, string>());
-  const page = path.split("/")[1] || "chat";
-  const librarySection = page === "library" ? path.split("/")[2] || "tools" : undefined;
+  const page = route.split("/")[1] || "chat";
+  const librarySection = page === "library" ? route.split("/")[2] || "tools" : undefined;
   const main = useRef<HTMLElement>(null);
   const drag = useRef<{ x: number; width: number } | null>(null);
   const shownPage = useRef<string | undefined>(undefined);
@@ -207,7 +209,7 @@ export function App() {
     );
   }, [page]);
   const previousActivity = useRef("[]");
-  const sessionId = page === "chat" ? path.split("/")[2] : undefined;
+  const sessionId = page === "chat" ? route.split("/")[2] : undefined;
   /** Management pages call this after a write: refresh bootstrap plus the shared `/config`. */
   const refreshBootstrap = useCallback(async () => {
     await Promise.all([mutateBootstrap(), globalMutate(keys.config())]);
@@ -470,7 +472,7 @@ export function App() {
             <Link
               key={name}
               href={`/settings/${name}`}
-              aria-current={path.endsWith(`/${name}`) ? "page" : undefined}
+              aria-current={route.endsWith(`/${name}`) ? "page" : undefined}
             >
               {name === "models"
                 ? "Models & connections"
@@ -689,11 +691,11 @@ export function App() {
                 </Empty>
               )
             ) : page === "files" ? (
-              <FilesPage key={path} workspace={workspace} />
+              <FilesPage key={route} workspace={workspace} />
             ) : page === "settings" &&
-              (path.endsWith("/appearance") || path.endsWith("/chat")) ? (
+              (route.endsWith("/appearance") || route.endsWith("/chat")) ? (
               <PreferencesPage
-                kind={path.endsWith("/chat") ? "chat" : "appearance"}
+                kind={route.endsWith("/chat") ? "chat" : "appearance"}
                 value={preferences}
                 setValue={setPreferences}
               />

@@ -47,6 +47,18 @@ export async function api<T>(
   });
   return decode<T>(response);
 }
+/** Fetches a route's bytes rather than its JSON (the Files tab's image mode), with the same token and errors. */
+export async function apiBlob(
+  path: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await fetch(`/api${path}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) await decode(response);
+  return response.blob();
+}
 /** Uploads one raw file to the session's staging area. */
 export async function upload<T>(
   sessionId: string,

@@ -1,12 +1,28 @@
-import { useMemo, useState } from "react";
-import { ChevronRight, FileImage, FileText, Folder, FolderOpen, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import useSWR from "swr";
+import { ChevronRight, FileImage, FileText, Folder, FolderOpen, RotateCw, Search } from "lucide-react";
+import type { WorkspaceFileText } from "../../../src/dashboard/files.js";
+import { apiBlob, blobDataUrl, errorText } from "../api.js";
+import { keys } from "../data/keys.js";
 import { useWorkspaceFiles } from "../data/queries.js";
-import { buildTree, countFiles, fileKind, filterTree, type TreeFolder } from "../files/tree.js";
+import { ancestorFolders, buildTree, countFiles, fileKind, filterTree, type TreeFolder } from "../files/tree.js";
+import { CodeBlock, Markdown } from "../markdown.js";
+import { useRouter } from "../router.js";
 import { usePageGate } from "../states.js";
-import { Empty } from "../ui.js";
+import { CopyButton, Empty, ErrorMessage } from "../ui.js";
+
+/** The languages the code block can highlight; anything else falls back to plain text (docs/files-tab-spec.md D7). */
+const LANGUAGE: Record<string, string> = {
+  ts: "ts", tsx: "tsx", js: "js", jsx: "jsx", mjs: "js", cjs: "js", json: "json", md: "md", markdown: "md",
+  css: "css", html: "html", py: "py", rb: "rb", rs: "rs", go: "go", sh: "sh", bash: "sh", yml: "yaml",
+  yaml: "yaml", toml: "toml", sql: "sql", java: "java", kt: "kotlin", php: "php", swift: "swift",
+};
+const languageOf = (path: string): string => LANGUAGE[path.split(".").pop()?.toLowerCase() ?? ""] ?? "text";
 
 /** One folder's children: folders first, then files, with each branch rendered only while it is open. */
-function FolderRows({ node, open, toggle, forced }: { node: TreeFolder; open: ReadonlySet<string>; toggle: (path: string) => void; forced: boolean }) {
+function FolderRows({ node, open, toggle, forced, selected, onOpen }: {
+  node: TreeFolder; open: ReadonlySet<string>; toggle: (path: string) => void; forced: boolean; selected: string; onOpen: (path: string) => void;
+}) {
   return (
     <ul className="files-tree-list">
       {node.folders.map((folder) => {
@@ -19,7 +35,7 @@ function FolderRows({ node, open, toggle, forced }: { node: TreeFolder; open: Re
               <Glyph size={14} aria-hidden="true" />
               <span className="files-tree-name">{folder.name}</span>
             </button>
-            {expanded && <FolderRows node={folder} open={open} toggle={toggle} forced={forced} />}
+            {expanded && <FolderRows node={folder} open={open} toggle={toggle} forced={forced} selected={selected} onOpen={onOpen} />}
           </li>
         );
       })}
@@ -27,7 +43,14 @@ function FolderRows({ node, open, toggle, forced }: { node: TreeFolder; open: Re
         const Glyph = fileKind(file.path) === "image" ? FileImage : FileText;
         return (
           <li key={file.path} className="files-tree-item">
-            <button type="button" className="files-tree-row" data-file={file.path} title={file.path}>
+            <button
+              type="button"
+              className="files-tree-row"
+              data-file={file.path}
+              title={file.path}
+              aria-current={file.path === selected ? "true" : undefined}
+              onClick={() => onOpen(file.path)}
+            >
               <Glyph size={14} aria-hidden="true" />
               <span className="files-tree-name">{file.name}</span>
             </button>
@@ -38,67 +61,148 @@ function FolderRows({ node, open, toggle, forced }: { node: TreeFolder; open: Re
   );
 }
 
+/** Above this, the text is shown without syntax highlighting: a megabyte through the highlighter blocks the page. */
+const HEAVY_TEXT = 200_000;
+
+/** The file itself: text or code, Markdown as source or preview, a raster image, or the reason it is not shown. */
+function FileView({ path, tick, onRetry }: { path: string; tick: number; onRetry: () => void }) {
+  const kind = fileKind(path);
+  const [mode, setMode] = useState<"source" | "preview">("source");
+  const [image, setImage] = useState<{ url: string } | { failed: true } | undefined>(undefined);
+  const text = useSWR<WorkspaceFileText>(kind === "image" ? null : keys.workspaceFile(path));
+  useEffect(() => {
+    setMode("source");
+    if (kind !== "image") { setImage(undefined); return; }
+    let live = true;
+    setImage(undefined);
+    // A data URL, not an object URL: the dashboard's CSP allows `img-src 'self' data:` and blocks `blob:`.
+    void apiBlob(keys.workspaceImage(path))
+      .then((blob) => blobDataUrl(blob))
+      .then((url) => { if (live) setImage({ url }); })
+      .catch(() => { if (live) setImage({ failed: true }); });
+    return () => { live = false; };
+  }, [path, kind, tick]);
+
+  if (kind === "image") {
+    if (!image) return <p className="files-page-hint">Loading…</p>;
+    if ("failed" in image) return <p className="files-page-hint" data-files-notice>This image cannot be shown.</p>;
+    return <div className="files-image"><img data-files-image src={image.url} alt={path.split("/").pop() ?? path} onError={() => setImage({ failed: true })} /></div>;
+  }
+  if (text.error) return (
+    <div className="files-view-message">
+      <ErrorMessage>{errorText(text.error)}</ErrorMessage>
+      <button type="button" className="foot-button" onClick={onRetry}>Retry</button>
+    </div>
+  );
+  if (!text.data) return <p className="files-page-hint">Loading…</p>;
+  if ("binary" in text.data) return <p className="files-page-hint" data-files-notice>binary file, {text.data.bytes} bytes, not shown</p>;
+  const cut = text.data.truncated
+    ? <p className="files-page-hint" data-files-notice>Showing the first 1 MiB of {text.data.bytes} bytes</p>
+    : null;
+  const heavy = text.data.text.length > HEAVY_TEXT;
+  const body = heavy
+    ? <pre className="files-plain" tabIndex={0}>{text.data.text}</pre>
+    : <CodeBlock code={text.data.text} language={kind === "markdown" ? "md" : languageOf(path)} />;
+  const tools = (
+    <div className="files-view-tools">
+      <CopyButton value={text.data.text} label="Copy contents" />
+      {heavy && <span className="files-page-hint">Large file: shown without highlighting</span>}
+      {kind === "markdown" && !heavy && (
+        <div className="files-modes" role="group" aria-label="Markdown view">
+          <button type="button" className="foot-button" aria-pressed={mode === "source"} onClick={() => setMode("source")}>Source</button>
+          <button type="button" className="foot-button" aria-pressed={mode === "preview"} onClick={() => setMode("preview")}>Preview</button>
+        </div>
+      )}
+    </div>
+  );
+  if (kind === "markdown" && !heavy) return (
+    <>
+      {cut}
+      {tools}
+      {mode === "preview" ? <div className="files-markdown"><Markdown>{text.data.text}</Markdown></div> : <CodeBlock code={text.data.text} language="md" />}
+    </>
+  );
+  return <>{cut}{tools}{body}</>;
+}
+
 /**
- * The Files tab (docs/files-tab-spec.md): a read-only tree of the selected workspace with a filter. The listing is
- * the same git-aware view the agent's `@` references use, so the two never disagree about what exists.
+ * The Files tab (docs/files-tab-spec.md): a read-only tree of the selected workspace with a filter, and the file it
+ * opens. The listing is the same git-aware view the agent's `@` references use, so the two never disagree.
  */
 export function FilesPage({ workspace }: { workspace: string }) {
+  const { path, navigate } = useRouter();
+  const selected = useMemo(() => new URLSearchParams(path.split("?")[1] ?? "").get("path") ?? "", [path]);
   const { data, error, mutate } = useWorkspaceFiles();
   const gate = usePageGate({ ready: !!data, error, onRetry: () => void mutate(), label: "Loading files" });
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const [tick, setTick] = useState(0);
   const tree = useMemo(() => buildTree((data?.entries ?? []).map((entry) => entry.path)), [data]);
   const shown = useMemo(() => filterTree(tree, query), [tree, query]);
   const filtering = query.trim() !== "";
   const matches = countFiles(shown);
-  const toggle = (path: string) => setOpen((old) => {
+  const toggle = (folder: string) => setOpen((old) => {
     const next = new Set(old);
-    if (!next.delete(path)) next.add(path);
+    if (!next.delete(folder)) next.add(folder);
     return next;
   });
+  const openFile = (file: string) => navigate(`/files?path=${encodeURIComponent(file)}`);
+  // The file in the address opens the folders leading to it, without closing what the reader opened.
+  useEffect(() => {
+    if (!selected) return;
+    const ancestors = ancestorFolders(selected);
+    if (!ancestors.length) return;
+    setOpen((old) => new Set([...old, ...ancestors]));
+  }, [selected]);
   if (gate || !data) return gate;
   const listing = data;
+  const reload = () => { void mutate(); setTick((value) => value + 1); };
   return (
     <div className="files-page">
       <header className="page-header">
         <h1>Files</h1>
-        <span className="workspace-path" title={workspace}>
-          {workspace}
-        </span>
+        <span className="workspace-path" title={workspace}>{workspace}</span>
+        <button type="button" className="foot-button" onClick={reload} title="Read the listing and the open file again">
+          <RotateCw size={14} aria-hidden="true" />
+          Reload
+        </button>
       </header>
       {listing.total === 0 ? (
         <Empty title="This workspace has no files">
           The agent sees the same view through @ references, so there is nothing here to point it at.
         </Empty>
       ) : (
-        <>
-          <label className="search-input files-filter">
-            <Search size={14} aria-hidden="true" />
-            <input
-              aria-label="Filter files"
-              placeholder="Filter by path…"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </label>
-          {filtering && (
-            <p className="files-summary">
-              {matches} of {listing.entries.length} files
-            </p>
-          )}
-          {listing.truncated && (
-            <p className="files-summary">
-              Showing {listing.entries.length} of {listing.total} files
-            </p>
-          )}
-          {matches === 0 ? (
-            <p className="files-page-hint">No file matches the filter</p>
-          ) : (
-            <div className="files-tree" data-files-tree>
-              <FolderRows node={shown} open={open} toggle={toggle} forced={filtering} />
-            </div>
-          )}
-        </>
+        <div className="files-panes">
+          <div className="files-pane files-tree-pane">
+            <label className="search-input files-filter">
+              <Search size={14} aria-hidden="true" />
+              <input aria-label="Filter files" placeholder="Filter by path…" value={query} onChange={(event) => setQuery(event.target.value)} />
+            </label>
+            {filtering && <p className="files-summary">{matches} of {listing.entries.length} files</p>}
+            {listing.truncated && <p className="files-summary">Showing {listing.entries.length} of {listing.total} files</p>}
+            {matches === 0 ? (
+              <p className="files-page-hint">No file matches the filter</p>
+            ) : (
+              <div className="files-tree" data-files-tree>
+                <FolderRows node={shown} open={open} toggle={toggle} forced={filtering} selected={selected} onOpen={openFile} />
+              </div>
+            )}
+          </div>
+          <section className="files-pane files-viewer-pane" data-files-viewer aria-label={selected ? `File ${selected}` : "No file chosen"}>
+            {selected ? (
+              <>
+                <div className="files-viewer-head">
+                  <span className="files-viewer-name" title={selected}>{selected.split("/").pop()}</span>
+                  <span className="files-viewer-path" title={selected}>{selected}</span>
+                  <CopyButton value={selected} label="Copy path" />
+                </div>
+                <FileView path={selected} tick={tick} onRetry={reload} />
+              </>
+            ) : (
+              <p className="files-page-hint">Choose a file to read it here.</p>
+            )}
+          </section>
+        </div>
       )}
     </div>
   );

@@ -19,7 +19,7 @@ const RouterContext = createContext({
   setGuard: (_guard: Guard | undefined) => {},
 });
 export function Router({ children }: { children: ReactNode }) {
-  const [path, setPath] = useState(location.pathname);
+  const [path, setPath] = useState(location.pathname + location.search);
   const current = useRef(path),
     guard = useRef<Guard | undefined>(undefined);
   const index = useRef<number>(Number(history.state?.rawIndex ?? 0));
@@ -68,7 +68,7 @@ export function Router({ children }: { children: ReactNode }) {
         setRestoringHistory(false);
         return;
       }
-      const target = location.pathname;
+      const target = location.pathname + location.search;
       const targetIndex =
         typeof event.state?.rawIndex === "number"
           ? (event.state.rawIndex as number)
