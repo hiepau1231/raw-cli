@@ -518,6 +518,7 @@ export function App() {
               href={`/${id}`}
               className={page === id ? "active" : ""}
               aria-current={page === id ? "page" : undefined}
+              title={label}
               onPointerEnter={id === "chat" ? undefined : prefetchConfig}
               onFocus={id === "chat" ? undefined : prefetchConfig}
             >
@@ -529,6 +530,7 @@ export function App() {
             href="/settings/general"
             className={`settings-link ${page === "settings" ? "active" : ""}`}
             aria-current={page === "settings" ? "page" : undefined}
+            title="Settings"
             onPointerEnter={prefetchConfig}
             onFocus={prefetchConfig}
           >

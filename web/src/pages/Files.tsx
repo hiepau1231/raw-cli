@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { ChevronRight, FileImage, FileText, Folder, FolderOpen, RotateCw, Search } from "lucide-react";
 import type { WorkspaceFileText } from "../../../src/dashboard/files.js";
-import { apiBlob, blobDataUrl, errorText } from "../api.js";
+import { MAX_TEXT_BYTES } from "../../../src/dashboard/limits.js";
+import { blobDataUrl, errorText, fetchBlob } from "../api.js";
 import { keys } from "../data/keys.js";
 import { useWorkspaceFiles } from "../data/queries.js";
 import { ancestorFolders, buildTree, countFiles, fileKind, filterTree, type TreeFolder } from "../files/tree.js";
@@ -20,13 +21,13 @@ const LANGUAGE: Record<string, string> = {
 const languageOf = (path: string): string => LANGUAGE[path.split(".").pop()?.toLowerCase() ?? ""] ?? "text";
 
 /** One folder's children: folders first, then files, with each branch rendered only while it is open. */
-function FolderRows({ node, open, toggle, forced, selected, onOpen }: {
-  node: TreeFolder; open: ReadonlySet<string>; toggle: (path: string) => void; forced: boolean; selected: string; onOpen: (path: string) => void;
+function FolderRows({ node, open, toggle, selected, onOpen }: {
+  node: TreeFolder; open: ReadonlySet<string>; toggle: (path: string) => void; selected: string; onOpen: (path: string) => void;
 }) {
   return (
     <ul className="files-tree-list">
       {node.folders.map((folder) => {
-        const expanded = forced || open.has(folder.path);
+        const expanded = open.has(folder.path);
         const Glyph = expanded ? FolderOpen : Folder;
         return (
           <li key={folder.path} className="files-tree-item">
@@ -35,7 +36,7 @@ function FolderRows({ node, open, toggle, forced, selected, onOpen }: {
               <Glyph size={14} aria-hidden="true" />
               <span className="files-tree-name">{folder.name}</span>
             </button>
-            {expanded && <FolderRows node={folder} open={open} toggle={toggle} forced={forced} selected={selected} onOpen={onOpen} />}
+            {expanded && <FolderRows node={folder} open={open} toggle={toggle} selected={selected} onOpen={onOpen} />}
           </li>
         );
       })}
@@ -68,25 +69,31 @@ const HEAVY_TEXT = 200_000;
 function FileView({ path, tick, onRetry }: { path: string; tick: number; onRetry: () => void }) {
   const kind = fileKind(path);
   const [mode, setMode] = useState<"source" | "preview">("source");
-  const [image, setImage] = useState<{ url: string } | { failed: true } | undefined>(undefined);
+  const [image, setImage] = useState<{ url: string; bytes: number } | { failed: true } | undefined>(undefined);
   const text = useSWR<WorkspaceFileText>(kind === "image" ? null : keys.workspaceFile(path));
   useEffect(() => {
     setMode("source");
     if (kind !== "image") { setImage(undefined); return; }
-    let live = true;
+    // The request is aborted when the selection changes, so a slow image can never land under another file's name.
+    const controller = new AbortController();
     setImage(undefined);
     // A data URL, not an object URL: the dashboard's CSP allows `img-src 'self' data:` and blocks `blob:`.
-    void apiBlob(keys.workspaceImage(path))
-      .then((blob) => blobDataUrl(blob))
-      .then((url) => { if (live) setImage({ url }); })
-      .catch(() => { if (live) setImage({ failed: true }); });
-    return () => { live = false; };
+    void fetchBlob(keys.workspaceImage(path), controller.signal)
+      .then(async (blob) => ({ url: await blobDataUrl(blob), bytes: blob.size }))
+      .then((shown) => { if (!controller.signal.aborted) setImage(shown); })
+      .catch(() => { if (!controller.signal.aborted) setImage({ failed: true }); });
+    return () => controller.abort();
   }, [path, kind, tick]);
 
   if (kind === "image") {
     if (!image) return <p className="files-page-hint">Loading…</p>;
     if ("failed" in image) return <p className="files-page-hint" data-files-notice>This image cannot be shown.</p>;
-    return <div className="files-image"><img data-files-image src={image.url} alt={path.split("/").pop() ?? path} onError={() => setImage({ failed: true })} /></div>;
+    return (
+      <div className="files-image">
+        <img data-files-image src={image.url} alt={path.split("/").pop() ?? path} onError={() => setImage({ failed: true })} />
+        <p className="files-summary" data-files-image-size>{image.bytes} bytes</p>
+      </div>
+    );
   }
   if (text.error) return (
     <div className="files-view-message">
@@ -97,7 +104,7 @@ function FileView({ path, tick, onRetry }: { path: string; tick: number; onRetry
   if (!text.data) return <p className="files-page-hint">Loading…</p>;
   if ("binary" in text.data) return <p className="files-page-hint" data-files-notice>binary file, {text.data.bytes} bytes, not shown</p>;
   const cut = text.data.truncated
-    ? <p className="files-page-hint" data-files-notice>Showing the first 1 MiB of {text.data.bytes} bytes</p>
+    ? <p className="files-page-hint" data-files-notice>Showing the first {MAX_TEXT_BYTES / (1024 * 1024)} MiB of {text.data.bytes} bytes</p>
     : null;
   const heavy = text.data.text.length > HEAVY_TEXT;
   const body = heavy
@@ -154,6 +161,18 @@ export function FilesPage({ workspace }: { workspace: string }) {
     if (!ancestors.length) return;
     setOpen((old) => new Set([...old, ...ancestors]));
   }, [selected]);
+  // A filter really opens the folders that lead to its matches, rather than claiming to: the disclosure buttons
+  // keep telling the truth about what a click would do.
+  useEffect(() => {
+    if (!filtering) return;
+    const folders: string[] = [];
+    const walk = (node: TreeFolder) => {
+      for (const child of node.folders) { folders.push(child.path); walk(child); }
+    };
+    walk(shown);
+    if (!folders.length) return;
+    setOpen((old) => (folders.some((folder) => !old.has(folder)) ? new Set([...old, ...folders]) : old));
+  }, [shown, filtering]);
   if (gate || !data) return gate;
   const listing = data;
   const reload = () => { void mutate(); setTick((value) => value + 1); };
@@ -178,13 +197,17 @@ export function FilesPage({ workspace }: { workspace: string }) {
               <Search size={14} aria-hidden="true" />
               <input aria-label="Filter files" placeholder="Filter by path…" value={query} onChange={(event) => setQuery(event.target.value)} />
             </label>
-            {filtering && <p className="files-summary">{matches} of {listing.entries.length} files</p>}
+            {filtering && (
+              <p className="files-summary">
+                {matches} of {listing.entries.length} {listing.truncated ? "files shown" : "files"}
+              </p>
+            )}
             {listing.truncated && <p className="files-summary">Showing {listing.entries.length} of {listing.total} files</p>}
             {matches === 0 ? (
               <p className="files-page-hint">No file matches the filter</p>
             ) : (
               <div className="files-tree" data-files-tree>
-                <FolderRows node={shown} open={open} toggle={toggle} forced={filtering} selected={selected} onOpen={openFile} />
+                <FolderRows node={shown} open={open} toggle={toggle} selected={selected} onOpen={openFile} />
               </div>
             )}
           </div>

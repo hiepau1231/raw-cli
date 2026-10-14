@@ -2902,7 +2902,8 @@ code.tool-summary {
 }
 @media (max-width: 420px) {
   /* D8 (docs/files-tab-spec.md): a fifth rail item does not fit a 320 px row, so the labels become visually
-     hidden - the same technique as `.sr-only` - while every link keeps its accessible name and a 36 px target. */
+     hidden - the same technique as `.sr-only` - while every link keeps its accessible name, its tooltip, and at
+     least 36 px of width (the icon alone would leave 23 px at the narrowest width). */
   .rail a {
     min-width: 36px;
     justify-content: center;

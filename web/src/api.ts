@@ -47,18 +47,6 @@ export async function api<T>(
   });
   return decode<T>(response);
 }
-/** Fetches a route's bytes rather than its JSON (the Files tab's image mode), with the same token and errors. */
-export async function apiBlob(
-  path: string,
-  signal?: AbortSignal,
-): Promise<Blob> {
-  const response = await fetch(`/api${path}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    ...(signal ? { signal } : {}),
-  });
-  if (!response.ok) await decode(response);
-  return response.blob();
-}
 /** Uploads one raw file to the session's staging area. */
 export async function upload<T>(
   sessionId: string,
@@ -80,16 +68,16 @@ export async function upload<T>(
   );
   return decode<T>(response);
 }
-/** Fetches authenticated bytes and returns a `data:` URL (the CSP allows `data:` images, not `blob:`). */
-/** Authenticated bytes as a Blob, such as a staged attachment. */
+/** Authenticated bytes as a Blob, such as a staged attachment or a workspace image. */
 export async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blob> {
   const response = await fetch(`/api${path}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     ...(signal ? { signal } : {}),
   });
-  if (!response.ok) throw new ApiError(response.status, "request_failed", "Could not load attachment");
+  if (!response.ok) throw new ApiError(response.status, "request_failed", "Could not load this file");
   return response.blob();
 }
+/** Fetches authenticated bytes and returns a `data:` URL (the CSP allows `data:` images, not `blob:`). */
 export async function fetchDataUrl(
   path: string,
   signal?: AbortSignal,
@@ -98,7 +86,7 @@ export async function fetchDataUrl(
     headers: { Authorization: `Bearer ${accessToken}` },
     ...(signal ? { signal } : {}),
   });
-  if (!response.ok) throw new ApiError(response.status, "request_failed", "Could not load attachment");
+  if (!response.ok) throw new ApiError(response.status, "request_failed", "Could not load this file");
   return blobDataUrl(await response.blob());
 }
 /** A call's saved full output (docs/tool-ux-design.md §5.3); the route's errors keep their status and code. */

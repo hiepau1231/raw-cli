@@ -95,13 +95,19 @@ test("the tree lists the workspace, opens folders and filters by path", async ({
   await expect(src).toHaveAttribute("aria-expanded", "false");
   await expect(tree.locator('button[data-file="src/deep/notes.md"]')).toHaveCount(0);
 
-  // The filter keeps matching files with the folders that lead to them, open, and counts them.
+  // The filter keeps matching files with the folders that lead to them, really open, and counts them.
   const filter = page.getByRole("textbox", { name: "Filter files" });
   await filter.fill("notes.md");
   await expect(tree.locator('button[data-file="src/deep/notes.md"]')).toBeVisible();
   await expect(tree.locator('button[data-folder="src/deep"]')).toHaveAttribute("aria-expanded", "true");
   await expect(tree.locator('button[data-file="docs/readme.md"]')).toHaveCount(0);
   await expect(page.getByText(/^1 of \d+ files$/)).toBeVisible();
+  // Open because the reader's filter opened it, not because the button claims so: clicking it really collapses.
+  await tree.locator('button[data-folder="src/deep"]').click();
+  await expect(tree.locator('button[data-folder="src/deep"]')).toHaveAttribute("aria-expanded", "false");
+  await expect(tree.locator('button[data-file="src/deep/notes.md"]')).toHaveCount(0);
+  await tree.locator('button[data-folder="src/deep"]').click();
+  await expect(tree.locator('button[data-file="src/deep/notes.md"]')).toBeVisible();
   await filter.fill("nothing-matches-this");
   await expect(page.getByText("No file matches the filter")).toBeVisible();
   await filter.fill("");
@@ -155,6 +161,12 @@ test("choosing a file shows it, keeps the choice in the address and survives a r
   await expect(page.locator("[data-files-viewer]")).toContainText("# Ghi chú");
   await page.reload();
   await expect(page.locator("[data-files-viewer]")).toContainText("# Ghi chú");
+
+  // The rail's own Files link comes back to a clean tab because its address carries no file.
+  await filter.fill("");
+  await page.getByRole("link", { name: "Files", exact: true }).click();
+  await expect(page).toHaveURL(/\/files$/);
+  await expect(page.locator("[data-files-viewer]")).toContainText("Choose a file");
 });
 
 test("markdown renders as source and as a preview", async ({ page, raw }) => {
@@ -181,9 +193,17 @@ test("an image renders, and one whose bytes are not an image says so", async ({ 
   const image = page.locator("[data-files-viewer] img[data-files-image]");
   await expect(image).toBeVisible();
   expect(await image.evaluate((element) => (element as HTMLImageElement).naturalWidth)).toBe(1);
+  await expect(page.locator("[data-files-image-size]")).toHaveText(`${PIXEL_PNG.length} bytes`);
 
   // A .png the browser cannot decode is explained instead of showing a broken image.
   await tree.locator('button[data-file="fake.png"]').click();
+  await expect(page.locator("[data-files-notice]")).toContainText("cannot be shown");
+
+  // So is one the host refuses to serve at all: the request itself failed, which is the other branch. The glob
+  // carries the query, so it matches the file route and not the listing beside it.
+  await page.route("**/api/workspaces/file?*", (route) =>
+    route.fulfill({ status: 415, contentType: "application/json", body: JSON.stringify({ error: { code: "unsupported_media_type", message: "Only raster images can be shown" } }) }));
+  await page.reload();
   await expect(page.locator("[data-files-notice]")).toContainText("cannot be shown");
 });
 

@@ -70,6 +70,13 @@ test("the listing skips .git and node_modules, scopes to the workspace and repor
 
     const inside = await listWorkspaceFiles(join(root, "src"));
     assert.deepEqual(paths(inside), ["app.ts", "deep/x.ts"]);
+
+    // A workspace that cannot be read says so with its own code, whether it is missing or is not a directory.
+    for (const bad of [join(root, "missing"), join(root, "README.md")])
+      await assert.rejects(() => listWorkspaceFiles(bad), (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "unreadable_directory", bad);
+        return true;
+      }, bad);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -133,6 +140,12 @@ test("reading a file returns its text, its size and whether it was cut", async (
     assert.equal(cut.bytes, big.length);
     assert.equal(Buffer.byteLength(cut.text), MAX_TEXT_BYTES);
 
+    // Exactly at the cap is not cut: the flag tracks the file, not the read.
+    write(root, "exact.txt", "a".repeat(MAX_TEXT_BYTES));
+    const exact = asText(await readWorkspaceFileText(root, "exact.txt"));
+    assert.equal(exact.truncated, false);
+    assert.equal(Buffer.byteLength(exact.text), MAX_TEXT_BYTES);
+
     // A cut inside a multi-byte character keeps the text valid rather than ending in a replacement character.
     // The prefix is two bytes so the 1 MiB cut lands inside a three-byte character instead of on its boundary.
     const mixed = "xx" + "€".repeat(400_000);
@@ -151,6 +164,9 @@ test("a binary file is named rather than decoded", async () => {
     write(root, "empty.txt", "");
     assert.deepEqual(await readWorkspaceFileText(root, "blob.bin"), { path: "blob.bin", bytes: 7, binary: true });
     assert.equal(asText(await readWorkspaceFileText(root, "empty.txt")).text, "");
+    // Bytes that are not UTF-8 at all are named too, rather than shown as replacement characters.
+    writeFileSync(join(root, "latin1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+    assert.deepEqual(await readWorkspaceFileText(root, "latin1.txt"), { path: "latin1.txt", bytes: 5, binary: true });
     // A NUL after the first 8 KiB is not what decides: that window is the check, and the file stays text.
     writeFileSync(join(root, "late.bin"), Buffer.concat([Buffer.from("a".repeat(9000)), Buffer.from([0x00, 0x62])]));
     const late = asText(await readWorkspaceFileText(root, "late.bin"));
@@ -176,7 +192,8 @@ test("reading refuses everything outside the workspace and everything that is no
       ["parent traversal", "../secret.txt"],
       ["absolute path", join(other, "secret.txt")],
       ["NUL byte", "a\0b"],
-      ["over the length cap", `${"a".repeat(4096)}.txt`],
+      ["at the length cap but not a real file", `${"a".repeat(4096)}.txt`],
+      ["over the length cap", `${"a".repeat(4097)}.txt`],
       ["the workspace root itself", "."],
       ["a directory", "folder"],
       ...(linked ? [["a path through a link that leaves the workspace", "escape/secret.txt"]] as Array<[string, unknown]> : []),
@@ -253,7 +270,7 @@ test("images are offered by extension, case-insensitively, and nothing else is",
         return true;
       }, name);
 
-    // The cap is the shared image budget rather than a repeated number.
+    // The cap is the shared image budget rather than a repeated number, and the route answers with the same code.
     writeFileSync(join(root, "huge.png"), Buffer.alloc(MAX_IMAGE_BYTES + 1));
     await assert.rejects(() => readWorkspaceImage(root, "huge.png"), (error: unknown) => {
       assert.equal((error as { code?: string }).code, "unsupported_media_type");
@@ -284,5 +301,16 @@ test("the raw route serves image bytes with the headers a browser needs", async 
     assert.deepEqual(await error(f, `/workspaces/file?raw=1&path=${encodeURIComponent("drawing.svg")}`), { status: 415, code: "unsupported_media_type" });
     assert.deepEqual(await error(f, `/workspaces/file?raw=1&path=${encodeURIComponent("../secret.png")}`), { status: 422, code: "invalid_file" });
     assert.deepEqual(await error(f, "/workspaces/file?raw=1"), { status: 400, code: "invalid_input" });
+
+    // The budget is a budget over the wire too, not only in the reader.
+    writeFileSync(join(f.root, "huge.png"), Buffer.alloc(MAX_IMAGE_BYTES + 1));
+    assert.deepEqual(await error(f, `/workspaces/file?raw=1&path=${encodeURIComponent("huge.png")}`), { status: 415, code: "unsupported_media_type" });
+
+    // The length cap is a shape check over the whole path: exactly 4096 characters gets past it and fails as a file
+    // that is not there, while 4097 is refused before anything is read.
+    const long = await f.api(`/workspaces/file?path=${encodeURIComponent(`${"a".repeat(4092)}.txt`)}`);
+    assert.equal(JSON.parse(await long.text()).error.message, "That file no longer exists");
+    const longer = await f.api(`/workspaces/file?path=${encodeURIComponent(`${"a".repeat(4093)}.txt`)}`);
+    assert.equal(JSON.parse(await longer.text()).error.message, "Choose a file inside this workspace");
   } finally { await f.close(); }
 });

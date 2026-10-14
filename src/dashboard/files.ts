@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { UserBlock } from "../llm/types.js";
 import { MAX_IMAGE_BYTES } from "../tools/types.js";
 import { DashboardError } from "./errors.js";
+import { MAX_LISTED_PATHS, MAX_TEXT_BYTES } from "./limits.js";
 
 // Only version-control internals and dependency trees are noise everywhere; a git repository's own ignore rules decide the rest.
 const IGNORED = new Set([".git", "node_modules"]);
@@ -119,8 +120,8 @@ export function workspaceLinkPath(root: string, uri: string): string | undefined
   return relative(root, path).split(sep).join("/");
 }
 
-export const MAX_LISTED_PATHS = 20_000;
-export const MAX_TEXT_BYTES = 1024 * 1024;
+/** The caps live in their own dependency-free module so the web bundle can import them too. */
+export { MAX_LISTED_PATHS, MAX_TEXT_BYTES } from "./limits.js";
 /** How much of a file decides whether it is binary at all: a NUL in here means "do not show this". */
 const BINARY_WINDOW = 8192;
 
@@ -159,24 +160,44 @@ async function resolveWorkspaceFile(root: string, raw: unknown): Promise<Resolve
   return { real, path: relative(base, real).split(sep).join("/"), size: info.size };
 }
 
+/** Reads at most `length` bytes from an offset, looping because one `read` may return fewer than asked for. */
+async function readExactly(handle: Awaited<ReturnType<typeof open>>, length: number, position: number): Promise<Buffer> {
+  const buffer = Buffer.alloc(length);
+  let filled = 0;
+  while (filled < length) {
+    const { bytesRead } = await handle.read(buffer, filled, length - filled, position + filled);
+    if (bytesRead === 0) break;
+    filled += bytesRead;
+  }
+  return filled === length ? buffer : buffer.subarray(0, filled);
+}
+
+/** Drops a trailing partial UTF-8 sequence, so a cut at a byte boundary is not mistaken for broken text. */
+function trimPartialSequence(bytes: Buffer): Buffer {
+  let end = bytes.length;
+  while (end > 0 && (bytes[end - 1]! & 0xc0) === 0x80) end--;
+  if (end === 0) return bytes;
+  const lead = bytes[end - 1]!;
+  const expected = lead < 0x80 ? 1 : (lead & 0xe0) === 0xc0 ? 2 : (lead & 0xf0) === 0xe0 ? 3 : (lead & 0xf8) === 0xf0 ? 4 : 1;
+  return end - 1 + expected <= bytes.length ? bytes : bytes.subarray(0, end - 1);
+}
+
 /**
  * One workspace file for display (docs/dashboard-api.md): its text, cut at `MAX_TEXT_BYTES`, or the report that it
- * is binary and was not decoded at all.
+ * is binary and was not decoded at all. Binary is a NUL in the first `BINARY_WINDOW` bytes *or* bytes that are not
+ * UTF-8 at all, so a Latin-1 file is named rather than shown as replacement characters.
  */
 export async function readWorkspaceFileText(root: string, raw: unknown): Promise<WorkspaceFileText> {
   const { real, path, size } = await resolveWorkspaceFile(root, raw);
   const handle = await open(real, "r");
   try {
-    const window = Buffer.alloc(Math.min(BINARY_WINDOW, size));
-    await handle.read(window, 0, window.length, 0);
+    const window = await readExactly(handle, Math.min(BINARY_WINDOW, size), 0);
     if (window.includes(0)) return { path, bytes: size, binary: true };
-    const length = Math.min(size, MAX_TEXT_BYTES);
-    const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, 0);
     const truncated = size > MAX_TEXT_BYTES;
-    let text = new TextDecoder("utf-8").decode(buffer);
-    // A cut inside a multi-byte character must not leave a replacement character at the end.
-    if (truncated && text.endsWith("\uFFFD")) text = text.slice(0, -1);
+    const body = await readExactly(handle, Math.min(size, MAX_TEXT_BYTES), 0);
+    let text: string;
+    try { text = new TextDecoder("utf-8", { fatal: true }).decode(truncated ? trimPartialSequence(body) : body); }
+    catch { return { path, bytes: size, binary: true }; }
     return { path, bytes: size, text, truncated };
   } finally { await handle.close(); }
 }
