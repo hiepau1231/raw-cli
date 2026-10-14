@@ -117,3 +117,23 @@ export function workspaceLinkPath(root: string, uri: string): string | undefined
   if (path === root || !within(root, path)) return undefined;
   return relative(root, path).split(sep).join("/");
 }
+
+export const MAX_LISTED_PATHS = 20_000;
+
+export interface WorkspaceFileEntry { path: string; name: string }
+export interface WorkspaceFileListing { root: string; entries: WorkspaceFileEntry[]; total: number; truncated: boolean }
+
+/**
+ * The workspace's files for the dashboard's Files tab: the same git-aware view `@` references use, so the model and
+ * the reader never disagree about what exists. Paths stay workspace-relative, `.git` and `node_modules` are left
+ * out either way, and `total` lets a caller say how many of how many it is showing. `max` exists so the cap is
+ * testable without making twenty thousand files; the route uses the default.
+ */
+export async function listWorkspaceFiles(root: string, options: { max?: number } = {}): Promise<WorkspaceFileListing> {
+  let canonical: string;
+  try { canonical = await realpath(root); if (!(await stat(canonical)).isDirectory()) throw new Error("not a directory"); }
+  catch { throw new DashboardError(422, "unreadable_directory", "This workspace cannot be read"); }
+  const listed = (await workspaceFiles(canonical, canonical)).filter((path) => !path.split("/").some((part) => IGNORED.has(part)));
+  const max = options.max ?? MAX_LISTED_PATHS;
+  return { root: canonical, entries: listed.slice(0, max).map((path) => ({ path, name: basename(path) })), total: listed.length, truncated: listed.length > max };
+}
