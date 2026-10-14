@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { listWorkspaceFiles, type WorkspaceFileListing } from "../src/dashboard/files.js";
+import { listWorkspaceFiles, readWorkspaceFileText, MAX_TEXT_BYTES, type WorkspaceFileListing, type WorkspaceFileText } from "../src/dashboard/files.js";
 import { dashboardFixture } from "./fixtures/dashboard.js";
 
 function tempDir(prefix: string): string { return realpathSync.native(mkdtempSync(join(tmpdir(), prefix))); }
@@ -14,6 +14,19 @@ function write(root: string, path: string, text = "x"): void {
 }
 function git(cwd: string, ...args: string[]): void { execFileSync("git", ["-C", cwd, ...args], { stdio: "ignore" }); }
 const paths = (listing: WorkspaceFileListing) => listing.entries.map((entry) => entry.path);
+/** The text branch of a read, asserted rather than assumed; the binary branch has its own helper. */
+function asText(file: WorkspaceFileText): { path: string; bytes: number; text: string; truncated: boolean } {
+  assert.ok(!("binary" in file), `expected text, got a binary report for ${file.path}`);
+  return file as { path: string; bytes: number; text: string; truncated: boolean };
+}
+function asBinary(file: WorkspaceFileText): { path: string; bytes: number; binary: true } {
+  assert.ok("binary" in file, `expected a binary report, got text for ${file.path}`);
+  return file as { path: string; bytes: number; binary: true };
+}
+async function error(f: Awaited<ReturnType<typeof dashboardFixture>>, path: string): Promise<{ status: number; code: string }> {
+  const response = await f.api(path);
+  return { status: response.status, code: (JSON.parse(await response.text()) as { error: { code: string } }).error.code };
+}
 
 test("the listing is workspace-relative when the workspace is a subdirectory of a repository", async () => {
   const repo = tempDir("raw-files-repo-");
@@ -95,5 +108,109 @@ test("the files route answers the workspace listing", async () => {
     assert.ok(listed.every((path) => path !== "" && !path.startsWith("/") && !path.includes("\\")), listed.join(", "));
     assert.equal(listing.total, listed.length);
     assert.equal(listing.truncated, false);
+  } finally { await f.close(); }
+});
+
+test("reading a file returns its text, its size and whether it was cut", async () => {
+  const root = tempDir("raw-files-read-");
+  try {
+    write(root, "src/app.ts", "const a = 1;\n");
+    write(root, "notes/ghi chú #1 100%.md", "# Ghi chú\n");
+    const text = await readWorkspaceFileText(root, "src/app.ts");
+    assert.deepEqual(text, { path: "src/app.ts", bytes: 13, text: "const a = 1;\n", truncated: false });
+    // A name with a space, a hash, a percent sign and non-ASCII characters round-trips unchanged.
+    const unicode = await readWorkspaceFileText(root, "notes/ghi chú #1 100%.md");
+    assert.equal(unicode.path, "notes/ghi chú #1 100%.md");
+    assert.equal(asText(unicode).text, "# Ghi chú\n");
+    // A Windows-style spelling of the same path is accepted and answered with the canonical one.
+    if (process.platform === "win32") assert.equal((await readWorkspaceFileText(root, "src\\app.ts")).path, "src/app.ts");
+
+    const big = "a".repeat(MAX_TEXT_BYTES + 500_000);
+    write(root, "big.txt", big);
+    const cut = asText(await readWorkspaceFileText(root, "big.txt"));
+    assert.equal(cut.truncated, true);
+    assert.equal(cut.bytes, big.length);
+    assert.equal(Buffer.byteLength(cut.text), MAX_TEXT_BYTES);
+
+    // A cut inside a multi-byte character keeps the text valid rather than ending in a replacement character.
+    // The prefix is two bytes so the 1 MiB cut lands inside a three-byte character instead of on its boundary.
+    const mixed = "xx" + "€".repeat(400_000);
+    write(root, "mixed.txt", mixed);
+    const boundary = asText(await readWorkspaceFileText(root, "mixed.txt"));
+    assert.equal(boundary.truncated, true);
+    assert.ok(!boundary.text.includes("\uFFFD"), "no replacement character");
+    assert.ok(Buffer.byteLength(boundary.text) < MAX_TEXT_BYTES);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a binary file is named rather than decoded", async () => {
+  const root = tempDir("raw-files-binary-");
+  try {
+    writeFileSync(join(root, "blob.bin"), Buffer.from([0x89, 0x50, 0x00, 0x4e, 0x47, 0x0d, 0x0a]));
+    write(root, "empty.txt", "");
+    assert.deepEqual(await readWorkspaceFileText(root, "blob.bin"), { path: "blob.bin", bytes: 7, binary: true });
+    assert.equal(asText(await readWorkspaceFileText(root, "empty.txt")).text, "");
+    // A NUL after the first 8 KiB is not what decides: that window is the check, and the file stays text.
+    writeFileSync(join(root, "late.bin"), Buffer.concat([Buffer.from("a".repeat(9000)), Buffer.from([0x00, 0x62])]));
+    const late = asText(await readWorkspaceFileText(root, "late.bin"));
+    assert.equal(late.truncated, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("reading refuses everything outside the workspace and everything that is not a file", async (t) => {
+  const root = tempDir("raw-files-refuse-");
+  const other = tempDir("raw-files-outside-");
+  try {
+    write(root, "keep.txt", "keep");
+    mkdirSync(join(root, "folder"));
+    write(other, "secret.txt", "secret");
+    // A directory link out of the workspace is unprivileged where the platform allows links at all (a junction on
+    // Windows, a dir symlink elsewhere), and reading through it is what the realpath check must refuse. Hosts that
+    // refuse to create one (Windows without Developer Mode: the same reason this repository's own symlink tests
+    // fail there) run every other case and say so.
+    let linked = true;
+    try { symlinkSync(other, join(root, "escape"), process.platform === "win32" ? "junction" : "dir"); }
+    catch { linked = false; t.diagnostic("this host refuses to create a directory link; the escape case is skipped"); }
+    const cases: Array<[string, unknown]> = [
+      ["parent traversal", "../secret.txt"],
+      ["absolute path", join(other, "secret.txt")],
+      ["NUL byte", "a\0b"],
+      ["over the length cap", `${"a".repeat(4096)}.txt`],
+      ["the workspace root itself", "."],
+      ["a directory", "folder"],
+      ...(linked ? [["a path through a link that leaves the workspace", "escape/secret.txt"]] as Array<[string, unknown]> : []),
+      ["a file that is gone", "missing.txt"],
+      ["an empty string", ""],
+      ["not a string", 42],
+    ];
+    for (const [name, value] of cases)
+      await assert.rejects(() => readWorkspaceFileText(root, value), (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "invalid_file", name);
+        return true;
+      }, name);
+  } finally { rmSync(root, { recursive: true, force: true }); rmSync(other, { recursive: true, force: true }); }
+});
+
+test("the file route answers text, binary and its error codes", async () => {
+  const f = await dashboardFixture({ responses: [{ hold: true }] });
+  try {
+    write(f.root, "app.ts", "app");
+    writeFileSync(join(f.root, "blob.bin"), Buffer.from([0x01, 0x00, 0x02]));
+    const text = await f.json<WorkspaceFileText>(`/workspaces/file?path=${encodeURIComponent("app.ts")}`);
+    assert.deepEqual(text, { path: "app.ts", bytes: 3, text: "app", truncated: false });
+    const binary = await f.json<WorkspaceFileText>(`/workspaces/file?path=${encodeURIComponent("blob.bin")}`);
+    assert.deepEqual(binary, { path: "blob.bin", bytes: 3, binary: true });
+
+    assert.deepEqual(await error(f, "/workspaces/file"), { status: 400, code: "invalid_input" });
+    assert.deepEqual(await error(f, "/workspaces/file?path="), { status: 400, code: "invalid_input" });
+    for (const value of ["../secret.txt", join(f.root, "app.ts"), "missing.txt", "."]) {
+      const refused = await error(f, `/workspaces/file?path=${encodeURIComponent(value)}`);
+      assert.deepEqual(refused, { status: 422, code: "invalid_file" }, value);
+    }
+
+    // A file the listing showed and something removed before the click is an invalid file, not a crash.
+    write(f.root, "gone.txt", "bye");
+    rmSync(join(f.root, "gone.txt"));
+    assert.deepEqual(await error(f, `/workspaces/file?path=${encodeURIComponent("gone.txt")}`), { status: 422, code: "invalid_file" });
   } finally { await f.close(); }
 });

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readdir, realpath, stat } from "node:fs/promises";
+import { open, readdir, realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -119,9 +119,47 @@ export function workspaceLinkPath(root: string, uri: string): string | undefined
 }
 
 export const MAX_LISTED_PATHS = 20_000;
+export const MAX_TEXT_BYTES = 1024 * 1024;
+/** How much of a file decides whether it is binary at all: a NUL in here means "do not show this". */
+const BINARY_WINDOW = 8192;
 
 export interface WorkspaceFileEntry { path: string; name: string }
 export interface WorkspaceFileListing { root: string; entries: WorkspaceFileEntry[]; total: number; truncated: boolean }
+/** Text, cut at most at `MAX_TEXT_BYTES`, or the report that the file is binary and was not decoded at all. */
+export type WorkspaceFileText =
+  | { path: string; bytes: number; text: string; truncated: boolean }
+  | { path: string; bytes: number; binary: true };
+
+/**
+ * One workspace file for display (docs/dashboard-api.md): its text, cut at `MAX_TEXT_BYTES`, or the report that it
+ * is binary. Confinement is the rule `workspaceFileLink` already applies, so a path that leaves the workspace,
+ * names a directory, or has since been deleted is an invalid file rather than a read.
+ */
+export async function readWorkspaceFileText(root: string, relative_: unknown): Promise<WorkspaceFileText> {
+  const invalid = (message: string) => new DashboardError(422, "invalid_file", message);
+  if (typeof relative_ !== "string" || !relative_.trim() || relative_.length > 4096 || relative_.includes("\0")) throw invalid("Choose a file inside this workspace");
+  if (isAbsolute(relative_) || relative_.split(/[\\/]/).some((part) => part === "..")) throw invalid("Files must be inside the workspace");
+  let real: string; let base: string;
+  try { base = await realpath(root); real = await realpath(join(base, relative_)); } catch { throw invalid("That file no longer exists"); }
+  if (real === base || !within(base, real)) throw invalid("Files must be inside the workspace");
+  let info; try { info = await stat(real); } catch { throw invalid("That file no longer exists"); }
+  if (!info.isFile()) throw invalid("Only files can be opened");
+  const path = relative(base, real).split(sep).join("/");
+  const handle = await open(real, "r");
+  try {
+    const window = Buffer.alloc(Math.min(BINARY_WINDOW, info.size));
+    await handle.read(window, 0, window.length, 0);
+    if (window.includes(0)) return { path, bytes: info.size, binary: true };
+    const size = Math.min(info.size, MAX_TEXT_BYTES);
+    const buffer = Buffer.alloc(size);
+    await handle.read(buffer, 0, size, 0);
+    const truncated = info.size > MAX_TEXT_BYTES;
+    let text = new TextDecoder("utf-8").decode(buffer);
+    // A cut inside a multi-byte character must not leave a replacement character at the end.
+    if (truncated && text.endsWith("\uFFFD")) text = text.slice(0, -1);
+    return { path, bytes: info.size, text, truncated };
+  } finally { await handle.close(); }
+}
 
 /**
  * The workspace's files for the dashboard's Files tab: the same git-aware view `@` references use, so the model and
