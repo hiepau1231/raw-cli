@@ -4763,6 +4763,7 @@ button.review-file-row:hover {
 .sp-tabs {
   display: flex;
   flex: none;
+  min-width: 0;
   gap: 2px;
   padding: 3px;
   border-radius: 10px;
@@ -4780,7 +4781,8 @@ button.review-file-row:hover {
   flex: none;
   align-items: center;
   gap: 5px;
-  min-height: 0;
+  min-width: 32px;
+  min-height: 32px;
   padding: 5px 8px;
   border: 0;
   border-radius: 7px;
@@ -4804,6 +4806,21 @@ button.review-file-row:hover {
   box-shadow: var(--seg-on-shadow);
 }
 .sp-tab.active:hover:not(:disabled) {
+  background: var(--seg-on);
+}
+
+/* Details is always last in document order, but its context badge remains visible while earlier tabs scroll. */
+.sp-tab[data-tab="__details"] {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background: var(--seg);
+}
+.sp-tab[data-tab="__details"]:hover:not(:disabled) {
+  background: var(--seg);
+}
+.sp-tab[data-tab="__details"].active,
+.sp-tab[data-tab="__details"].active:hover:not(:disabled) {
   background: var(--seg-on);
 }
 .sp-tab:focus-visible {

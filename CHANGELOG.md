@@ -15,6 +15,10 @@ All notable changes to this project are documented here. The format follows
   tab; a pending call never opens the panel or takes a tab you chose, and the
   preview is built from the request rather than by reading files before the
   gate.
+- Approvals review keeps the context-use badge visible in narrow side panels,
+  matches editing tools by exact name, and preserves diff content that looks
+  like a file header. The README overview image uses the existing neutral
+  capture rather than a contributor's local filesystem path.
 
 ## [0.1.5] - 2026-10-13
 

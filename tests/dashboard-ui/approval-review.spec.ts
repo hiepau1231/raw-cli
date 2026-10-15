@@ -122,6 +122,27 @@ for (const width of [320, 360]) {
     await seedChat(page, raw, "approval");
     await openReview(page);
     expect(Math.round((await page.locator(".inspector").boundingBox())!.width)).toBe(width);
+    const strip = page.getByRole("tablist", { name: "Side panel tabs" });
+    const stripBox = (await strip.boundingBox())!;
+    const detailsTab = page.getByRole("tab", { name: "Details", exact: true });
+    await expect(detailsTab.locator(".sp-badge")).toHaveText(/^\d+%$/);
+    const detailsBox = (await detailsTab.boundingBox())!;
+    expect(detailsBox.x).toBeGreaterThanOrEqual(stripBox.x - 0.5);
+    expect(detailsBox.x + detailsBox.width).toBeLessThanOrEqual(stripBox.x + stripBox.width + 0.5);
+    // The host tabs remain in the strip's keyboard order, even when the selected Approvals tab forces horizontal scrolling.
+    for (const title of ["Overview", "Todo", "Files changed", "Commands", "Approvals", "Details"]) {
+      const target = page.getByRole("tab", { name: title, exact: true });
+      await expect(target).toHaveCount(1);
+      await target.focus();
+      await expect(target).toBeFocused();
+      const box = (await target.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(stripBox.x - 0.5);
+      expect(box.x + box.width).toBeLessThanOrEqual(stripBox.x + stripBox.width + 0.5);
+      if (title !== "Details") {
+        const pinned = (await detailsTab.boundingBox())!;
+        expect(box.x + box.width, `${title} stays clear of the context badge`).toBeLessThanOrEqual(pinned.x + 0.5);
+      }
+    }
     const card = reviewOf(page);
     // A long path stays one ellipsised row whose full value is its title.
     const file = card.getByRole("button", { name: /links\.md/ });

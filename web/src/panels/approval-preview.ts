@@ -33,6 +33,15 @@ export interface ApprovalPreviewList {
 }
 
 const OPERATIONS = new Set<string>(["write", "edit", "delete", "rename_source", "rename_destination"]);
+/** The dashboard stores the registry alias (`name`) rather than ToolApprovalRequest.identity; canonical ids are accepted only explicitly. */
+const BUILTIN_PREVIEW_TOOLS: Readonly<Record<string, "write_file" | "edit_file" | "apply_patch">> = {
+  write_file: "write_file",
+  edit_file: "edit_file",
+  apply_patch: "apply_patch",
+  "builtin/write_file": "write_file",
+  "builtin/edit_file": "edit_file",
+  "builtin/apply_patch": "apply_patch",
+};
 const encoder = new TextEncoder();
 const byteLength = (value: string): number => encoder.encode(value).length;
 const slashes = (value: string): string => value.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -124,7 +133,7 @@ function editEntries(args: Record<string, unknown>, files: Array<{ path: string;
   const known = oldText !== undefined && newText !== undefined;
   const oldLines = oldText === undefined ? [] : lines(oldText);
   const newLines = newText === undefined ? [] : lines(newText);
-  const built = known ? buildDiff(displayOf(path, cwd).shown, [...oldLines.map((line) => `-${line}`), ...newLines.map((line) => `+${line}`)]) : undefined;
+  const built = known ? buildDiff(displayOf(path, cwd).shown, ["@@", ...oldLines.map((line) => `-${line}`), ...newLines.map((line) => `+${line}`)]) : undefined;
   return { entries: [entry(0, path, cwd, {
     operation: files[0]?.operation ?? "edit",
     ...(built ? { diff: built.diff, added: newLines.length, removed: oldLines.length } : {}),
@@ -200,14 +209,14 @@ function patchEntries(args: Record<string, unknown>, files: Array<{ path: string
 /**
  * What an approval intends to change, for the side panel's Approvals tab (docs/side-panel-design.md §3.3). The
  * arguments carry the proposed text and the effects name the files, so nothing is read from disk and no hunk
- * numbering is invented: a header and the lines as the call wrote it. The tool is recognised by the name the host
- * sent, which is the invoked name (`write_file`) or a canonical `<owner>/<id>`; anything else falls back to the
- * intended files alone. Pure, so it is unit tested.
+ * numbering is invented: a header and the lines as the call wrote them. The request name is matched against the
+ * bundled registry aliases and canonical ids explicitly; splitting `/` or `#` would let a package tool masquerade as
+ * a built-in editing tool. Pure, so it is unit tested.
  */
 export function approvalPreviews(approval: Approval, cwd: string | undefined): ApprovalPreviewList {
   const args = approval.arguments ?? {};
   const files = effectFiles(approval.effects);
-  const tool = approval.name.split(/[/#]/).pop();
+  const tool = BUILTIN_PREVIEW_TOOLS[approval.name];
   if (tool === "apply_patch") return patchEntries(args, files, cwd);
   if (tool === "write_file") return writeEntries(args, files, cwd);
   if (tool === "edit_file") return editEntries(args, files, cwd);

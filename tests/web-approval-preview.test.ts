@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Approval } from "../src/dashboard/approvals.js";
 import { MAX_PREVIEW_BYTES, MAX_PREVIEW_ENTRIES, MAX_PREVIEW_LINES, PREVIEW_TRUNCATED, approvalPreviews } from "../web/src/panels/approval-preview.js";
+import { diffKinds, diffStats } from "../web/src/tool-cards/result-data.js";
 
 const CWD = "D:/projects/app";
 
@@ -31,10 +32,27 @@ test("the tool name the host sends, and a canonical one, both preview", () => {
     name: "edit_file", arguments: { path: "src/a.ts", old_string: "a", new_string: "b" },
     effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "edit" }),
   }), CWD);
-  assert.equal(edited[0]?.diff, "--- a/src/a.ts\n+++ b/src/a.ts\n-a\n+b");
+  assert.deepEqual(diffStats(edited[0]!.diff!), { added: 1, removed: 1 });
   const patched = previews(approval({ name: "apply_patch", arguments: { patch: "*** Begin Patch\n*** Delete File: src/c.ts\n*** End Patch" } }), CWD);
   assert.equal(patched[0]?.operation, "delete");
   assert.match(patched[0]?.note ?? "", /deleted/i);
+});
+
+test("namespaced copies of editing tools stay on the safe fallback", () => {
+  for (const [name, arguments_, operation] of [
+    ["vendor/write_file", { path: "src/a.ts", content: "new" }, "write"],
+    ["vendor#edit_file", { path: "src/a.ts", old_string: "old", new_string: "new" }, "edit"],
+    ["vendor/apply_patch", { patch: "*** Begin Patch\n*** Add File: src/a.ts\n+new\n*** End Patch" }, "write"],
+  ] as const) {
+    const [entry] = previews(approval({
+      name,
+      arguments: arguments_,
+      effects: effectsOf({ path: `${CWD}/src/a.ts`, operation }),
+    }), CWD);
+    assert.equal(entry?.operation, operation);
+    assert.equal(entry?.diff, undefined);
+    assert.match(entry?.note ?? "", /no file preview/i);
+  }
 });
 
 test("write_file previews the new content as added lines", () => {
@@ -53,6 +71,20 @@ test("write_file previews the new content as added lines", () => {
   assert.match(entry?.note ?? "", /previous content is not read/i);
 });
 
+test("editing header-like content renders it as changes, not additional file headers", () => {
+  const [edited] = previews(approval({
+    name: "edit_file",
+    arguments: { path: "src/a.ts", old_string: "-- old header", new_string: "++ new header" },
+    effects: effectsOf({ path: `${CWD}/src/a.ts`, operation: "edit" }),
+  }), CWD);
+  const rendered = edited!.diff!.split("\n");
+  const kinds = diffKinds(rendered);
+  assert.equal(kinds[rendered.indexOf("--- old header")], "diff-remove");
+  assert.equal(kinds[rendered.indexOf("+++ new header")], "diff-add");
+  assert.deepEqual(diffStats(edited!.diff!), { added: 1, removed: 1 });
+  assert.equal(kinds.filter((kind) => kind.includes("diff-file")).length, 2);
+});
+
 test("edit_file previews the replaced text as a removed and an added line", () => {
   const [entry] = previews(approval({
     name: "builtin/edit_file", title: "Edit", summary: "src/a.ts",
@@ -62,7 +94,8 @@ test("edit_file previews the replaced text as a removed and an added line", () =
 
   assert.equal(entry?.operation, "edit");
   assert.deepEqual(entry?.display, { name: "a.ts", folder: "src" });
-  assert.equal(entry?.diff, "--- a/src/a.ts\n+++ b/src/a.ts\n-const a = 1;\n+const a = 2;");
+  assert.ok(entry!.diff!.includes("-const a = 1;\n+const a = 2;"));
+  assert.deepEqual(diffStats(entry!.diff!), { added: 1, removed: 1 });
   assert.equal(entry?.added, 1);
   assert.equal(entry?.removed, 1);
   assert.equal(entry?.note, undefined);
