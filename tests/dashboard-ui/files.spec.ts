@@ -219,6 +219,18 @@ test("Files Retry rereads a file that vanished and was recreated", async ({ page
   await expect(page.locator("[data-files-viewer]")).toContainText("recreated");
 });
 
+test("an ignored file deep link opens even when no files are listed", async ({ page, raw }) => {
+  workspaceFile(raw.root, ".env", "DIRECT_LINK_VALUE=visible");
+  await page.route("**/api/workspaces/files?*", (route) => route.fulfill({
+    json: { root: raw.root, entries: [], total: 0, truncated: false },
+  }));
+  await page.goto(raw.server.launchUrl);
+  await page.goto(`${new URL(raw.server.launchUrl).origin}/files?path=.env`);
+  await expect(page.locator("[data-files-viewer]")).toContainText("DIRECT_LINK_VALUE=visible");
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(page.locator("[data-files-viewer]")).toContainText("DIRECT_LINK_VALUE=visible");
+});
+
 
 test("markdown renders as source and as a preview", async ({ page, raw }) => {
   workspaceFile(raw.root, "notes.md", "# Title\n\nSome **bold** text.\n");

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { open, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { open, readdir, realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -142,7 +142,7 @@ const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg
 /** The media type a workspace file is served as in raw mode, or undefined when it is not one of the raster formats. */
 export function imageMediaType(name: string): string | undefined {
   const extension = /\.([^.\\/]+)$/.exec(name)?.[1]?.toLowerCase();
-  return extension === undefined ? undefined : IMAGE_TYPES[extension];
+  return extension !== undefined && Object.hasOwn(IMAGE_TYPES, extension) ? IMAGE_TYPES[extension] : undefined;
 }
 
 interface ResolvedFile { real: string; path: string; size: number }
@@ -213,11 +213,24 @@ export async function readWorkspaceFileText(root: string, raw: unknown): Promise
  * budget (so this and `view_image` cannot drift apart), and only the raster formats — anything else is 415.
  */
 export async function readWorkspaceImage(root: string, raw: unknown): Promise<{ bytes: Buffer; mediaType: string }> {
-  const { real, path, size } = await resolveWorkspaceFile(root, raw);
+  const { real, path } = await resolveWorkspaceFile(root, raw);
   const mediaType = imageMediaType(path);
   if (!mediaType) throw new DashboardError(415, "unsupported_media_type", "Only raster images can be shown");
-  if (size > MAX_IMAGE_BYTES) throw new DashboardError(415, "unsupported_media_type", `Images are shown up to ${Math.floor(MAX_IMAGE_BYTES / (1024 * 1024))} MiB`);
-  return { bytes: await readFile(real), mediaType };
+  const handle = await open(real, "r");
+  try {
+    const chunks: Buffer[] = [];
+    let length = 0;
+    // Inclusive end reads at most one byte beyond the budget, even if a writer grows the open file.
+    const stream = handle.createReadStream({ start: 0, end: MAX_IMAGE_BYTES, autoClose: false });
+    for await (const chunk of stream) {
+      length += chunk.length;
+      if (length > MAX_IMAGE_BYTES) {
+        throw new DashboardError(415, "unsupported_media_type", `Images are shown up to ${Math.floor(MAX_IMAGE_BYTES / (1024 * 1024))} MiB`);
+      }
+      chunks.push(chunk);
+    }
+    return { bytes: Buffer.concat(chunks, length), mediaType };
+  } finally { await handle.close(); }
 }
 
 /**

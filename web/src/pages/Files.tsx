@@ -222,7 +222,7 @@ export function FilesPage({ workspace }: { workspace: string }) {
           Reload
         </button>
       </header>
-      {listing.total === 0 ? (
+      {listing.total === 0 && !selected ? (
         <Empty title="This workspace has no files">
           The agent sees the same view through @ references, so there is nothing here to point it at.
         </Empty>
@@ -240,7 +240,7 @@ export function FilesPage({ workspace }: { workspace: string }) {
             )}
             {listing.truncated && <p className="files-summary">Showing {listing.entries.length} of {listing.total} files</p>}
             {matches === 0 ? (
-              <p className="files-page-hint">No file matches the filter</p>
+              <p className="files-page-hint">{listing.total === 0 ? "No files are listed in this workspace" : "No file matches the filter"}</p>
             ) : (
               <div className="files-tree" data-files-tree>
                 <FolderRows node={shown} open={open} toggle={toggle} selected={selected} onOpen={openFile} />

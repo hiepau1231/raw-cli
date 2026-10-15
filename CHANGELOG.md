@@ -17,6 +17,9 @@ All notable changes to this project are documented here. The format follows
   rereads failed files, and direct reads refuse `.git` / `node_modules`
   paths and symlink targets. Phone-width navigation keeps visible labels,
   and management page identity no longer includes URL query parameters.
+- Files deep links remain readable when the tree has no listed files.
+  Raw image reads accept only declared raster extensions and enforce the
+  16 MiB limit during the read, including when another process grows the file.
 
 ## [0.1.5] - 2026-10-13
 

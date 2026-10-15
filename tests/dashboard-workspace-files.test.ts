@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -298,6 +300,9 @@ test("images are offered by extension, case-insensitively, and nothing else is",
     assert.deepEqual(served.bytes, png);
     // A .png whose bytes are not an image is still served by extension; noticing is the viewer's job.
     assert.equal((await readWorkspaceImage(root, "photo.jpeg")).mediaType, "image/jpeg");
+    const atLimit = Buffer.alloc(MAX_IMAGE_BYTES, 0x61);
+    writeFileSync(join(root, "at-limit.png"), atLimit);
+    assert.deepEqual((await readWorkspaceImage(root, "at-limit.png")).bytes, atLimit);
 
     // Raw mode refuses by extension (415) and by path (422), and the two are different answers.
     for (const [name, value, code] of [
@@ -321,6 +326,36 @@ test("images are offered by extension, case-insensitively, and nothing else is",
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("raw image reads reject a file that outgrows the budget after path resolution", async (t) => {
+  const root = tempDir("raw-files-growing-image-");
+  const path = join(root, "growing.png");
+  writeFileSync(path, "small image");
+  const originalStat = fsPromises.stat;
+  let grew = false;
+  t.mock.method(fsPromises, "stat", async (...args: Parameters<typeof originalStat>) => {
+    const info = await originalStat(...args);
+    if (!grew && args[0] === path) {
+      grew = true;
+      writeFileSync(path, Buffer.alloc(MAX_IMAGE_BYTES + 1));
+    }
+    return info;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(() => readWorkspaceImage(root, "growing.png"), (error: unknown) => {
+      assert.ok(error && typeof error === "object" && "status" in error && "code" in error);
+      assert.equal(error.status, 415);
+      assert.equal(error.code, "unsupported_media_type");
+      return true;
+    });
+    assert.equal(grew, true);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the raw route serves image bytes with the headers a browser needs", async () => {
   const f = await dashboardFixture({ responses: [{ hold: true }] });
   try {
@@ -328,6 +363,12 @@ test("the raw route serves image bytes with the headers a browser needs", async 
     writeFileSync(join(f.root, "logo.png"), png);
     write(f.root, "notes.txt", "text");
     write(f.root, "drawing.svg", "<svg/>");
+    for (const extension of ["constructor", "__proto__", "tostring", "hasownproperty"]) {
+      const name = `unsupported.${extension}`;
+      write(f.root, name, "not an image");
+      assert.deepEqual(await error(f, `/workspaces/file?raw=1&path=${encodeURIComponent(name)}`),
+        { status: 415, code: "unsupported_media_type" }, extension);
+    }
 
     const response = await f.api(`/workspaces/file?raw=1&path=${encodeURIComponent("logo.png")}`);
     assert.equal(response.status, 200);
