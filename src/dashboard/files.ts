@@ -19,6 +19,10 @@ const run = promisify(execFile);
 
 export interface FileHit { path: string; name: string }
 
+function ignoredSegment(path: string): boolean {
+  return path.split(/[\\/]/).some((part) => IGNORED.has(process.platform === "win32" ? part.toLowerCase() : part));
+}
+
 function within(root: string, path: string): boolean {
   const inside = relative(root, path);
   return inside === "" || (inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside));
@@ -65,7 +69,7 @@ async function walkFiles(cwd: string, root: string): Promise<string[]> {
     } catch { continue; }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       if (++visited > MAX_LISTED) break;
-      if (IGNORED.has(entry.name) || entry.isSymbolicLink()) continue;
+      if (ignoredSegment(entry.name) || entry.isSymbolicLink()) continue;
       const path = dir ? `${dir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) { if (depth < MAX_DEPTH) queue.push({ dir: path, depth: depth + 1 }); }
       else if (entry.isFile()) files.push(path);
@@ -76,9 +80,9 @@ async function walkFiles(cwd: string, root: string): Promise<string[]> {
 
 const listings = new Map<string, { at: number; files: Promise<string[]> }>();
 /** One listing per workspace for a few seconds, so each keystroke of a query does not rescan the tree. */
-function workspaceFiles(cwd: string, root: string): Promise<string[]> {
+function workspaceFiles(cwd: string, root: string, bypassCache = false): Promise<string[]> {
   const cached = listings.get(root);
-  if (cached && Date.now() - cached.at < LIST_TTL_MS) return cached.files;
+  if (!bypassCache && cached && Date.now() - cached.at < LIST_TTL_MS) return cached.files;
   const files = gitFiles(root).then((listed) => listed ?? walkFiles(cwd, root));
   listings.delete(root);
   if (listings.size >= 32) listings.delete(listings.keys().next().value!);
@@ -93,7 +97,7 @@ export async function searchWorkspaceFiles(cwd: string, rawQuery: string, limit:
   try { root = await realpath(cwd); } catch { return []; }
   const hits: Array<{ path: string; rank: number }> = [];
   for (const path of await workspaceFiles(cwd, root)) {
-    if (path.split("/").some((part) => IGNORED.has(part))) continue;
+    if (ignoredSegment(path)) continue;
     const rank = score(path, query);
     if (rank !== Infinity) hits.push({ path, rank });
   }
@@ -132,7 +136,7 @@ export type WorkspaceFileText =
   | { path: string; bytes: number; text: string; truncated: boolean }
   | { path: string; bytes: number; binary: true };
 
-/** The raster formats the viewer can render; SVG is deliberately absent (docs/dashboard-api.md, spec D5). */
+/** The raster formats the viewer can render; SVG is deliberately absent (see docs/dashboard-api.md). */
 const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
 
 /** The media type a workspace file is served as in raw mode, or undefined when it is not one of the raster formats. */
@@ -151,13 +155,15 @@ interface ResolvedFile { real: string; path: string; size: number }
 async function resolveWorkspaceFile(root: string, raw: unknown): Promise<ResolvedFile> {
   const invalid = (message: string) => new DashboardError(422, "invalid_file", message);
   if (typeof raw !== "string" || !raw.trim() || raw.length > 4096 || raw.includes("\0")) throw invalid("Choose a file inside this workspace");
-  if (isAbsolute(raw) || raw.split(/[\\/]/).some((part) => part === "..")) throw invalid("Files must be inside the workspace");
+  if (isAbsolute(raw) || ignoredSegment(raw) || raw.split(/[\\/]/).some((part) => part === "..")) throw invalid("Files must be inside the workspace");
   let real: string; let base: string;
   try { base = await realpath(root); real = await realpath(join(base, raw)); } catch { throw invalid("That file no longer exists"); }
   if (real === base || !within(base, real)) throw invalid("Files must be inside the workspace");
+  const path = relative(base, real).split(sep).join("/");
+  if (ignoredSegment(path)) throw invalid("Files must be inside the workspace");
   let info; try { info = await stat(real); } catch { throw invalid("That file no longer exists"); }
   if (!info.isFile()) throw invalid("Only files can be opened");
-  return { real, path: relative(base, real).split(sep).join("/"), size: info.size };
+  return { real, path, size: info.size };
 }
 
 /** Reads at most `length` bytes from an offset, looping because one `read` may return fewer than asked for. */
@@ -218,13 +224,13 @@ export async function readWorkspaceImage(root: string, raw: unknown): Promise<{ 
  * The workspace's files for the dashboard's Files tab: the same git-aware view `@` references use, so the model and
  * the reader never disagree about what exists. Paths stay workspace-relative, `.git` and `node_modules` are left
  * out either way, and `total` lets a caller say how many of how many it is showing. `max` exists so the cap is
- * testable without making twenty thousand files; the route uses the default.
+ * testable without making twenty thousand files; `bypassCache` is used by an explicit Files reload.
  */
-export async function listWorkspaceFiles(root: string, options: { max?: number } = {}): Promise<WorkspaceFileListing> {
+export async function listWorkspaceFiles(root: string, options: { max?: number; bypassCache?: boolean } = {}): Promise<WorkspaceFileListing> {
   let canonical: string;
   try { canonical = await realpath(root); if (!(await stat(canonical)).isDirectory()) throw new Error("not a directory"); }
   catch { throw new DashboardError(422, "unreadable_directory", "This workspace cannot be read"); }
-  const listed = (await workspaceFiles(canonical, canonical)).filter((path) => !path.split("/").some((part) => IGNORED.has(part)));
+  const listed = (await workspaceFiles(canonical, canonical, options.bypassCache === true)).filter((path) => !ignoredSegment(path));
   const max = options.max ?? MAX_LISTED_PATHS;
   return { root: canonical, entries: listed.slice(0, max).map((path) => ({ path, name: basename(path) })), total: listed.length, truncated: listed.length > max };
 }

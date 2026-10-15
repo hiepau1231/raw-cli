@@ -103,20 +103,43 @@ test("an empty workspace lists nothing rather than failing", async () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("the files route answers the workspace listing", async () => {
+test("the files route answers the selected workspace listing and validates cwd", async () => {
   const f = await dashboardFixture({ responses: [{ hold: true }] });
+  const selected = tempDir("raw-files-selected-");
   try {
     write(f.root, "app.ts", "app");
+    write(f.root, "same.txt", "default");
     write(f.root, "src/deep/x.ts", "x");
-    const listing = await f.json<WorkspaceFileListing>("/workspaces/files");
-    assert.equal(listing.root, realpathSync.native(f.root));
-    // The fixture keeps the dashboard's own config and state under the workspace root, so the listing carries them too.
-    const listed = paths(listing);
-    assert.ok(listed.includes("app.ts") && listed.includes("src/deep/x.ts"), listed.join(", "));
-    assert.ok(listed.every((path) => path !== "" && !path.startsWith("/") && !path.includes("\\")), listed.join(", "));
-    assert.equal(listing.total, listed.length);
-    assert.equal(listing.truncated, false);
-  } finally { await f.close(); }
+    write(selected, "same.txt", "selected");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    writeFileSync(join(selected, "same.png"), png);
+    const listing = await f.json<WorkspaceFileListing>(`/workspaces/files?cwd=${encodeURIComponent(selected)}`);
+    assert.equal(listing.root, realpathSync.native(selected));
+    assert.deepEqual(paths(listing), ["same.png", "same.txt"]);
+    const text = await f.json<WorkspaceFileText>(`/workspaces/file?cwd=${encodeURIComponent(selected)}&path=${encodeURIComponent("same.txt")}`);
+    assert.deepEqual(text, { path: "same.txt", bytes: 8, text: "selected", truncated: false });
+    const raw = await f.api(`/workspaces/file?cwd=${encodeURIComponent(selected)}&raw=1&path=${encodeURIComponent("same.png")}`);
+    assert.equal(raw.status, 200);
+    assert.equal(raw.headers.get("content-type"), "image/png");
+    assert.deepEqual(Buffer.from(await raw.arrayBuffer()), png);
+    const defaultListing = await f.json<WorkspaceFileListing>("/workspaces/files");
+    assert.ok(paths(defaultListing).includes("app.ts"));
+    const invalidCwd = encodeURIComponent(join(selected, "missing"));
+    assert.equal((await error(f, `/workspaces/files?cwd=${invalidCwd}`)).code, "invalid_workspace");
+    assert.equal((await error(f, `/workspaces/file?cwd=${invalidCwd}&path=same.txt`)).code, "invalid_workspace");
+    assert.equal((await error(f, `/workspaces/file?cwd=${invalidCwd}&raw=1&path=same.png`)).code, "invalid_workspace");
+  } finally { await f.close(); rmSync(selected, { recursive: true, force: true }); }
+});
+
+test("a fresh listing bypasses the short workspace cache", async () => {
+  const root = tempDir("raw-files-refresh-");
+  try {
+    write(root, "before.txt", "before");
+    assert.deepEqual(paths(await listWorkspaceFiles(root)), ["before.txt"]);
+    write(root, "after.txt", "after");
+    assert.deepEqual(paths(await listWorkspaceFiles(root)), ["before.txt"]);
+    assert.deepEqual(paths(await listWorkspaceFiles(root, { bypassCache: true })), ["after.txt", "before.txt"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("reading a file returns its text, its size and whether it was cut", async () => {
@@ -181,6 +204,10 @@ test("reading refuses everything outside the workspace and everything that is no
     write(root, "keep.txt", "keep");
     mkdirSync(join(root, "folder"));
     write(other, "secret.txt", "secret");
+    write(root, ".env", "secret env");
+    write(root, ".git/config", "git internals");
+    write(root, "node_modules/pkg.js", "dependency");
+    write(root, ".git/secret.txt", "hidden target");
     // A directory link out of the workspace is unprivileged where the platform allows links at all (a junction on
     // Windows, a dir symlink elsewhere), and reading through it is what the realpath check must refuse. Hosts that
     // refuse to create one (Windows without Developer Mode: the same reason this repository's own symlink tests
@@ -188,6 +215,13 @@ test("reading refuses everything outside the workspace and everything that is no
     let linked = true;
     try { symlinkSync(other, join(root, "escape"), process.platform === "win32" ? "junction" : "dir"); }
     catch { linked = false; t.diagnostic("this host refuses to create a directory link; the escape case is skipped"); }
+    let hiddenLinked = true;
+    try {
+      symlinkSync(join(root, ".git"), join(root, "visible"), process.platform === "win32" ? "junction" : "dir");
+      symlinkSync(join(root, "node_modules"), join(root, "dependencies"), process.platform === "win32" ? "junction" : "dir");
+    }
+    catch { hiddenLinked = false; t.diagnostic("this host refuses to create an in-workspace directory link; the canonical hidden-segment case is skipped"); }
+    assert.equal(asText(await readWorkspaceFileText(root, ".env")).text, "secret env");
     const cases: Array<[string, unknown]> = [
       ["parent traversal", "../secret.txt"],
       ["absolute path", join(other, "secret.txt")],
@@ -196,6 +230,13 @@ test("reading refuses everything outside the workspace and everything that is no
       ["over the length cap", `${"a".repeat(4097)}.txt`],
       ["the workspace root itself", "."],
       ["a directory", "folder"],
+      ["a direct .git path", ".git/config"],
+      ["a direct node_modules path", "node_modules/pkg.js"],
+      ...(process.platform === "win32" ? [["case-insensitive node_modules path", "NODE_MODULES/pkg.js"]] as Array<[string, unknown]> : []),
+      ...(hiddenLinked ? [
+        ["a symlink target .git path", "visible/secret.txt"],
+        ["a symlink target node_modules path", "dependencies/pkg.js"],
+      ] as Array<[string, unknown]> : []),
       ...(linked ? [["a path through a link that leaves the workspace", "escape/secret.txt"]] as Array<[string, unknown]> : []),
       ["a file that is gone", "missing.txt"],
       ["an empty string", ""],

@@ -58,8 +58,11 @@ export function useComponents(kind: string) {
 }
 
 /** The selected workspace's files, as the Files tab's tree reads them. */
-export function useWorkspaceFiles() {
-  return useSWR<WorkspaceFileListing>(keys.workspaceFiles());
+export function useWorkspaceFiles(cwd: string) {
+  return useSWR<WorkspaceFileListing>(cwd ? keys.workspaceFiles(cwd) : null, {
+    keepPreviousData: false,
+    shouldRetryOnError: false,
+  });
 }
 
 /** The server's home directory, from the workspace listing; empty until it is known. Paths under it show as `~/…`. */

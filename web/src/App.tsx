@@ -149,9 +149,8 @@ function AgentsNav({ bootstrap, current }: { bootstrap: DashboardBootstrap | und
 }
 
 export function App() {
-  const { path, navigate } = useRouter();
-  // A page's own state can live in the query (the Files tab's open file), so routing reads the pathname alone.
-  const route = path.split("?")[0]!;
+  const { path, navigate, route } = useRouter();
+  // A page's own state can live in the query (the Files tab's open file), so page identity reads the pathname alone.
   const currentAgent = (() => {
     const segment = route.split("/")[1] === "agents" ? route.split("/")[2] : undefined;
     try {
@@ -693,7 +692,7 @@ export function App() {
                 </Empty>
               )
             ) : page === "files" ? (
-              <FilesPage key={route} workspace={workspace} />
+              <FilesPage workspace={workspace} />
             ) : page === "settings" &&
               (route.endsWith("/appearance") || route.endsWith("/chat")) ? (
               <PreferencesPage

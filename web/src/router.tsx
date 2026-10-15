@@ -15,6 +15,7 @@ interface Guard {
 }
 const RouterContext = createContext({
   path: "/",
+  route: "/",
   navigate: (_path: string) => {},
   setGuard: (_guard: Guard | undefined) => {},
 });
@@ -98,7 +99,7 @@ export function Router({ children }: { children: ReactNode }) {
     };
   }, []);
   return (
-    <RouterContext.Provider value={{ path, navigate, setGuard }}>
+    <RouterContext.Provider value={{ path, route: path.split("?")[0]!, navigate, setGuard }}>
       {children}
       <Modal
         open={!!pending}

@@ -1,17 +1,24 @@
 /**
- * The Files tab's shell (docs/files-tab-spec.md D6, D8; docs/dashboard.md): the rail reaches the page, a deep link
- * is served rather than 404ed, and adding the fifth rail item keeps every main link on screen at 320 px.
+ * The Files tab's shell: the rail reaches the page, a deep link is served rather than 404ed, and every main link stays
+ * reachable at narrow widths without page-wide overflow.
  */
 import { AxeBuilder } from "@axe-core/playwright";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, basename } from "node:path";
+import { tmpdir } from "node:os";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
-
 const axe = async (page: Page) =>
   expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
 const heading = (page: Page) => page.getByRole("heading", { name: "Files", exact: true });
 const treeOf = (page: Page) => page.locator("[data-files-tree]");
+const made: string[] = [];
+test.afterEach(() => { for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+function folder(name: string): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `raw-files-${name}-`)));
+  made.push(dir);
+  return dir;
+}
 /** A file in the fixture's workspace, which is also the dashboard's working directory. */
 function workspaceFile(root: string, path: string, text = "x"): void {
   mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -62,11 +69,12 @@ test("at 320 px every main link stays on screen and the new one keeps its name",
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
-  // D8: on a phone the labels may be visually hidden, but the links keep their names and can still be clicked.
+  // Labels remain visible on a phone, while each link keeps a 32 px touch target and fits the viewport.
   for (const name of ["Chat", "Agents", "Library", "Files", "Settings"]) {
     const link = page.getByRole("link", { name, exact: true });
     await expect(link, name).toBeVisible();
     await expect(link, name).toHaveAccessibleName(name);
+    await expect(link.locator("span").first(), name).toBeVisible();
   }
   await axe(page);
 });
@@ -117,15 +125,15 @@ test("the tree lists the workspace, opens folders and filters by path", async ({
 
 test("an empty workspace says so, and a cut listing says how many of how many are shown", async ({ page, raw }) => {
   // The fixture keeps its own config and state inside the workspace, so these two states are injected.
-  await page.route("**/api/workspaces/files", (route) =>
+  await page.route("**/api/workspaces/files?*", (route) =>
     route.fulfill({ json: { root: raw.root, entries: [], total: 0, truncated: false } }));
   await openFiles(page, raw);
   await expect(page.getByText("This workspace has no files")).toBeVisible();
   await expect(treeOf(page)).toHaveCount(0);
 
   const entries = [0, 1, 2].map((index) => ({ path: `f${index}.ts`, name: `f${index}.ts` }));
-  await page.unroute("**/api/workspaces/files");
-  await page.route("**/api/workspaces/files", (route) =>
+  await page.unroute("**/api/workspaces/files?*");
+  await page.route("**/api/workspaces/files?*", (route) =>
     route.fulfill({ json: { root: raw.root, entries, total: 20_005, truncated: true } }));
   await page.reload();
   await expect(page.getByText("Showing 3 of 20005 files")).toBeVisible();
@@ -168,6 +176,49 @@ test("choosing a file shows it, keeps the choice in the address and survives a r
   await expect(page).toHaveURL(/\/files$/);
   await expect(page.locator("[data-files-viewer]")).toContainText("Choose a file");
 });
+test("the Files tab reads the selected workspace when relative names overlap", async ({ page, raw }) => {
+  const other = folder("same-name");
+  workspaceFile(raw.root, "shared.txt", "default workspace");
+  workspaceFile(other, "shared.txt", "selected workspace");
+  await raw.json("/sessions", "POST", { cwd: other });
+  await openFiles(page, raw);
+  await treeOf(page).locator('button[data-file="shared.txt"]').click();
+  await expect(page.locator("[data-files-viewer]")).toContainText("default workspace");
+
+  await page.locator(".workspace-button:visible").click();
+  await page.locator(".workspace-popover .workspace-row", { hasText: basename(other) }).locator("[data-row-main]").click();
+  await expect(page).toHaveURL(/\/chat$/);
+  await page.getByRole("link", { name: "Files", exact: true }).click();
+  await expect(treeOf(page).locator('button[data-file="shared.txt"]')).toBeVisible();
+  await treeOf(page).locator('button[data-file="shared.txt"]').click();
+  await expect(page.locator("[data-files-viewer]")).toContainText("selected workspace");
+});
+
+test("Files Reload rereads text and immediately refreshes a new listing entry", async ({ page, raw }) => {
+  workspaceFile(raw.root, "reload.txt", "before reload");
+  await openFiles(page, raw);
+  await treeOf(page).locator('button[data-file="reload.txt"]').click();
+  await expect(page.locator("[data-files-viewer]")).toContainText("before reload");
+  writeFileSync(join(raw.root, "reload.txt"), "after reload");
+  workspaceFile(raw.root, "new-entry.txt", "new");
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(page.locator("[data-files-viewer]")).toContainText("after reload");
+  await expect(treeOf(page).locator('button[data-file="new-entry.txt"]')).toBeVisible();
+});
+
+test("Files Retry rereads a file that vanished and was recreated", async ({ page, raw }) => {
+  workspaceFile(raw.root, "retry.txt", "first");
+  await openFiles(page, raw);
+  await treeOf(page).locator('button[data-file="retry.txt"]').click();
+  await expect(page.locator("[data-files-viewer]")).toContainText("first");
+  rmSync(join(raw.root, "retry.txt"));
+  await treeOf(page).locator('button[data-file="retry.txt"]').click();
+  await expect(page.locator("[data-files-viewer]")).toContainText("no longer exists");
+  workspaceFile(raw.root, "retry.txt", "recreated");
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.locator("[data-files-viewer]")).toContainText("recreated");
+});
+
 
 test("markdown renders as source and as a preview", async ({ page, raw }) => {
   workspaceFile(raw.root, "notes.md", "# Title\n\nSome **bold** text.\n");

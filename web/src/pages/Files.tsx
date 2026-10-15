@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { ChevronRight, FileImage, FileText, Folder, FolderOpen, RotateCw, Search } from "lucide-react";
 import type { WorkspaceFileText } from "../../../src/dashboard/files.js";
 import { MAX_TEXT_BYTES } from "../../../src/dashboard/limits.js";
-import { blobDataUrl, errorText, fetchBlob } from "../api.js";
+import { api, blobDataUrl, errorText, fetchBlob } from "../api.js";
 import { keys } from "../data/keys.js";
 import { useWorkspaceFiles } from "../data/queries.js";
 import { ancestorFolders, buildTree, countFiles, fileKind, filterTree, type TreeFolder } from "../files/tree.js";
@@ -12,12 +12,13 @@ import { useRouter } from "../router.js";
 import { usePageGate } from "../states.js";
 import { CopyButton, Empty, ErrorMessage } from "../ui.js";
 
-/** The languages the code block can highlight; anything else falls back to plain text (docs/files-tab-spec.md D7). */
+/** The languages the code block can highlight; anything else falls back to plain text. */
 const LANGUAGE: Record<string, string> = {
   ts: "ts", tsx: "tsx", js: "js", jsx: "jsx", mjs: "js", cjs: "js", json: "json", md: "md", markdown: "md",
   css: "css", html: "html", py: "py", rb: "rb", rs: "rs", go: "go", sh: "sh", bash: "sh", yml: "yaml",
   yaml: "yaml", toml: "toml", sql: "sql", java: "java", kt: "kotlin", php: "php", swift: "swift",
 };
+
 const languageOf = (path: string): string => LANGUAGE[path.split(".").pop()?.toLowerCase() ?? ""] ?? "text";
 
 /** One folder's children: folders first, then files, with each branch rendered only while it is open. */
@@ -66,11 +67,15 @@ function FolderRows({ node, open, toggle, selected, onOpen }: {
 const HEAVY_TEXT = 200_000;
 
 /** The file itself: text or code, Markdown as source or preview, a raster image, or the reason it is not shown. */
-function FileView({ path, tick, onRetry }: { path: string; tick: number; onRetry: () => void }) {
+function FileView({ workspace, path, tick, onRetry }: { workspace: string; path: string; tick: number; onRetry: () => void }) {
   const kind = fileKind(path);
   const [mode, setMode] = useState<"source" | "preview">("source");
   const [image, setImage] = useState<{ url: string; bytes: number } | { failed: true } | undefined>(undefined);
-  const text = useSWR<WorkspaceFileText>(kind === "image" ? null : keys.workspaceFile(path));
+  const text = useSWR<WorkspaceFileText>(
+    kind === "image" ? null : [keys.workspaceFile(workspace, path), tick],
+    ([url]) => api<WorkspaceFileText>(url),
+    { dedupingInterval: 0, keepPreviousData: false, shouldRetryOnError: false },
+  );
   useEffect(() => {
     setMode("source");
     if (kind !== "image") { setImage(undefined); return; }
@@ -78,12 +83,12 @@ function FileView({ path, tick, onRetry }: { path: string; tick: number; onRetry
     const controller = new AbortController();
     setImage(undefined);
     // A data URL, not an object URL: the dashboard's CSP allows `img-src 'self' data:` and blocks `blob:`.
-    void fetchBlob(keys.workspaceImage(path), controller.signal)
+    void fetchBlob(keys.workspaceImage(workspace, path), controller.signal)
       .then(async (blob) => ({ url: await blobDataUrl(blob), bytes: blob.size }))
       .then((shown) => { if (!controller.signal.aborted) setImage(shown); })
       .catch(() => { if (!controller.signal.aborted) setImage({ failed: true }); });
     return () => controller.abort();
-  }, [path, kind, tick]);
+  }, [workspace, path, kind, tick]);
 
   if (kind === "image") {
     if (!image) return <p className="files-page-hint">Loading…</p>;
@@ -133,17 +138,31 @@ function FileView({ path, tick, onRetry }: { path: string; tick: number; onRetry
 }
 
 /**
- * The Files tab (docs/files-tab-spec.md): a read-only tree of the selected workspace with a filter, and the file it
- * opens. The listing is the same git-aware view the agent's `@` references use, so the two never disagree.
+ * The Files tab: a read-only tree of the selected workspace with a filter and the file it opens. The listing is the
+ * same git-aware view the agent's `@` references use, so the two never disagree.
  */
 export function FilesPage({ workspace }: { workspace: string }) {
   const { path, navigate } = useRouter();
-  const selected = useMemo(() => new URLSearchParams(path.split("?")[1] ?? "").get("path") ?? "", [path]);
-  const { data, error, mutate } = useWorkspaceFiles();
-  const gate = usePageGate({ ready: !!data, error, onRetry: () => void mutate(), label: "Loading files" });
+  const selected = useMemo(() => {
+    const query = path.indexOf("?");
+    return new URLSearchParams(query < 0 ? "" : path.slice(query + 1)).get("path") ?? "";
+  }, [path]);
+  const { data, error, mutate } = useWorkspaceFiles(workspace);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [tick, setTick] = useState(0);
+  const previousWorkspace = useRef(workspace);
+  const resettingWorkspace = useRef(false);
+  const reload = async () => {
+    setTick((value) => value + 1);
+    if (!workspace) return;
+    try {
+      await mutate(api(keys.workspaceFiles(workspace, true)), { revalidate: false });
+    } catch {
+      // SWR stores the failure on the current key; the page gate/viewer renders it on the next pass.
+    }
+  };
+  const gate = usePageGate({ ready: !!data, error, onRetry: () => void reload(), label: "Loading files" });
   const tree = useMemo(() => buildTree((data?.entries ?? []).map((entry) => entry.path)), [data]);
   const shown = useMemo(() => filterTree(tree, query), [tree, query]);
   const filtering = query.trim() !== "";
@@ -153,9 +172,27 @@ export function FilesPage({ workspace }: { workspace: string }) {
     if (!next.delete(folder)) next.add(folder);
     return next;
   });
-  const openFile = (file: string) => navigate(`/files?path=${encodeURIComponent(file)}`);
+  const openFile = (file: string) => {
+    if (file === selected) setTick((value) => value + 1);
+    navigate(`/files?path=${encodeURIComponent(file)}`);
+  };
+  useEffect(() => {
+    const previous = previousWorkspace.current;
+    previousWorkspace.current = workspace;
+    if (!previous || !workspace || previous === workspace) return;
+    resettingWorkspace.current = true;
+    setQuery("");
+    setOpen(new Set());
+    setTick(0);
+    if (selected) navigate("/files");
+    else resettingWorkspace.current = false;
+  }, [workspace, navigate, selected]);
   // The file in the address opens the folders leading to it, without closing what the reader opened.
   useEffect(() => {
+    if (resettingWorkspace.current) {
+      resettingWorkspace.current = false;
+      return;
+    }
     if (!selected) return;
     const ancestors = ancestorFolders(selected);
     if (!ancestors.length) return;
@@ -175,13 +212,12 @@ export function FilesPage({ workspace }: { workspace: string }) {
   }, [shown, filtering]);
   if (gate || !data) return gate;
   const listing = data;
-  const reload = () => { void mutate(); setTick((value) => value + 1); };
   return (
     <div className="files-page">
       <header className="page-header">
         <h1>Files</h1>
         <span className="workspace-path" title={workspace}>{workspace}</span>
-        <button type="button" className="foot-button" onClick={reload} title="Read the listing and the open file again">
+        <button type="button" className="foot-button" onClick={() => void reload()} title="Read the listing and the open file again">
           <RotateCw size={14} aria-hidden="true" />
           Reload
         </button>
@@ -219,7 +255,7 @@ export function FilesPage({ workspace }: { workspace: string }) {
                   <span className="files-viewer-path" title={selected}>{selected}</span>
                   <CopyButton value={selected} label="Copy path" />
                 </div>
-                <FileView path={selected} tick={tick} onRetry={reload} />
+                <FileView key={`${workspace}:${selected}`} workspace={workspace} path={selected} tick={tick} onRetry={() => void reload()} />
               </>
             ) : (
               <p className="files-page-hint">Choose a file to read it here.</p>

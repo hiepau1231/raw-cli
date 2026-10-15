@@ -1,6 +1,6 @@
 /**
- * The Files tab's tree, built from the workspace listing the host returns (docs/files-tab-spec.md D2, D7). Pure: no
- * React, no fetching, so the shapes and the filtering are unit tested.
+ * The Files tab's tree, built from the workspace listing the host returns. Pure: no React and no fetching, so the shapes
+ * and the filtering are unit tested.
  */
 export type FileKind = "markdown" | "image" | "text";
 

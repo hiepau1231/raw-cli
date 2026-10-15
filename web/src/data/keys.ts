@@ -17,9 +17,9 @@ export const keys = {
   config: () => "/config",
   activity: () => "/activity",
   workspaces: () => "/workspaces",
-  workspaceFiles: () => "/workspaces/files",
-  workspaceFile: (path: string) => `/workspaces/file?path=${enc(path)}`,
-  workspaceImage: (path: string) => `/workspaces/file?path=${enc(path)}&raw=1`,
+  workspaceFiles: (cwd: string, refresh = false) => `/workspaces/files?cwd=${enc(cwd)}${refresh ? "&refresh=1" : ""}`,
+  workspaceFile: (cwd: string, path: string) => `/workspaces/file?cwd=${enc(cwd)}&path=${enc(path)}`,
+  workspaceImage: (cwd: string, path: string) => `/workspaces/file?cwd=${enc(cwd)}&path=${enc(path)}&raw=1`,
   sessions: ({ cwd, title, limit = 50, before }: SessionsQuery) =>
     `/sessions?cwd=${enc(cwd)}&title=${enc(title)}&limit=${limit}${before ? `&before=${enc(before)}` : ""}`,
   composer: (agent: string) => `/agents/${enc(agent)}/composer`,

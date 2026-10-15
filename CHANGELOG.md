@@ -12,6 +12,11 @@ All notable changes to this project are documented here. The format follows
   Preview) and raster images. It never writes, a path that leaves the workspace
   stays unreachable, and the open file lives in the address so a reload keeps
   the place.
+- Files reads and browser caches now follow the selected workspace. Reload
+  immediately refreshes both the listing and open text or image, Retry
+  rereads failed files, and direct reads refuse `.git` / `node_modules`
+  paths and symlink targets. Phone-width navigation keeps visible labels,
+  and management page identity no longer includes URL query parameters.
 
 ## [0.1.5] - 2026-10-13
 
