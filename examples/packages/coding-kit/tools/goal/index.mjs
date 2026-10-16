@@ -110,16 +110,20 @@ export function validateArgs(args) {
   return undefined;
 }
 
-function idsFor(items, prefix) {
-  const used = new Set(items.flatMap((item) => item.id === undefined ? [] : [item.id]));
+/**
+ * Gives every item an id, preferring the smallest unused `<prefix><n>`. `used` is shared by the criteria and the steps
+ * of one call, so an id one list already uses is never handed out again in the other: the host validates each block
+ * separately, but the tool keeps ids unambiguous across both so one update can name an id from each list.
+ */
+function idsFor(items, prefix, used) {
   let next = 1;
   return items.map((item) => {
     let id = item.id;
     if (id === undefined) {
       while (used.has(`${prefix}${next}`)) next++;
       id = `${prefix}${next}`;
-      used.add(id);
     }
+    used.add(id);
     return { ...item, id };
   });
 }
@@ -164,10 +168,11 @@ function setState(value) {
     return `the goal would hold ${criteria.length} criteria; the limit is ${MAX_CRITERIA}`;
   }
   if (steps.length > MAX_STEPS) return `the goal would hold ${steps.length} steps; the limit is ${MAX_STEPS}`;
+  const used = new Set([...criteria, ...steps].flatMap((item) => item.id === undefined ? [] : [item.id]));
   const state = {
     goal: clean(value.goal), done_when: clean(value.done_when), status: "active",
-    criteria: idsFor(criteria, "c").map((item) => toItem(item, "criteria")),
-    steps: idsFor(steps, "s").map((item) => toItem(item, "steps")),
+    criteria: idsFor(criteria, "c", used).map((item) => toItem(item, "criteria")),
+    steps: idsFor(steps, "s", used).map((item) => toItem(item, "steps")),
     events: [],
   };
   const problem = oneStepInProgress(state.steps);
@@ -175,7 +180,7 @@ function setState(value) {
   return applyOutcome(state, value.outcome);
 }
 
-function mergeItems(current, changes, kind, prefix) {
+function mergeItems(current, changes, kind, prefix, used) {
   const items = current.map((item) => ({ ...item }));
   for (const change of changes ?? []) {
     // A change without an id is a new item; `idsFor` gives it the smallest unused id below.
@@ -188,14 +193,19 @@ function mergeItems(current, changes, kind, prefix) {
     if (change.note !== undefined) { if (clean(change.note)) target.note = clean(change.note); else delete target.note; }
     if (change.detail !== undefined) { if (clean(change.detail)) target.detail = clean(change.detail); else delete target.detail; }
   }
-  return idsFor(items, prefix).map((item) => toItem(item, kind));
+  return idsFor(items, prefix, used).map((item) => toItem(item, kind));
 }
 
 function updateState(before, value) {
   if (!before.goal) return "there is no goal yet; call this tool with mode set first";
-  let criteria = mergeItems(before.criteria, value.criteria, "criteria", "c");
+  // One id space for both lists: existing ids and the ids this call already names are never handed out again.
+  const used = new Set([...before.criteria, ...before.steps].flatMap((item) => [item.id]));
+  for (const change of [...(value.criteria ?? []), ...(value.steps ?? [])]) {
+    if (change.id !== undefined) used.add(change.id);
+  }
+  let criteria = mergeItems(before.criteria, value.criteria, "criteria", "c", used);
   if (typeof criteria === "string") return criteria;
-  let steps = mergeItems(before.steps, value.steps, "steps", "s");
+  let steps = mergeItems(before.steps, value.steps, "steps", "s", used);
   if (typeof steps === "string") return steps;
   if (value.clear === "done") criteria = criteria.filter((item) => !FINISHED.has(item.status));
   if (criteria.length > MAX_CRITERIA) return `the goal would hold ${criteria.length} criteria; the limit is ${MAX_CRITERIA}`;

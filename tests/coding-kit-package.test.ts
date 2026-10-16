@@ -33,6 +33,12 @@ function criteriaItems(panel: StoredPanel | undefined): Array<Record<string, unk
   return block !== undefined && "items" in block ? [...(block.items as Array<Record<string, unknown>>)] : [];
 }
 
+/** The items of one named block, when the panel has it. */
+function blockItems(panel: StoredPanel | undefined, blockId: string): Array<Record<string, unknown>> {
+  const block = panel?.document.blocks.find((entry) => entry.id === blockId);
+  return block !== undefined && "items" in block ? [...(block.items as Array<Record<string, unknown>>)] : [];
+}
+
 /** The events of one timeline block, when the panel has that block. */
 function timelineEvents(panel: StoredPanel | undefined, blockId: string): Array<Record<string, unknown>> {
   const block = panel?.document.blocks.find((entry) => entry.id === blockId);
@@ -334,6 +340,24 @@ test("the same outcome is recorded once, and a full log refuses another transiti
     assert.equal(overflow.result.code, "invalid_goal");
     assert.match(overflow.text, /100/);
     assert.equal(timelineEvents(stored(), "log").length, 100, "a refused outcome stores nothing");
+  });
+});
+
+test("generated ids never collide with an id the other collection already uses", async () => {
+  await withInstalledKit(async (kit) => {
+    const created = await kit.run({ mode: "set", goal: "Keep ids unique across both lists",
+      done_when: "one update can name an id from each list",
+      criteria: [{ id: "s1", label: "criterion" }], steps: [{ label: "step" }] });
+    assert.equal(created.result.isError, false);
+    const criteria = blockItems(created.stored, "criteria").map((item) => item.id);
+    const steps = blockItems(created.stored, "steps").map((item) => item.id);
+    assert.deepEqual(criteria, ["s1"], "an explicit id is kept as given");
+    assert.notEqual(steps[0], "s1", "the generated step id must avoid the criterion's explicit s1");
+    const both = await kit.run({ mode: "update",
+      criteria: [{ id: criteria[0], status: "done" }], steps: [{ id: steps[0], status: "done" }] });
+    assert.equal(both.result.isError, false, "one update names an id from each list");
+    assert.deepEqual(blockItems(both.stored, "criteria").map((item) => item.status), ["done"]);
+    assert.deepEqual(blockItems(both.stored, "steps").map((item) => item.status), ["done"]);
   });
 });
 
