@@ -312,6 +312,31 @@ test("text that is only control characters cannot become the goal or a label", a
   });
 });
 
+test("the same outcome is recorded once, and a full log refuses another transition by name", async () => {
+  await withInstalledKit(async (kit) => {
+    const stored = () => kit.host.snapshot().find((panel) => panel.panelId === PANEL_ID);
+    await kit.run({ mode: "set", goal: "Count the log", done_when: "the log stays bounded",
+      criteria: [{ label: "one" }] });
+    const closed = await kit.run({ mode: "update", outcome: "achieved" });
+    assert.equal(closed.result.isError, false);
+    const repeated = await kit.run({ mode: "update", outcome: "achieved" });
+    assert.equal(repeated.result.isError, false, "closing an already closed goal is not an error");
+    assert.equal(timelineEvents(stored(), "log").length, 1, "the same outcome is recorded once");
+    // The host keeps at most 100 timeline events (src/panels/validate.ts), so fill the log with real transitions.
+    for (let index = 0; index < 99; index++) {
+      const flip = await kit.run({ mode: "update", outcome: index % 2 === 0 ? "abandoned" : "achieved" });
+      assert.equal(flip.result.isError, false, `transition ${index + 2} must be recordable`);
+    }
+    assert.equal(timelineEvents(stored(), "log").length, 100);
+    const next = stored()?.document.status === "done" ? "abandoned" : "achieved";
+    const overflow = await kit.run({ mode: "update", outcome: next });
+    assert.equal(overflow.result.isError, true);
+    assert.equal(overflow.result.code, "invalid_goal");
+    assert.match(overflow.text, /100/);
+    assert.equal(timelineEvents(stored(), "log").length, 100, "a refused outcome stores nothing");
+  });
+});
+
 test("the goal skill parses and the composer offers /goal", async () => {
   const folder = join(KIT, "skills", "goal");
   const skill = parseSkillMarkdown(readFileSync(join(folder, "SKILL.md"), "utf8"), "goal");

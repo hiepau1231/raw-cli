@@ -14,6 +14,8 @@ const MAX_STEPS = 30;
 const GOAL_CHARS = 80;
 const DONE_WHEN_CHARS = 120;
 const MAX_DOCUMENT_BYTES = 65536;
+/** The host's default timeline bound: at most 100 events in one timeline block (src/panels/validate.ts). */
+const MAX_EVENTS = 100;
 const CONTEXT_SUMMARY_BYTES = 2048;
 
 const STATUSES = new Set(["pending", "in_progress", "done", "blocked", "skipped"]);
@@ -135,11 +137,21 @@ function oneStepInProgress(steps) {
   return running.length > 1 ? `item "${running[1].id}": at most one step may be in_progress` : undefined;
 }
 
-/** Closes the goal with one timeline event; both modes honour a supplied outcome. */
+/**
+ * Closes the goal with one timeline event; both modes honour a supplied outcome. The host keeps at most 100 events in
+ * a timeline block (`src/panels/validate.ts`), so the outcome the goal already has changes nothing, and a real
+ * transition that would overflow the log is refused by name instead of publishing a document the host drops.
+ */
 function applyOutcome(state, outcome) {
   if (outcome !== "achieved" && outcome !== "abandoned") return state;
   const achieved = outcome === "achieved";
-  state.status = achieved ? "done" : "failed";
+  const status = achieved ? "done" : "failed";
+  if (state.status === status) return state;
+  if (state.events.length >= MAX_EVENTS) {
+    return `the goal already holds ${state.events.length} log events, and one panel keeps at most ${MAX_EVENTS}: ` +
+      "it cannot record another outcome";
+  }
+  state.status = status;
   state.events.push({ id: `e${state.events.length + 1}`, at: Date.now(), level: achieved ? "success" : "warning",
     label: achieved ? "Goal achieved" : "Goal abandoned" });
   return state;
