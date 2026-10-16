@@ -10,9 +10,10 @@
 
 const MAX_CRITERIA = 50;
 const MAX_STEPS = 30;
-/** The panel document's own limits: `title` is at most 80 characters and `subtitle` at most 120 (src/panels/validate.ts). */
+/** The panel document's own limits (src/panels/validate.ts): title 80, subtitle 120, whole document 64 KiB. */
 const GOAL_CHARS = 80;
 const DONE_WHEN_CHARS = 120;
+const MAX_DOCUMENT_BYTES = 65536;
 const CONTEXT_SUMMARY_BYTES = 2048;
 
 const STATUSES = new Set(["pending", "in_progress", "done", "blocked", "skipped"]);
@@ -54,14 +55,16 @@ export function validateArgs(args) {
   const mode = value.mode ?? "set";
   if (mode !== "set" && mode !== "update") return `mode must be "set" or "update", not "${String(mode)}"`;
   if (mode === "set") {
-    if (typeof value.goal !== "string" || !value.goal.trim()) return "mode set needs goal: what the user wants";
-    if (typeof value.done_when !== "string" || !value.done_when.trim()) {
+    if (typeof value.goal !== "string" || !clean(value.goal)) return "mode set needs goal: what the user wants";
+    if (typeof value.done_when !== "string" || !clean(value.done_when)) {
       return "mode set needs done_when: how the user will judge the goal done";
     }
     if (value.clear !== undefined) return "clear is only allowed in update mode";
   } else {
-    if (value.goal !== undefined && (typeof value.goal !== "string" || !value.goal.trim())) return "goal must be a non-empty string";
-    if (value.done_when !== undefined && (typeof value.done_when !== "string" || !value.done_when.trim())) {
+    if (value.goal !== undefined && (typeof value.goal !== "string" || !clean(value.goal))) {
+      return "goal must be a non-empty string";
+    }
+    if (value.done_when !== undefined && (typeof value.done_when !== "string" || !clean(value.done_when))) {
       return "done_when must be a non-empty string";
     }
     if (value.clear !== undefined && value.clear !== "done") return 'clear must be "done"';
@@ -90,12 +93,13 @@ export function validateArgs(args) {
         ids.add(raw.id);
       }
       // In set mode every item is new, so it needs its text. In update mode a change is either keyed by an id or, with
-      // no id, a new item that carries its own label.
+      // no id, a new item that carries its own label. Cleaning happens before this check, so text that is only control
+      // characters cannot become a label the panel must reject later.
       const needsLabel = mode === "set" || raw.id === undefined;
-      if (needsLabel && (typeof raw.label !== "string" || !raw.label.trim())) {
+      if (needsLabel && (typeof raw.label !== "string" || !clean(raw.label))) {
         return mode === "set" ? `${at}: label is required` : `${at}: a new item needs a label`;
       }
-      if (raw.label !== undefined && (typeof raw.label !== "string" || !raw.label.trim())) {
+      if (raw.label !== undefined && (typeof raw.label !== "string" || !clean(raw.label))) {
         return `${at}: label must be a non-empty string`;
       }
       if (raw.status !== undefined && !STATUSES.has(raw.status)) return `${at}: unknown status "${String(raw.status)}"`;
@@ -125,6 +129,22 @@ function toItem(raw, kind) {
   return item;
 }
 
+/** At most one step may be in progress. Set and update share the invariant. */
+function oneStepInProgress(steps) {
+  const running = steps.filter((item) => item.status === "in_progress");
+  return running.length > 1 ? `item "${running[1].id}": at most one step may be in_progress` : undefined;
+}
+
+/** Closes the goal with one timeline event; both modes honour a supplied outcome. */
+function applyOutcome(state, outcome) {
+  if (outcome !== "achieved" && outcome !== "abandoned") return state;
+  const achieved = outcome === "achieved";
+  state.status = achieved ? "done" : "failed";
+  state.events.push({ id: `e${state.events.length + 1}`, at: Date.now(), level: achieved ? "success" : "warning",
+    label: achieved ? "Goal achieved" : "Goal abandoned" });
+  return state;
+}
+
 function setState(value) {
   const criteria = value.criteria ?? [];
   const steps = value.steps ?? [];
@@ -132,12 +152,15 @@ function setState(value) {
     return `the goal would hold ${criteria.length} criteria; the limit is ${MAX_CRITERIA}`;
   }
   if (steps.length > MAX_STEPS) return `the goal would hold ${steps.length} steps; the limit is ${MAX_STEPS}`;
-  return {
+  const state = {
     goal: clean(value.goal), done_when: clean(value.done_when), status: "active",
     criteria: idsFor(criteria, "c").map((item) => toItem(item, "criteria")),
     steps: idsFor(steps, "s").map((item) => toItem(item, "steps")),
     events: [],
   };
+  const problem = oneStepInProgress(state.steps);
+  if (problem) return problem;
+  return applyOutcome(state, value.outcome);
 }
 
 function mergeItems(current, changes, kind, prefix) {
@@ -165,19 +188,13 @@ function updateState(before, value) {
   if (value.clear === "done") criteria = criteria.filter((item) => !FINISHED.has(item.status));
   if (criteria.length > MAX_CRITERIA) return `the goal would hold ${criteria.length} criteria; the limit is ${MAX_CRITERIA}`;
   if (steps.length > MAX_STEPS) return `the goal would hold ${steps.length} steps; the limit is ${MAX_STEPS}`;
-  if (steps.filter((item) => item.status === "in_progress").length > 1) {
-    return `item "${steps.filter((item) => item.status === "in_progress")[1].id}": at most one step may be in_progress`;
-  }
-  const events = before.events.map((event) => ({ ...event }));
-  let status = before.status;
-  const event = (level, label) => { events.push({ id: `e${events.length + 1}`, at: Date.now(), level, label }); };
-  if (value.outcome === "achieved") { status = "done"; event("success", "Goal achieved"); }
-  if (value.outcome === "abandoned") { status = "failed"; event("warning", "Goal abandoned"); }
-  return {
+  const problem = oneStepInProgress(steps);
+  if (problem) return problem;
+  return applyOutcome({
     goal: value.goal === undefined ? before.goal : clean(value.goal),
     done_when: value.done_when === undefined ? before.done_when : clean(value.done_when),
-    status, criteria, steps, events,
-  };
+    status: before.status, criteria, steps, events: before.events.map((event) => ({ ...event })),
+  }, value.outcome);
 }
 
 function fromDocument(document) {
@@ -188,6 +205,8 @@ function fromDocument(document) {
     status: document?.status ?? "active", criteria: items(CRITERIA), steps: items(STEPS),
     events: find(LOG)?.events ?? [] };
 }
+
+const statusWord = (status) => status === "done" ? "achieved" : status === "failed" ? "abandoned" : "active";
 
 function document(state) {
   const met = state.criteria.filter((item) => FINISHED.has(item.status)).length;
@@ -205,9 +224,10 @@ function document(state) {
     status: state.status,
     progress: { done: met, total: state.criteria.length },
     blocks,
-    // This is what Raw reminds the model of after a successful compaction (docs/context.md).
+    // This is what Raw reminds the model of after a successful compaction (docs/context.md). The status comes first so
+    // an abandoned or achieved goal is never presented as ongoing work.
     context_summary: clipBytes([
-      `Goal: ${state.goal}`,
+      `Goal (${statusWord(state.status)}): ${state.goal}`,
       `Done when: ${state.done_when}`,
       `Criteria: ${met}/${state.criteria.length} met${open.length ? `; open: ${open.map((item) => item.label).join("; ")}` : ""}`,
       ...state.steps.length ? [`Steps: ${state.steps.map((item) => `${glyph(item.status)} ${item.label}`).join(" | ")}`] : [],
@@ -223,8 +243,15 @@ export async function handler(args, context) {
     : updateState(fromDocument(context.panels.get("goal")?.document), value);
   if (typeof state === "string") return failure("invalid_goal", state);
   const panel = document(state);
+  // The host rejects a document over PANEL_LIMITS.documentBytes; refuse here instead, so an accepted call is never
+  // reported as success while nothing is stored.
+  const bytes = Buffer.byteLength(JSON.stringify(panel), "utf8");
+  if (bytes > MAX_DOCUMENT_BYTES) {
+    return failure("invalid_goal",
+      `the goal does not fit one panel document: ${bytes} bytes, and the limit is ${MAX_DOCUMENT_BYTES} (64 KiB)`);
+  }
   const met = state.criteria.filter((item) => FINISHED.has(item.status)).length;
-  const header = `Goal${state.status === "done" ? " (achieved)" : state.status === "failed" ? " (abandoned)" : ""}: ${state.goal}`;
+  const header = `Goal (${statusWord(state.status)}): ${state.goal}`;
   const text = [header, `Done when: ${state.done_when}`,
     `Criteria (${met}/${state.criteria.length} met):`, ...state.criteria.map(line),
     ...state.steps.length ? ["Steps:", ...state.steps.map(line)] : []].join("\n");

@@ -98,7 +98,8 @@
             },
             "detail": {
               "type": "string",
-              "maxLength": 300
+              "maxLength": 200,
+              "description": "One line of detail; the panel shows at most 200 characters."
             }
           }
         }

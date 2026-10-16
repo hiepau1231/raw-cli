@@ -33,6 +33,12 @@ function criteriaItems(panel: StoredPanel | undefined): Array<Record<string, unk
   return block !== undefined && "items" in block ? [...(block.items as Array<Record<string, unknown>>)] : [];
 }
 
+/** The events of one timeline block, when the panel has that block. */
+function timelineEvents(panel: StoredPanel | undefined, blockId: string): Array<Record<string, unknown>> {
+  const block = panel?.document.blocks.find((entry) => entry.id === blockId);
+  return block !== undefined && "events" in block ? [...(block.events as Array<Record<string, unknown>>)] : [];
+}
+
 type RuntimeTools = Awaited<ReturnType<typeof createRuntimeTools>>;
 interface RunResult { result: ToolResult; text: string; stored: StoredPanel | undefined }
 interface InstalledKit {
@@ -175,9 +181,8 @@ test("an achieved outcome closes the panel and records the event", async () => {
     const closed = await kit.run({ mode: "update", outcome: "achieved" });
     assert.equal(closed.result.isError, false);
     assert.equal(closed.stored?.document.status, "done");
-    const log = closed.stored?.document.blocks.find((block) => block.id === "log");
-    assert.equal(log?.kind, "timeline");
-    assert.equal((log?.events as unknown[]).length, 1);
+    assert.equal(closed.stored?.document.blocks.find((block) => block.id === "log")?.kind, "timeline");
+    assert.equal(timelineEvents(closed.stored, "log").length, 1);
   });
 });
 
@@ -228,6 +233,82 @@ test("a goal that cannot fit the panel header is refused with its limit", async 
     assert.equal(refused.result.code, "invalid_arguments");
     assert.match(refused.text, /at most 80 characters/);
     assert.equal(kit.host.snapshot().length, 0, "a refused goal never publishes a panel");
+  });
+});
+
+test("set refuses more than one step in progress, like update does", async () => {
+  await withInstalledKit(async (kit) => {
+    const refused = await kit.run({ mode: "set", goal: "Keep one step moving", done_when: "one at a time",
+      steps: [{ label: "one", status: "in_progress" }, { label: "two", status: "in_progress" }] });
+    assert.equal(refused.result.isError, true);
+    assert.equal(refused.result.code, "invalid_goal");
+    assert.match(refused.text, /at most one step may be in_progress/);
+    assert.equal(kit.host.snapshot().length, 0, "a refused set never publishes a panel");
+  });
+});
+
+test("a step detail longer than the panel allows is refused as arguments", async () => {
+  await withInstalledKit(async (kit) => {
+    const refused = await kit.run({ mode: "set", goal: "Bound the detail", done_when: "the panel accepts it",
+      steps: [{ label: "step", detail: "x".repeat(201) }] });
+    assert.equal(refused.result.isError, true);
+    assert.equal(refused.result.code, "invalid_arguments");
+    assert.equal(kit.host.snapshot().length, 0);
+    const accepted = await kit.run({ mode: "set", goal: "Bound the detail", done_when: "the panel accepts it",
+      steps: [{ label: "step", detail: "x".repeat(200) }] });
+    assert.equal(accepted.result.isError, false, "200 characters is the panel's own limit and must pass");
+  });
+});
+
+test("set applies the outcome it was given", async () => {
+  await withInstalledKit(async (kit) => {
+    const abandoned = await kit.run({ mode: "set", goal: "Stop this", done_when: "the user stops",
+      criteria: [{ label: "one thing" }], outcome: "abandoned" });
+    assert.equal(abandoned.result.isError, false);
+    assert.equal(abandoned.stored?.document.status, "failed");
+    assert.equal(timelineEvents(abandoned.stored, "log").length, 1);
+    const achieved = await kit.run({ mode: "set", goal: "Finish this", done_when: "it is done", outcome: "achieved" });
+    assert.equal(achieved.stored?.document.status, "done");
+  });
+});
+
+test("a document that cannot fit the panel is refused instead of reported as success", async () => {
+  await withInstalledKit(async (kit) => {
+    const criteria = Array.from({ length: 50 }, (_, index) => ({ label: `好${index}`.padEnd(200, "好"), note: "好".repeat(300) }));
+    const steps = Array.from({ length: 30 }, (_, index) => ({ label: `步${index}`.padEnd(200, "好"), detail: "好".repeat(200) }));
+    const refused = await kit.run({ mode: "set", goal: "Too big to store", done_when: "it fits", criteria, steps });
+    assert.equal(refused.result.isError, true);
+    assert.equal(refused.result.code, "invalid_goal");
+    assert.match(refused.text, /65536|64 KiB/);
+    assert.equal(kit.host.snapshot().length, 0, "nothing was committed");
+  });
+});
+
+test("the compaction summary says whether the goal is still open", async () => {
+  await withInstalledKit(async (kit) => {
+    const active = await kit.run({ mode: "set", goal: "Still working", done_when: "criteria met",
+      criteria: [{ label: "open one" }] });
+    assert.match(active.stored?.document.context_summary ?? "", /active/i);
+    const abandoned = await kit.run({ mode: "update", outcome: "abandoned" });
+    assert.match(abandoned.stored?.document.context_summary ?? "", /abandoned/i);
+    const closed = await kit.run({ mode: "set", goal: "Done deal", done_when: "it is met", outcome: "achieved" });
+    assert.match(closed.stored?.document.context_summary ?? "", /achieved/i);
+  });
+});
+
+test("text that is only control characters cannot become the goal or a label", async () => {
+  await withInstalledKit(async (kit) => {
+    // Argument-level refusals come back as `invalid_arguments`, like every other validateArgs failure.
+    const emptyGoal = await kit.run({ mode: "set", goal: "\u0001", done_when: "something" });
+    assert.equal(emptyGoal.result.isError, true);
+    assert.equal(emptyGoal.result.code, "invalid_arguments");
+    assert.match(emptyGoal.text, /goal/);
+    assert.equal(kit.host.snapshot().length, 0);
+    const emptyLabel = await kit.run({ mode: "set", goal: "Real goal", done_when: "something",
+      criteria: [{ label: "\u0002" }] });
+    assert.equal(emptyLabel.result.isError, true);
+    assert.equal(emptyLabel.result.code, "invalid_arguments");
+    assert.match(emptyLabel.text, /criteria\[0\]/);
   });
 });
 
