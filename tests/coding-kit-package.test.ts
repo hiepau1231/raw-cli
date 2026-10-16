@@ -361,6 +361,24 @@ test("generated ids never collide with an id the other collection already uses",
   });
 });
 
+test("the step-count and done_when limits are refused by name", async () => {
+  await withInstalledKit(async (kit) => {
+    const manySteps = await kit.run({ mode: "set", goal: "Too many steps", done_when: "it fits",
+      steps: Array.from({ length: 31 }, (_, index) => ({ label: `step ${index}` })) });
+    assert.equal(manySteps.result.isError, true);
+    assert.equal(manySteps.result.code, "invalid_goal");
+    assert.match(manySteps.text, /31 steps; the limit is 30/);
+    const longDoneWhen = await kit.run({ mode: "set", goal: "Bound the subtitle", done_when: "x".repeat(121) });
+    assert.equal(longDoneWhen.result.isError, true);
+    assert.equal(longDoneWhen.result.code, "invalid_arguments");
+    assert.match(longDoneWhen.text, /at most 120 characters/);
+    assert.equal(kit.host.snapshot().length, 0, "neither refusal published a panel");
+    const accepted = await kit.run({ mode: "set", goal: "Bound the subtitle", done_when: "x".repeat(120),
+      steps: Array.from({ length: 30 }, (_, index) => ({ label: `step ${index}` })) });
+    assert.equal(accepted.result.isError, false, "both boundaries themselves are accepted");
+  });
+});
+
 test("the goal skill parses and the composer offers /goal", async () => {
   const folder = join(KIT, "skills", "goal");
   const skill = parseSkillMarkdown(readFileSync(join(folder, "SKILL.md"), "utf8"), "goal");
