@@ -198,3 +198,14 @@ test("AC-1 resume reactivates only same-Goal paused steering atomically and idem
   const old=enqueue("old-goal");f.store.pauseGoalInputs(f.session.id,f.owner,"old goal stopped");f.command({action:"pause"});f.command({action:"clear"});f.command({action:"start",definition:{objective:"Second"}});f.command({action:"pause"});f.command({action:"resume"});assert.equal(f.store.queuedInputView(f.session.id,old.id)?.state,"paused");
  }finally{f.cleanup();}
 });
+
+test("AC-1 native input association survives requeue and fences delivery to a replacement Goal",()=>{
+ const f=fixture();try{
+  const a=f.command({action:"start",definition:{objective:"A"}}).goal!;
+  const queued=f.store.enqueueGoalInput(f.session.id,f.owner,{clientRequestId:"native-active",agentName:"test",input:"only A"});assert.equal(queued.state,"queued");
+  assert.equal(f.store.claimQueuedInput(f.session.id,f.owner)?.id,queued.id);f.store.releaseQueuedInput(f.session.id,f.owner,queued.id,"queued");
+  f.command({action:"clear"});f.command({action:"start",definition:{objective:"B"}});assert.equal(f.store.claimQueuedInput(f.session.id,f.owner),undefined);
+  f.store.pauseGoalInputs(f.session.id,f.owner,"B stopped");f.command({action:"pause"});f.command({action:"resume"});
+  assert.equal(f.store.queuedInputView(f.session.id,queued.id)?.state,"paused");assert.ok(f.store.queuedInputView(f.session.id,queued.id)?.reason?.includes(a.id));assert.equal(f.store.claimQueuedInput(f.session.id,f.owner),undefined);
+ }finally{f.cleanup();}
+});

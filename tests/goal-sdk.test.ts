@@ -4,6 +4,7 @@ import { createAgent } from "../src/agent.js";
 import { goalFixture, goalModel, goalRegistry, goalUsage } from "./fixtures/goals.js";
 import type { GoalDefinition, GoalSnapshot, GoalCommand, GoalReceipt } from "../src/index.js";
 import { GoalService } from "../src/index.js";
+import { SessionOperations } from "../src/sessions/operations.js";
 const definition: GoalDefinition = { objective: "Ship", maxRequests: 3 };
 test("AC-4 SDK exports contracts and rejects missing persistence/selection before inference", async () => {
   let requests = 0;
@@ -58,4 +59,31 @@ test("AC-4 SDK pause settles a standalone native-tool run too", async () => {
     await f.agent.pauseGoal(); assert.equal(f.agent.state, "idle");
     assert.equal((await running).status, "cancelled"); assert.equal(f.agent.getGoal()?.status, "paused"); assert.equal(f.requests(), 1);
   } finally { f.agent.abort(); await f.cleanup(); }
+});
+
+test("AC-4 paused SDK steering never leaks into a replacement Goal",async()=>{
+ const seen:string[]=[];const f=goalFixture(request=>{seen.push(JSON.stringify(request.messages));return{text:"Working",toolCalls:[],finishReason:"stop",usage:goalUsage};});
+ try{
+  await f.agent.runGoal({objective:"Goal A"}); const queued=f.agent.queueUserInput("ONLY_FOR_GOAL_A_DO_NOT_USE_FOR_B","only-a");
+  f.agent.commandGoal({clientRequestId:"clear-a",expectedRevision:f.agent.getGoal()!.revision,command:{action:"clear"}});
+  const count=seen.length;await f.agent.runGoal({objective:"Goal B"});assert.equal(seen.slice(count).some(text=>text.includes("ONLY_FOR_GOAL_A_DO_NOT_USE_FOR_B")),false);assert.equal(f.store.queuedInputView(f.session.id,queued.id)?.state,"paused");
+ }finally{await f.cleanup();}
+});
+for (const origin of ["released-sdk", "dead-operation"] as const) test(`AC-4 recovery ${origin} preserves paused steering for explicit resume`,async()=>{
+ const seen:string[]=[];
+ const f=goalFixture(()=>({text:"Working",toolCalls:[],finishReason:"stop",usage:goalUsage})); let host:SessionOperations|undefined;
+ try{
+  await f.agent.runGoal({objective:"Ship",maxRequests:10});
+  if(origin==="released-sdk")f.agent.queueUserInput("IMPORTANT_RECOVERED_STEERING","recover-steer");
+  await f.agent.close();
+  if(origin==="dead-operation"){
+   const active=f.store.acceptGoalOperation({sessionId:f.session.id,clientRequestId:"accepted",kind:"goal",agentName:"test",configPath:f.root+"/config.json"},{clientRequestId:"accepted",expectedRevision:f.store.getGoalState(f.session.id).revision,command:{action:"resume"}});
+   f.store.enqueueInput(f.session.id,active.owner!,{sessionId:f.session.id,clientRequestId:"recover-steer",kind:"turn",agentName:"test",configPath:f.root+"/config.json",input:"IMPORTANT_RECOVERED_STEERING",mode:"queue"});
+   f.store.database.prepare("UPDATE sessions SET owner_token='2147483647-dead',lease_until=0 WHERE id=?").run(f.session.id);
+  }
+  host=new SessionOperations({store:f.store,attach:async({owner,operation})=>({agent:createAgent({provider:{modelConfig:goalModel,async generate(request){seen.push(JSON.stringify(request.messages));return{text:"Working",toolCalls:[],finishReason:"stop",usage:goalUsage};}},registry:goalRegistry(),cwd:f.root,persistence:{store:f.store,sessionId:f.session.id,owner,ownership:"host",surface:"web",operationId:operation.id}}),modelConfig:goalModel,compactOptions:{keepRecentTurns:1,maxOutputTokens:64},async close(){}})});
+  assert.equal(seen.length,0);assert.equal(f.store.findQueuedInput(f.session.id,"recover-steer")?.state,"paused");
+  const receipt=await host.commandGoal(f.session.id,{clientRequestId:"resume-final",expectedRevision:f.store.getGoalState(f.session.id).revision,command:{action:"resume"}},{agentName:"test",configPath:f.root+"/config.json"}); await host.wait(receipt.operationId!);
+  assert.ok(seen.length>0); assert.equal(seen[0]!.split("IMPORTANT_RECOVERED_STEERING").length-1,1);assert.equal(f.store.findQueuedInput(f.session.id,"recover-steer")?.state,"delivered");
+ }finally{await host?.close();await f.cleanup();}
 });

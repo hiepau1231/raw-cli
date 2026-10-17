@@ -88,6 +88,10 @@ function workspaceActivityRow(row: Record<string, unknown>): WorkspaceActivity {
 export interface SessionOwner { token: string; generation: number }
 /** At most this many messages wait in one session's queue (open rows: queued, delivering, paused, blocked). */
 export const MAX_QUEUED_INPUTS = 20;
+// Host-owned association in the existing queue reason; retained until the input reaches a final receipt.
+const goalInputPrefix = (id: string) => `Goal ${id}: `;
+const queuedGoalId = (reason: unknown): string | undefined => typeof reason === "string"
+  ? /^Goal ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}): /.exec(reason)?.[1] : undefined;
 /** A turn intent sent while another turn runs, with its process-built blocks and request override. */
 export type QueuedIntent = OperationIntent & { blocks?: UserInput; request?: RequestOverride; mode: "queue" | "interrupt" };
 /** Where a queued message is now; final states keep only this receipt. */
@@ -315,9 +319,10 @@ export class SessionStore {
       this.writeGoalState(sessionId, after, request.command.action, actor);
       if (request.command.action === "resume") {
         // Only steering paused for this Goal is released. Hook-blocked and ordinary paused inputs stay untouched.
-        this.database.prepare(`UPDATE session_queued_inputs SET state = 'queued', reason = NULL, updated_at = ?
+        this.database.prepare(`UPDATE session_queued_inputs SET state = 'queued', reason = ?, updated_at = ?
           WHERE session_id = ? AND state = 'paused' AND substr(reason, 1, ?) = ?`)
-          .run(this.now(), sessionId, `Goal ${after.goal!.id}: `.length, `Goal ${after.goal!.id}: `);
+          .run(`${goalInputPrefix(after.goal!.id)}Awaiting Goal delivery`, this.now(), sessionId,
+            goalInputPrefix(after.goal!.id).length, goalInputPrefix(after.goal!.id));
       }
       this.database.prepare("INSERT INTO session_goal_commands(session_id, client_request_id, request_hash, receipt_json) VALUES (?, ?, ?, ?)")
         .run(sessionId, request.clientRequestId, requestHash, JSON.stringify(receipt));
@@ -1359,12 +1364,16 @@ export class SessionStore {
         if (mode === "interrupt") this.database.prepare("UPDATE session_queued_inputs SET mode = 'queue' WHERE session_id = ? AND mode = 'interrupt'").run(sessionId);
         const sequence = Number(this.database.prepare("SELECT coalesce(max(sequence), 0) + 1 AS next FROM session_queued_inputs WHERE session_id = ?").get(sessionId)?.next);
         const id = randomUUID();
+        const goal = this.getGoalState(sessionId).goal;
+        const native = goal && !["complete", "abandoned"].includes(goal.status) ? goal : undefined;
+        const state = native && native.status !== "active" ? "paused" : "queued";
+        const reason = native ? `${goalInputPrefix(native.id)}${state === "paused" ? "Resume Goal explicitly to deliver steering" : "Awaiting Goal delivery"}` : null;
         this.database.prepare(`INSERT INTO session_queued_inputs(id, session_id, sequence, client_request_id, request_hash, state, mode,
-          agent_name, config_path, input_text, blocks_json, attachments_json, request_json, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-          .run(id, sessionId, sequence, normalized.clientRequestId, requestHash, mode, normalized.agentName, normalized.configPath,
+          agent_name, config_path, input_text, blocks_json, attachments_json, request_json, reason, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(id, sessionId, sequence, normalized.clientRequestId, requestHash, state, mode, normalized.agentName, normalized.configPath,
             normalized.input!, staged?.encoded ?? null, attachments.length ? JSON.stringify(attachments) : null,
-            request === undefined ? null : JSON.stringify(request), this.now(), this.now());
+            request === undefined ? null : JSON.stringify(request), reason, this.now(), this.now());
         return this.queuedView(this.database.prepare("SELECT * FROM session_queued_inputs WHERE id = ?").get(id)!);
       });
     } finally { if (staged) this.discardDuplicateStages([staged]); }
@@ -1404,8 +1413,14 @@ export class SessionStore {
   claimQueuedInput(sessionId: string, owner: SessionOwner): { id: string; clientRequestId: string; input: UserInput } | undefined {
     return this.transaction(() => {
       this.ownerRow(sessionId, owner);
-      const row = this.database.prepare(`SELECT * FROM session_queued_inputs WHERE session_id = ? AND state = 'queued' AND mode = 'queue'
-        ORDER BY sequence LIMIT 1`).get(sessionId);
+      const rows = this.database.prepare(`SELECT * FROM session_queued_inputs WHERE session_id = ? AND state = 'queued' AND mode = 'queue'
+        ORDER BY sequence`).all(sessionId);
+      if (!rows.length) return undefined;
+      const goal = this.getGoalState(sessionId).goal;
+      const row = rows.find(item => {
+        const id = queuedGoalId(item.reason);
+        return !id || (goal?.id === id && goal.status === "active");
+      });
       if (!row) return undefined;
       this.database.prepare("UPDATE session_queued_inputs SET state = 'delivering', updated_at = ? WHERE id = ?").run(this.now(), String(row.id));
       return { id: String(row.id), clientRequestId: String(row.client_request_id), input: this.queuedInput(row) };
@@ -1416,8 +1431,10 @@ export class SessionStore {
   releaseQueuedInput(sessionId: string, owner: SessionOwner, id: string, state: "queued" | "blocked", reason?: string): void {
     this.transaction(() => {
       this.ownerRow(sessionId, owner);
+      const row = this.database.prepare("SELECT reason FROM session_queued_inputs WHERE id = ? AND session_id = ? AND state = 'delivering'").get(id, sessionId);
+      const goalId = queuedGoalId(row?.reason);
       this.database.prepare("UPDATE session_queued_inputs SET state = ?, reason = ?, updated_at = ? WHERE id = ? AND session_id = ? AND state = 'delivering'")
-        .run(state, reason ?? null, this.now(), id, sessionId);
+        .run(state, goalId ? `${goalInputPrefix(goalId)}${reason ?? "Awaiting Goal delivery"}` : reason ?? null, this.now(), id, sessionId);
     });
   }
 
@@ -1456,12 +1473,13 @@ export class SessionStore {
     this.transaction(() => {
       this.ownerRow(sessionId, owner);
       const goal = this.getGoalState(sessionId).goal;
-      this.pauseOpenInputs(sessionId, goal ? `Goal ${goal.id}: ${reason ?? "explicit resume required"}` : reason);
+      this.pauseOpenInputs(sessionId, goal ? `${goalInputPrefix(goal.id)}${reason ?? "explicit resume required"}` : reason);
     });
   }
 
   private pauseOpenInputs(sessionId: string, reason?: string): void {
-    this.database.prepare(`UPDATE session_queued_inputs SET state = 'paused', mode = 'queue', reason = ?, updated_at = ?
+    this.database.prepare(`UPDATE session_queued_inputs SET state = 'paused', mode = 'queue',
+      reason = CASE WHEN reason GLOB 'Goal ????????-????-????-????-????????????: *' THEN reason ELSE ? END, updated_at = ?
       WHERE session_id = ? AND state IN ('queued', 'delivering')`).run(reason ?? null, this.now(), sessionId);
   }
 
