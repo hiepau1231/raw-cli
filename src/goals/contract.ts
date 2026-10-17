@@ -46,6 +46,7 @@ export interface GoalUsage {
   outputCoverage: number;
   currentRequest?: {
     id: string;
+    settled?: boolean;
     inputTokens?: number;
     outputTokens?: number;
   };
@@ -156,7 +157,7 @@ export function validateGoalSize(goal: GoalSnapshot): void {
     ...goal, revision: max, status: "abandoned", reason: maxText, nextAction: maxText,
     definition: { ...goal.definition, tokenBudget: max, maxRequests: max },
     usage: { requests: max, inputTokens: max, outputTokens: max, inputCoverage: max, outputCoverage: max,
-      currentRequest: { id: "x".repeat(36), inputTokens: max, outputTokens: max } },
+      currentRequest: { id: "x".repeat(36), settled: false, inputTokens: max, outputTokens: max } },
     elapsedMs: max, elapsedApproximate: false, noProgress: max, createdAt: max, updatedAt: max,
   };
   if (Buffer.byteLength(JSON.stringify(goal), "utf8") > 65536 || Buffer.byteLength(JSON.stringify(envelope), "utf8") > 65536)

@@ -1,3 +1,6 @@
+import { createProvider } from "../src/llm/client.js";
+import { createAgent } from "../src/agent.js";
+import { anthropicFrame, startMockProvider } from "./fixtures/mock-provider.js";
 import type { ProviderAdapter } from "../src/llm/types.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -151,4 +154,22 @@ test("AC-3 cancelled unreported usage needs explicit token-cap clearing before r
   finally {
     await f.cleanup();
   }
+});
+
+test("AC-3 incomplete Anthropic stream retains provisional consumption without final coverage", async () => {
+  const mock = await startMockProvider([{ frames: [
+    anthropicFrame("message_start", { message: { id: "msg", type: "message", role: "assistant", content: [], model: "fixture", stop_reason: null, stop_sequence: null, usage: { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }),
+    anthropicFrame("content_block_start", { index: 0, content_block: { type: "text", text: "" } }),
+    anthropicFrame("content_block_delta", { index: 0, delta: { type: "text_delta", text: "Unfinished output ".repeat(200) } }),
+    anthropicFrame("content_block_stop", { index: 0 }),
+  ] }]);
+  const f = goalFixture(() => { throw new Error("unused provider"); }); await f.agent.close();
+  const agent = createAgent({ registry: f.registry, cwd: f.root, persistence: { store: f.store, sessionId: f.session.id, surface: "cli" }, provider: createProvider({ agentName: "test", provider: "anthropic", method: "anthropic-messages", model: "fixture", apiKey: "fake", baseUrl: mock.url, maxOutputTokens: 4096 }) });
+  try {
+    const result = await agent.runGoal({ objective: "Honest usage", tokenBudget: 100 });
+    assert.equal(result.code, "incomplete_stream"); assert.equal(result.goal?.stopReason, "usage_unknown");
+    const u = agent.getGoal()!.usage; assert.equal(u.requests, 1); assert.equal(u.inputTokens, 5); assert.equal(u.outputTokens, 1);
+    assert.equal(u.inputCoverage, 0); assert.equal(u.outputCoverage, 0);
+    await assert.rejects(agent.resumeGoal(), /usage_unknown/); assert.equal(mock.requests.length, 1);
+  } finally { await agent.close(); await mock.close(); await f.cleanup(); }
 });

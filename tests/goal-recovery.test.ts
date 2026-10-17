@@ -1,3 +1,7 @@
+import { spawn } from "node:child_process";
+import { join } from "node:path";
+import { rmSync } from "node:fs";
+import { openSessionStore } from "../src/sessions/store.js";
 import { GoalService } from "../src/goals/service.js";
 import { SessionOperations } from "../src/sessions/operations.js";
 import { once } from "node:events";
@@ -144,4 +148,43 @@ test("AC-3 operation recovery pauses its interrupted native goal exactly once", 
   finally {
     await f.cleanup();
   }
+});
+
+test("AC-3 SDK crash with provisional usage is recovered through a host operation without inference", { timeout: 15000 }, async () => {
+  const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), join(process.cwd(), "tests/fixtures/goal-provisional-child.ts")], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const exited = once(child, "exit"); let root: string | undefined; let store: ReturnType<typeof openSessionStore> | undefined; let agent: ReturnType<typeof createAgent> | undefined;
+  try {
+    const ready = await new Promise<{ root: string; sessionId: string }>((resolve, reject) => {
+      let text = ""; const timeout = setTimeout(() => reject(new Error("child not ready")), 10000);
+      child.once("error", e => { clearTimeout(timeout); reject(e); }); child.once("exit", () => { clearTimeout(timeout); reject(new Error("child exited")); });
+      child.stdout.on("data", b => { text += String(b); for (const line of text.split("\n")) try { const v = JSON.parse(line); if (v.ready) { clearTimeout(timeout); resolve(v); } } catch {} });
+    });
+    root = ready.root; child.kill("SIGKILL"); await exited;
+    store = openSessionStore({ env: { XDG_STATE_HOME: root }, now: () => Date.now() + 16000 });
+    const provisional = store.getGoalState(ready.sessionId).goal!;
+    assert.equal(provisional.usage.currentRequest?.settled, false);
+    const { owner } = store.acceptOperation({ sessionId: ready.sessionId, clientRequestId: "host-after-sdk-crash", kind: "turn", input: "Read only", agentName: "test", configPath: root + "/raw.json" });
+    let requests = 0;
+    agent = createAgent({ registry: goalRegistry(), cwd: root, persistence: { store, sessionId: ready.sessionId, owner: owner!, ownership: "host", surface: "web" }, provider: { modelConfig: goalModel, async generate() { requests++; return { text: "status", toolCalls: [], finishReason: "stop", usage: goalUsage }; } } });
+    assert.equal(agent.getGoal()?.status, "paused"); assert.equal(agent.getGoal()?.reason, "interrupted"); assert.equal(agent.getGoal()?.elapsedApproximate, true);
+    assert.equal(agent.getGoal()?.usage.requests, 1); assert.equal(agent.getGoal()?.usage.inputTokens, 5); assert.equal(agent.getGoal()?.usage.outputCoverage, 0);
+    await assert.rejects(agent.resumeGoal(), /usage_unknown/); assert.equal(requests, 0);
+    assert.throws(() => new GoalService({ store: store!, sessionId: ready.sessionId, owner: owner! }).command({ clientRequestId: "model-cannot-mutate", expectedRevision: agent!.getGoal()!.revision, command: { action: "block", reason: "old goal", nextAction: "wait" } }, "model"), /goal_inactive/);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await exited; }
+    await agent?.close(); store?.close(); if (root) rmSync(root, { recursive: true, force: true });
+  }
+});
+test("AC-3 a queued host turn recovers an expired SDK goal on its own idle claim", async () => {
+  const f = goalFixture(() => ({ text: "working", toolCalls: [], finishReason: "stop", usage: goalUsage }));
+  try {
+    await f.agent.runGoal({ objective: "Recover queued owner" });
+    const row = f.store.database.prepare("SELECT owner_token,owner_generation FROM sessions WHERE id=?").get(f.session.id)!;
+    const owner = { token: String(row.owner_token), generation: Number(row.owner_generation) };
+    const queued = f.store.enqueueInput(f.session.id, owner, { sessionId: f.session.id, clientRequestId: "queued-host", agentName: "test", configPath: f.root + "/raw.json", kind: "turn", mode: "queue", input: "Read status" });
+    f.store.updateGoal(f.session.id, owner, g => { g.status = "active"; delete g.reason; });
+    await f.agent.close(); f.store.database.prepare("UPDATE sessions SET owner_token='2147483647-dead',lease_until=0 WHERE id=?").run(f.session.id);
+    const count = f.requests(); f.store.startQueuedInput(f.session.id, queued.id);
+    assert.equal(f.store.getGoalState(f.session.id).goal?.status, "paused"); assert.equal(f.store.getGoalState(f.session.id).goal?.reason, "interrupted"); assert.equal(f.requests(), count);
+  } finally { await f.cleanup(); }
 });

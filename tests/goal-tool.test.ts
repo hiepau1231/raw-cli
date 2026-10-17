@@ -1,3 +1,4 @@
+import { goalFixture, goalUsage } from "./fixtures/goals.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
@@ -157,4 +158,20 @@ test("AC-2 installed native loader forwards only the model scope, arbitrary plug
 
 test("AC-2 staged updates cannot overwrite a newer user budget revision",async()=>{
  const f=fixture();try{const call=f.call();await handler({action:"update",criteria:[{id:"c",status:"done",evidence:"proof"}]},{cwd:f.root,maxOutputBytes:65536,goals:call.context});const state=f.service.state();f.service.setBudget({tokenBudget:100},"budget",state.revision);assert.throws(()=>call.settle(true),/stale_revision/);assert.equal(f.service.get()!.definition.criteria[0]!.status,"pending");assert.equal(f.service.get()!.definition.tokenBudget,100);}finally{f.cleanup();}
+});
+
+for (const action of ["complete", "block"] as const) test(`AC-2 standalone native ${action} stops remaining dispatch without another inference`, async () => {
+  let effects = 0;
+  const f = goalFixture(() => ({ text: "", toolCalls: [{ id: "terminal", name: "goal", arguments: action === "complete" ? { action } : { action, reason: "Need user", nextAction: "Supply input" } }, { id: "effect", name: "effect", arguments: {} }], finishReason: "tool_calls", usage: goalUsage }), {}, [{ name: "effect", description: "Effect", inputSchema: { type: "object" }, async handler() { effects++; return { isError: false, content: [] }; } }]);
+  try {
+    const row = f.store.database.prepare("SELECT owner_token,owner_generation FROM sessions WHERE id=?").get(f.session.id)!;
+    const owner = { token: String(row.owner_token), generation: Number(row.owner_generation) };
+    const service = new GoalService({ store: f.store, sessionId: f.session.id, owner });
+    service.start({ objective: "Host-controlled native tool", criteria: [{ id: "c", label: "Proof" }] }, "host-start", 0);
+    if (action === "complete") service.command({ clientRequestId: "proof", expectedRevision: service.state().revision, command: { action: "update", criteria: [{ id: "c", status: "done", evidence: "Verified" }] } }, "model");
+    const result = await f.agent.run("Work on the current goal");
+    assert.equal(result.status, "completed"); assert.equal(f.agent.getGoal()?.status, action === "complete" ? "complete" : "blocked");
+    assert.equal(effects, 0); assert.equal(f.requests(), 1);
+    assert.ok(f.agent.transcript.some(m => m.role === "tool" && m.callId === "effect" && m.result.code === "cancelled"));
+  } finally { await f.cleanup(); }
 });

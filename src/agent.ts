@@ -190,6 +190,7 @@ export class AgentSession {
   private persistence: { store: SessionStore; sessionId: string; owner: SessionOwner; surface: HistorySurface; ownership: "agent" | "host"; operationId?: string } | undefined;
   private heartbeat: NodeJS.Timeout | undefined;
   private nativeGoal: GoalRuntime | undefined;
+  private pendingGoalCall = false;
   private persistenceFailed = false;
   private persistenceError: Error | undefined;
   private currentTurnId: string | undefined;
@@ -282,7 +283,7 @@ export class AgentSession {
         this.persistence = { store, sessionId, owner, surface, ownership: options.persistence.ownership ?? "agent",
           ...(options.persistence.operationId ? { operationId: options.persistence.operationId } : {}) };
         if (this.persistence.ownership === "agent") this.heartbeat = setInterval(() => {
-          try { store.renewSession(sessionId, owner); this.nativeGoal?.heartbeat(); }
+          try { store.renewSession(sessionId, owner); this.checkpointGoal(); }
           catch (error) {
             this.persistenceFailed = true;
             this.persistenceError = error instanceof Error ? error : new Error(String(error));
@@ -346,7 +347,7 @@ export class AgentSession {
     return this.getGoal();
   }
   /** @internal Flushes monotonic goal elapsed time from the existing owner heartbeat. */
-  checkpointGoal(): void { this.nativeGoal?.heartbeat(); }
+  checkpointGoal(): void { if (!this.pendingGoalCall) this.nativeGoal?.heartbeat(); }
   private requestSystem(): string { return this.nativeGoal?.system(this.options.system) ?? this.options.system; }
 
   private panelScope(runId = this.currentTurnId ?? randomUUID()) {
@@ -837,7 +838,7 @@ export class AgentSession {
               cacheKey: this.cacheKey, maxOutputTokens: outputBudget,
               ...(anthropic ? { instructions: nativeInstructions({ words: checkpointWords(outputBudget), instructions: settings.instructions }) } : {}),
               onUsage: (raw) => recordUsage(-1, raw) }), abortable()]);
-            entries.get(-1)?.goal?.settle(result.usage);
+            if (!controller.signal.aborted) entries.get(-1)?.goal?.settle(result.usage, true);
             if (this.persistenceError) throw this.persistenceError;
             if (controller.signal.aborted) return { status: "cancelled", beforeBytes, afterBytes: beforeBytes };
             const portable = nativePortableText(result.summary, this.summaryText);
@@ -868,6 +869,7 @@ export class AgentSession {
             ...(toolChoiceKeepsCache(provider.modelConfig) ? { toolChoice: "none" as const } : {}) } } : {}),
           onRequestStart: startUsage,
           onUsage: recordUsage,
+          onRequestEnd: (index, raw) => entries.get(index)?.goal?.settle(raw, true),
         }), abortable()]);
         if (this.persistenceError) throw this.persistenceError;
         if (controller.signal.aborted || work.status === "cancelled") return { status: "cancelled", beforeBytes, afterBytes: beforeBytes };
@@ -1273,6 +1275,7 @@ export class AgentSession {
     const finish = async (result: RunResult): Promise<RunResult> => {
       if (!ended) {
         ended = true;
+        this.pendingGoalCall = false;
         this.panels.setListener(undefined);
         let finalResult = result;
         if (this.nativeGoal && !this.persistenceError) {
@@ -1519,7 +1522,7 @@ export class AgentSession {
                 onReasoningDelta: text => { if (!controller.signal.aborted) emit({ type: "reasoning_delta", text }); },
                 onUsage: raw => { if (!controller.signal.aborted) goalRequest?.usage(raw); recordUsage(raw); },
               }), aborted]);
-              if (!controller.signal.aborted) goalRequest?.settle(turn.usage);
+              if (!controller.signal.aborted) goalRequest?.settle(turn.usage, true);
               return turn;
             } finally { goalRequest?.settle(); }
           };
@@ -1594,6 +1597,7 @@ export class AgentSession {
           }
           const goalCall = !call.argumentError && this.toolIdentity(call.name) === "builtin/goal" && this.persistence
             ? new GoalCall(() => this.persistence!.store.getGoalState(this.persistence!.sessionId), controller.signal) : undefined;
+          this.pendingGoalCall = !!goalCall;
           const panelInfo = call.argumentError ? undefined : this.options.registry.panelDeclarations(call.name);
           const panelCall = panelInfo ? this.panels.begin(call.id, panelInfo, "tool", this.panelScope()) : undefined;
           dispatchedAt.set(call.id, performance.now());
@@ -1627,9 +1631,10 @@ export class AgentSession {
             ? capResult(errorResult("vision_disabled", "this model cannot receive image content; use a text-description tool"), this.options.maxOutputBytes)
             : dispatched;
           const priorProgress = goalCall ? JSON.stringify(this.getGoal()?.definition) : undefined;
+          this.pendingGoalCall = false;
           appendResult(call, result, panelCall, goalCall);
-          if (this.nativeGoal) {
-            if (goalCall ? priorProgress !== JSON.stringify(this.getGoal()?.definition) : startedCalls.has(call.id)) this.nativeGoal.work();
+          if (this.nativeGoal || goalCall) {
+            if (goalCall ? priorProgress !== JSON.stringify(this.getGoal()?.definition) : startedCalls.has(call.id)) this.nativeGoal?.work();
             const goal = this.getGoal();
             if ((!goal || goal.status !== "active") && !controller.signal.aborted) {
               for (const remaining of turn.toolCalls.slice(index + 1)) appendResult(remaining, cancelled(remaining));

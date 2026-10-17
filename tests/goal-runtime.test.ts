@@ -138,3 +138,21 @@ test("AC-3 continuation fires UserPromptSubmit and Stop exactly once", async () 
     await f.cleanup();
   }
 });
+
+test("AC-3 elapsed heartbeat during a slow post-tool hook does not invalidate staged progress", { timeout: 15000 }, async () => {
+  let waited = false;
+  const hooks = { validateTools() {}, async run(event: string, request: { tool?: { identity: string } }) {
+    if (event === "PostToolUse" && request.tool?.identity === "builtin/goal" && !waited) {
+      waited = true; await new Promise(resolve => setTimeout(resolve, 5350));
+    }
+    return {};
+  } } as unknown as HookDispatcher;
+  const f = goalFixture((_request, n) => ({ text: "", toolCalls: [n === 1 ? { id: "proof", name: "goal", arguments: { action: "update", criteria: [{ id: "c", status: "done", evidence: "Verified" }] } } : { id: "complete", name: "goal", arguments: { action: "complete" } }], finishReason: "tool_calls", usage: goalUsage }), { hooks });
+  try {
+    const result = await f.agent.runGoal({ objective: "Slow hook", criteria: [{ id: "c", label: "Proof" }] });
+    assert.equal(result.goal?.snapshot?.status, "complete"); assert.equal(f.requests(), 2);
+    assert.equal(f.agent.getGoal()?.definition.criteria[0]?.evidence, "Verified");
+    assert.ok(f.agent.getGoal()!.elapsedMs >= 5300);
+    assert.ok(!f.agent.transcript.some(m => m.role === "tool" && m.result.code === "stale_revision"));
+  } finally { await f.cleanup(); }
+});

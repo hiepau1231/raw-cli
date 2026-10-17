@@ -430,6 +430,7 @@ export class SessionStore {
         if (saved !== intent.agentName) throw new SessionOperationError("agent_mismatch", `This session's saved agent is ${saved ?? "not set"}; send a message to switch to ${intent.agentName} first`);
       }
       const owner = this.claimInTransaction(intent.sessionId);
+      this.recoverGoalInTransaction(intent.sessionId);
       const operation: SessionOperation = { ...normalized, id: randomUUID(), state: "accepted",
         ownerGeneration: owner.generation, acceptedAt: this.now(), updatedAt: this.now() };
       this.database.prepare(`INSERT INTO session_operations(id, session_id, client_request_id, request_hash,
@@ -551,6 +552,7 @@ export class SessionStore {
     const started = this.transaction(() => {
       const row = this.waitingRow(sessionId, inputId);
       const owner = this.claimInTransaction(sessionId);
+      this.recoverGoalInTransaction(sessionId);
       return { owner, ...this.takeQueuedInput(row, owner) };
     });
     if (started.blocks) { try { this.reclaimUnreferencedPayloads(); } catch { /* Idle maintenance retries reclamation. */ } }

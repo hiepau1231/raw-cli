@@ -9,6 +9,7 @@ export class GoalStop extends Error {
 export class GoalRuntime {
   private lastAt = performance.now();
   private productive = false;
+  private readonly pending = new Set<{ settle(raw?: unknown, completed?: boolean): void }>();
   private listener: ((state: GoalState) => void) | undefined;
   constructor(readonly goalId: string, private readonly options: {
     read: () => GoalState;
@@ -53,7 +54,7 @@ export class GoalRuntime {
     this.boundary();
     const id = randomUUID();
     let settled = false;
-    this.checkpoint(g => { g.usage.requests++; g.usage.currentRequest = { id }; }, "request_start", false);
+    this.checkpoint(g => { g.usage.requests++; g.usage.currentRequest = { id, settled: false }; }, "request_start", false);
     const usage = (raw: unknown) => {
       if (settled)
         return;
@@ -64,23 +65,35 @@ export class GoalRuntime {
           return;
         u.inputTokens -= old.inputTokens ?? 0;
         u.outputTokens -= old.outputTokens ?? 0;
-        u.inputCoverage -= old.inputTokens === undefined ? 0 : 1;
-        u.outputCoverage -= old.outputTokens === undefined ? 0 : 1;
+
         const input = normalized.inputTokensTotal, output = normalized.outputTokens;
         // Arithmetic that cannot be represented exactly is unknown, never fabricated as zero or rounded usage.
         const safeInput = input !== undefined && Number.isSafeInteger(input) && Number.isSafeInteger(u.inputTokens + input) ? input : undefined;
         const safeOutput = output !== undefined && Number.isSafeInteger(output) && Number.isSafeInteger(u.outputTokens + output) ? output : undefined;
-        u.currentRequest = { id, ...(safeInput === undefined ? {} : { inputTokens: safeInput }), ...(safeOutput === undefined ? {} : { outputTokens: safeOutput }) };
+        u.currentRequest = { id, settled: false, ...(safeInput === undefined ? {} : { inputTokens: safeInput }), ...(safeOutput === undefined ? {} : { outputTokens: safeOutput }) };
         u.inputTokens += safeInput ?? 0;
         u.outputTokens += safeOutput ?? 0;
-        u.inputCoverage += safeInput === undefined ? 0 : 1;
-        u.outputCoverage += safeOutput === undefined ? 0 : 1;
+
       }, "request_usage");
     };
-    return { usage, settle: (raw?: unknown) => {
-      if (!settled && raw !== undefined) usage(raw);
+    const request = { usage, settle: (raw?: unknown, completed = false) => {
+      if (settled) return;
+      if (raw !== undefined) usage(raw);
+      this.checkpoint(g => {
+        const slot = g.usage.currentRequest;
+        if (slot?.id !== id) return;
+        slot.settled = completed;
+        // Callback totals may be provisional, even when both numeric fields are present.
+        if (completed && raw !== undefined) {
+          g.usage.inputCoverage += slot.inputTokens === undefined ? 0 : 1;
+          g.usage.outputCoverage += slot.outputTokens === undefined ? 0 : 1;
+        }
+      }, "request_settle");
       settled = true;
+      this.pending.delete(request);
     } };
+    this.pending.add(request);
+    return request;
   }
   work(): void { this.productive = true; }
   final(): void {
@@ -108,6 +121,7 @@ export class GoalRuntime {
     snapshot: GoalSnapshot | null;
     stopReason: string;
   } {
+    for (const request of [...this.pending]) request.settle();
     const state = this.options.read();
     if (!state.goal || state.goal.id !== this.goalId)
       return { snapshot: null, stopReason: "goal_cleared" };

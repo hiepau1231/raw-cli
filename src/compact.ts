@@ -361,6 +361,7 @@ export async function summarizeTranscript(
     /** Largest output a retry may use: what the context after compaction has room for. */
     maxRetryOutputTokens?: number | undefined;
     onRequestStart?: (index: number) => void; onUsage?: (index: number, raw: unknown) => void;
+    onRequestEnd?: (index: number, raw: unknown) => void;
     /**
      * The main request to summarize from (design §6.6), tried first when the summary is written by the agent's own model:
      * its system prompt, tools and messages unchanged, so a provider can reuse the cached prefix.
@@ -409,6 +410,7 @@ export async function summarizeTranscript(
             onUsage: (raw) => { if (!options.signal.aborted) options.onUsage?.(index, raw); },
           });
           if (!options.signal.aborted && turn.usage !== undefined) options.onUsage?.(index, turn.usage);
+          if (!options.signal.aborted) options.onRequestEnd?.(index, turn.usage);
           if (options.signal.aborted) return { status: "cancelled" };
           const larger = Math.min(budget * 2, provider.modelConfig.maxOutputTokens ?? Infinity, options.maxRetryOutputTokens ?? Infinity);
           // A tool call is never retried here: the chunked path takes over.
@@ -485,6 +487,7 @@ export async function summarizeTranscript(
         onUsage: (raw) => { if (!options.signal.aborted) options.onUsage?.(index, raw); },
       });
       if (!options.signal.aborted && turn.usage !== undefined) options.onUsage?.(index, turn.usage);
+      if (!options.signal.aborted) options.onRequestEnd?.(index, turn.usage);
       if (options.signal.aborted) return { status: "cancelled" };
       // A summary cut at the output limit is retried once with twice the budget when the model and context allow it.
       const larger = Math.min(budget * 2, provider.modelConfig.maxOutputTokens ?? Infinity, options.maxRetryOutputTokens ?? Infinity);
