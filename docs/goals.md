@@ -17,3 +17,9 @@ State is limited to 64 KiB UTF-8 including reserved headroom for lifecycle/accou
 ## Native model tool
 
 `builtin/goal` exposes get, update, complete and block only. Update addresses existing criterion/step IDs; it cannot change the objective, required flags, labels or budgets. Block requires a reason and nextAction. The scoped API expires when the handler settles. Goal writes commit atomically with their linked tool result/history and roll back on handler error, cancellation or storage failure. Native goals never create a second persisted panel document.
+
+## Execution and recovery
+
+Explicit start/resume continues at a natural final-response boundary inside one run. Host continuation notices are audited and projected into system context, not user messages. There is one terminal run event/Stop hook. Complete/block stops remaining tool calls with linked cancellations and does not request a closing sentence. Three final replies without actual non-goal tool work or changed progress pause with no_progress; this is only an empty-loop guard.
+
+Request/token counters are cumulative across resume, replay and compaction. Streaming usage replaces the same request slot. Missing usage with a token cap pauses with usage_unknown after the request settles. Cap checks run before requests, compaction and tool dispatch. After the existing owner lease permits recovery, restart recovers an unfinished active goal as paused/interrupted and never calls a provider; a still-valid foreign lease continues to report busy. Elapsed time is monotonic active runtime time, includes approval/input waits, excludes paused/offline time and is approximate across a crash.

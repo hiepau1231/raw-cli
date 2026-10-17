@@ -154,7 +154,7 @@ export class SessionOperations {
     void active.done.catch(() => {});
     this.active.set(operation.id, active);
     const heartbeat = setInterval(() => {
-      try { this.options.store.renewSession(operation.sessionId, owner); }
+      try { this.options.store.renewSession(operation.sessionId, owner); active.agent?.checkpointGoal(); }
       catch { controller.abort(); active.agent?.abort(); }
     }, 5_000);
     this.publish({ type: "operation", sessionId: operation.sessionId, operationId: operation.id, operation });

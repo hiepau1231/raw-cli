@@ -272,6 +272,7 @@ export class SessionStore {
       || !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0 || !request.command) throw new GoalError("invalid_goal", "invalid request id, revision or command");
     if (actor !== "user" && actor !== "model") throw new GoalError("forbidden", "unknown goal actor");
     if (actor === "model" && !["update", "complete", "block"].includes(request.command.action)) throw new GoalError("forbidden", "model cannot control autonomy or definition");
+    if (actor === "model" && !owner) throw new GoalError("forbidden", "model writes require an active owner scope");
     const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable)
       : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,stable(v)])) : value;
     const requestHash = digest(JSON.stringify(stable({ actor, revision: request.expectedRevision, command: request.command })));
@@ -281,11 +282,13 @@ export class SessionStore {
         if (prior.request_hash !== requestHash) throw new GoalError("conflict", "request id was used for a different command");
         return JSON.parse(String(prior.receipt_json)) as GoalReceipt;
       }
+      const interrupted = !owner && this.database.prepare("SELECT owner_token FROM sessions WHERE id = ?").get(sessionId)?.owner_token != null;
       const controlOwner = owner ?? this.claimInTransaction(sessionId);
       this.ownerRow(sessionId, controlOwner);
       const before = this.getGoalState(sessionId);
       if (before.revision !== request.expectedRevision) throw new GoalError("stale_revision", `expected ${request.expectedRevision}, current ${before.revision}`);
       const after = transitionGoal(before, request.command, actor, this.now(), defaultMaxRequests);
+      if (interrupted && after.goal && before.goal?.id === after.goal.id) after.goal.elapsedApproximate = true;
       const receipt: GoalReceipt = { ...after, clientRequestId: request.clientRequestId, goalId: (after.goal ?? before.goal)!.id, action: request.command.action };
       this.writeGoalState(sessionId, after, request.command.action, actor);
       this.database.prepare("INSERT INTO session_goal_commands(session_id, client_request_id, request_hash, receipt_json) VALUES (?, ?, ?, ?)")
@@ -317,14 +320,26 @@ export class SessionStore {
     this.writeGoalState(sessionId, { revision: writes.goal.revision, goal: writes.goal }, "model_update", "model");
   }
 
-  private writeGoalState(sessionId: string, state: GoalState, action: string, actor: string): void {
+  /** Recovery is a fenced host action, not a user command or a retention-extending read. */
+  private recoverGoalInTransaction(sessionId: string): void {
+    const row = this.database.prepare("SELECT revision, payload_json FROM session_goals WHERE session_id = ?").get(sessionId);
+    if (row?.payload_json == null) return;
+    const goal = JSON.parse(String(row.payload_json)) as GoalSnapshot;
+    if (goal.status !== "active") return;
+    goal.status = "paused"; goal.reason = "interrupted"; goal.elapsedApproximate = true;
+    goal.revision = Number(row.revision) + 1; goal.updatedAt = this.now();
+    validateGoalSize(goal);
+    this.writeGoalState(sessionId, { revision: goal.revision, goal }, "recovery", "host", false);
+  }
+
+  private writeGoalState(sessionId: string, state: GoalState, action: string, actor: string, touch = true): void {
     this.database.prepare(`INSERT INTO session_goals(session_id, revision, payload_json) VALUES (?, ?, ?)
       ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision, payload_json=excluded.payload_json`)
       .run(sessionId, state.revision, state.goal ? JSON.stringify(state.goal) : null);
     const sequence = Number(this.database.prepare("SELECT coalesce(max(sequence), 0) AS n FROM history WHERE session_id = ?").get(sessionId)?.n ?? 0) + 1;
     this.database.prepare("INSERT INTO history(session_id, sequence, created_at, kind, payload_json, status) VALUES (?, ?, ?, 'goal_update', ?, 'complete')")
       .run(sessionId, sequence, this.now(), JSON.stringify({revision: state.revision, goal: state.goal, action, actor}));
-    this.database.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(this.now(), sessionId);
+    if (touch) this.database.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(this.now(), sessionId);
   }
 
   missingSessionMessage(): string {
@@ -367,7 +382,11 @@ export class SessionStore {
   }
 
   claimSession(sessionId: string): SessionOwner {
-    return this.transaction(() => this.claimInTransaction(sessionId));
+    return this.transaction(() => {
+      const owner = this.claimInTransaction(sessionId);
+      this.recoverGoalInTransaction(sessionId);
+      return owner;
+    });
   }
 
   sessionIsBusy(sessionId: string): boolean {
@@ -588,6 +607,7 @@ export class SessionStore {
         this.database.prepare("UPDATE session_operations SET state = 'interrupted', updated_at = ? WHERE id = ?")
           .run(this.now(), String(row.id));
         this.pauseOpenInputs(String(row.session_id));
+        if (row.current_generation === row.owner_generation) this.recoverGoalInTransaction(String(row.session_id));
         count++;
       }
       // Messages wait only while their session is held; any left in a released session wait for the user.

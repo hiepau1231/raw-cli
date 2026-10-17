@@ -1,5 +1,7 @@
 import { GoalCall } from "./goals/call.js";
-import { GoalError, type GoalState, type GoalWrites } from "./goals/contract.js";
+import { GoalService } from "./goals/service.js";
+import { GoalRuntime, GoalStop } from "./goals/runtime.js";
+import { GoalError, type GoalDefinition, type GoalSnapshot, type GoalState, type GoalWrites } from "./goals/contract.js";
 import type { ProcessSupervisor } from "./processes/supervisor.js";
 import { FILES_CHANGED_OWNER } from "./tools/write-changes.js";
 import { InteractionError, type InteractionContext, type InteractionAdapter } from "./interactions/contract.js";
@@ -67,6 +69,7 @@ export interface RunResult {
   text?: string;
   code?: string;
   message?: string;
+  goal?: { snapshot: GoalSnapshot | null; stopReason: string };
 }
 
 export type RunEvent = (
@@ -186,6 +189,7 @@ export class AgentSession {
   private signatureCache: { key: string; view: readonly ToolDefinition[]; signature: string } | undefined;
   private persistence: { store: SessionStore; sessionId: string; owner: SessionOwner; surface: HistorySurface; ownership: "agent" | "host"; operationId?: string } | undefined;
   private heartbeat: NodeJS.Timeout | undefined;
+  private nativeGoal: GoalRuntime | undefined;
   private persistenceFailed = false;
   private persistenceError: Error | undefined;
   private currentTurnId: string | undefined;
@@ -278,7 +282,7 @@ export class AgentSession {
         this.persistence = { store, sessionId, owner, surface, ownership: options.persistence.ownership ?? "agent",
           ...(options.persistence.operationId ? { operationId: options.persistence.operationId } : {}) };
         if (this.persistence.ownership === "agent") this.heartbeat = setInterval(() => {
-          try { store.renewSession(sessionId, owner); }
+          try { store.renewSession(sessionId, owner); this.nativeGoal?.heartbeat(); }
           catch (error) {
             this.persistenceFailed = true;
             this.persistenceError = error instanceof Error ? error : new Error(String(error));
@@ -303,6 +307,47 @@ export class AgentSession {
   get activeTurnId(): string | undefined { return this.currentTurnId; }
   /** The latest committed state of one panel of this session, by full ID. */
   panel(panelId: string): StoredPanel | undefined { return this.panels.snapshot().find((item) => item.panelId === panelId); }
+
+  /** Passive canonical read; does not start or resume execution. */
+  getGoal(): GoalSnapshot | undefined { return this.persistence?.store.getGoalState(this.persistence.sessionId).goal ?? undefined; }
+  private goalService(): GoalService {
+    if (!this.persistence) throw new GoalError("goals_unavailable", "native goals require session persistence");
+    if (!this.schemaView.some(tool => this.toolIdentity(tool.name) === "builtin/goal"))
+      throw new GoalError("goals_unavailable", "select builtin/goal before starting a native goal");
+    return new GoalService({ store: this.persistence.store, sessionId: this.persistence.sessionId, owner: this.persistence.owner, defaultMaxRequests: this.options.maxSteps });
+  }
+  private attachGoal(goal: GoalSnapshot): void {
+    this.nativeGoal = new GoalRuntime(goal.id, {
+      read: () => this.persistence!.store.getGoalState(this.persistence!.sessionId),
+      write: (update, action) => this.durable((store, id, owner) => store.updateGoal(id, owner, update, action)),
+      notice: payload => this.recordVisible("goal_notice", payload),
+    });
+  }
+  async runGoal(definition: GoalDefinition, onEvent?: (event: RunEvent) => void): Promise<RunResult> {
+    if (this.currentState !== "idle") throw new Error("agent session is busy or closed");
+    if (this.persistenceFailed) throw new Error("session persistence failed; close and resume to recover");
+    const service = this.goalService(); const before = service.state();
+    const receipt = service.start(definition, randomUUID(), before.revision);
+    this.attachGoal(receipt.goal!);
+    return this.runInput(definition.objective, onEvent);
+  }
+  async resumeGoal(onEvent?: (event: RunEvent) => void): Promise<RunResult> {
+    if (this.currentState !== "idle") throw new Error("agent session is busy or closed");
+    if (this.persistenceFailed) throw new Error("session persistence failed; close and resume to recover");
+    const service = this.goalService(); const before = service.state();
+    const receipt = service.resume(randomUUID(), before.revision);
+    this.attachGoal(receipt.goal!);
+    return this.runInput(this.originalTask === undefined ? receipt.goal!.definition.objective : undefined, onEvent);
+  }
+  async pauseGoal(): Promise<GoalSnapshot | undefined> {
+    const service = this.goalService(); const before = service.state();
+    if (before.goal?.status === "active") service.pause(randomUUID(), before.revision);
+    if (this.nativeGoal) { this.abort(); await this.activeRun; }
+    return this.getGoal();
+  }
+  /** @internal Flushes monotonic goal elapsed time from the existing owner heartbeat. */
+  checkpointGoal(): void { this.nativeGoal?.heartbeat(); }
+  private requestSystem(): string { return this.nativeGoal?.system(this.options.system) ?? this.options.system; }
 
   private panelScope(runId = this.currentTurnId ?? randomUUID()) {
     return { runId, ...(this.persistence ? { sessionId: this.persistence.sessionId,
@@ -343,7 +388,7 @@ export class AgentSession {
   /** What identifies the measurement conditions: system prompt, tool schemas, model, image projection and replay boundary. */
   private anchorSignature(): string {
     const { provider, model, method, vision } = this.options.provider.modelConfig;
-    const key = JSON.stringify([this.options.system, provider, model, method, vision === true, this.replayBefore]);
+    const key = JSON.stringify([this.requestSystem(), provider, model, method, vision === true, this.replayBefore]);
     if (this.signatureCache?.view !== this.schemaView || this.signatureCache.key !== key) {
       this.signatureCache = { key, view: this.schemaView, signature: createHash("sha256")
         .update(JSON.stringify([key, this.schemaView])).digest("hex").slice(0, 24) };
@@ -355,14 +400,14 @@ export class AgentSession {
    * estimated addition is used when it applies; a candidate context, or one the anchor does not describe, is the calibrated estimate.
    */
   private nextRequestSize(messages: readonly ModelMessage[] = this.sendMessages(), anchored = true): { tokens: number; exact: boolean; base: number; measured: boolean } {
-    const base = estimateRequestTokens(this.options.system, messages, this.schemaView);
+    const base = estimateRequestTokens(this.requestSystem(), messages, this.schemaView);
     const known = anchored ? anchoredEstimate(this.anchor, this.anchorSignature(), this.messages.length, base, this.tokenCalibration) : undefined;
     return known ? { ...known, base, measured: true } : { tokens: Math.ceil(base * this.tokenCalibration), exact: false, base, measured: false };
   }
   /** The anchor for a reply about to be added: the reported size of the request it answers plus the byte estimate of request and reply. */
   private anchorFor(reply: ModelMessage): ContextAnchor | undefined {
     if (this.reported === undefined) return undefined;
-    const base = estimateRequestTokens(this.options.system, this.sendMessages([...this.requestMessages(), reply]), this.schemaView);
+    const base = estimateRequestTokens(this.requestSystem(), this.sendMessages([...this.requestMessages(), reply]), this.schemaView);
     return { tokens: this.reported, base, messageCount: this.messages.length + 1, signature: this.anchorSignature() };
   }
   private requestMessages(): ModelMessage[] { return projectReplayMessages(this.messages, this.replayBefore); }
@@ -370,7 +415,7 @@ export class AgentSession {
   private sendMessages(messages: readonly ModelMessage[] = this.requestMessages()): ModelMessage[] {
     const modelConfig = this.options.provider.modelConfig;
     return projectImageLimits(projectVisionMessages(withoutHostData(messages), modelConfig.vision === true), requestImageLimits(modelConfig.method),
-      () => Buffer.byteLength(JSON.stringify(this.options.system), "utf8") + Buffer.byteLength(JSON.stringify(this.schemaView), "utf8"));
+      () => Buffer.byteLength(JSON.stringify(this.requestSystem()), "utf8") + Buffer.byteLength(JSON.stringify(this.schemaView), "utf8"));
   }
 
   private durable<T>(operation: (store: SessionStore, sessionId: string, owner: SessionOwner) => T): T | undefined {
@@ -698,11 +743,13 @@ export class AgentSession {
     const retryCap = outputBudget === undefined || budget === Infinity ? undefined
       : Math.max(outputBudget, fitOutput(budget - (target - left - reserve(outputBudget))));
 
-    const entries = new Map<number, { entry: UsageRecord; rawIndex?: number }>();
+    const entries = new Map<number, { entry: UsageRecord; rawIndex?: number; goal?: ReturnType<GoalRuntime["request"]> }>();
     // Each request of this compaction is recorded when it starts and again when its usage is reported.
     const startUsage = (index: number) => {
+      for (const previous of entries.values()) previous.goal?.settle();
+      const goal = this.nativeGoal?.request(provider.modelConfig);
       const entry: UsageRecord = { method: provider.modelConfig.method, provider: provider.modelConfig.provider, raw: undefined };
-      entries.set(index, { entry });
+      entries.set(index, { entry, ...(goal ? { goal } : {}) });
       this.usageEntries.push(entry);
       this.durable((store, sessionId, owner) => store.updateAgentMetadata(sessionId, owner,
         { rawUsage: this.rawUsage, usageEntries: this.usageEntries }));
@@ -711,6 +758,7 @@ export class AgentSession {
       if (controller.signal.aborted) return;
       const current = entries.get(index);
       if (!current) return;
+      current.goal?.usage(raw);
       current.entry.raw = structuredClone(raw);
       if (current.rawIndex === undefined) current.rawIndex = this.rawUsage.push(structuredClone(raw)) - 1;
       else this.rawUsage[current.rawIndex] = structuredClone(raw);
@@ -784,11 +832,12 @@ export class AgentSession {
           try {
             startUsage(-1);
             // The stored messages before the tail, exactly as the last main request sent them.
-            const result = await Promise.race([provider.compact!({ system: this.options.system, tools: this.schemaView,
+            const result = await Promise.race([provider.compact!({ system: this.requestSystem(), tools: this.schemaView,
               messages: this.sendMessages().slice(0, cut), timeoutMs: this.options.requestTimeoutMs, signal: controller.signal,
               cacheKey: this.cacheKey, maxOutputTokens: outputBudget,
               ...(anthropic ? { instructions: nativeInstructions({ words: checkpointWords(outputBudget), instructions: settings.instructions }) } : {}),
               onUsage: (raw) => recordUsage(-1, raw) }), abortable()]);
+            entries.get(-1)?.goal?.settle(result.usage);
             if (this.persistenceError) throw this.persistenceError;
             if (controller.signal.aborted) return { status: "cancelled", beforeBytes, afterBytes: beforeBytes };
             const portable = nativePortableText(result.summary, this.summaryText);
@@ -814,7 +863,7 @@ export class AgentSession {
           maxOutputTokensDefaulted: settings.maxOutputTokensDefaulted || outputBudget !== settings.maxOutputTokens,
           timeoutMs: this.options.requestTimeoutMs, signal: controller.signal, cacheKey: `${this.cacheKey}:compact`,
           // The agent's own model can summarize from the main request itself and reuse its cached prefix (§6.6).
-          ...(provider === this.options.provider ? { sameContext: { system: this.options.system, tools: this.schemaView,
+          ...(provider === this.options.provider ? { sameContext: { system: this.requestSystem(), tools: this.schemaView,
             messages: this.sendMessages(), cacheKey: this.cacheKey,
             ...(toolChoiceKeepsCache(provider.modelConfig) ? { toolChoice: "none" as const } : {}) } } : {}),
           onRequestStart: startUsage,
@@ -869,7 +918,7 @@ export class AgentSession {
       if (this.persistenceError) throw this.persistenceError;
       if (controller.signal.aborted) return { status: "cancelled", beforeBytes, afterBytes: beforeBytes };
       throw error;
-    } finally { if (onAbort) controller.signal.removeEventListener("abort", onAbort); }
+    } finally { for (const entry of entries.values()) entry.goal?.settle(); if (onAbort) controller.signal.removeEventListener("abort", onAbort); }
   }
 
   /**
@@ -1008,7 +1057,8 @@ export class AgentSession {
     return task;
   }
 
-  run(input: UserInput, onEvent?: (event: RunEvent) => void): Promise<RunResult> {
+  run(input: UserInput, onEvent?: (event: RunEvent) => void): Promise<RunResult> { return this.runInput(input, onEvent); }
+  private runInput(input: UserInput | undefined, onEvent?: (event: RunEvent) => void): Promise<RunResult> {
     if (this.currentState === "closed" || this.currentState === "closing") return Promise.reject(new Error("agent session is closed"));
     if (this.currentState !== "idle") return Promise.reject(new Error("agent session is busy"));
     if (this.persistenceFailed) return Promise.reject(new Error("session persistence failed; close and resume to recover"));
@@ -1021,6 +1071,7 @@ export class AgentSession {
     const running = this.execute(input, controller, onEvent).finally(() => {
       this.controller = undefined;
       this.activeRun = undefined;
+      this.nativeGoal = undefined;
       this.heartbeat?.unref();
       if (this.currentState !== "closing" && this.currentState !== "closed") this.currentState = "idle";
     });
@@ -1135,7 +1186,7 @@ export class AgentSession {
       : { status: "completed", steps: 0, text: "" };
   }
 
-  private async execute(input: UserInput, controller: AbortController, onEvent?: (event: RunEvent) => void): Promise<RunResult> {
+  private async execute(input: UserInput | undefined, controller: AbortController, onEvent?: (event: RunEvent) => void): Promise<RunResult> {
     let steps = 0;
     let continuations = 0;
     let continuedText = "";
@@ -1189,9 +1240,9 @@ export class AgentSession {
     // Messages the user queued while this turn runs join it at a step boundary, oldest first, each its own user message
     // through UserPromptSubmit (docs/sessions.md). Called only where the next thing is a model request.
     const deliverQueued = async (): Promise<void> => {
-      if (!this.options.deliverQueuedInputs || !this.persistence?.operationId) return;
+      if ((!this.options.deliverQueuedInputs && !this.nativeGoal) || !this.persistence || (!this.persistence.operationId && !this.nativeGoal)) return;
       for (;;) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || (this.nativeGoal && this.getGoal()?.status !== "active")) return;
         const queued = this.durable((store, sessionId, owner) => store.claimQueuedInput(sessionId, owner));
         if (!queued) return;
         emit({ type: "queued_input", id: queued.id, state: "delivering" });
@@ -1224,8 +1275,12 @@ export class AgentSession {
         ended = true;
         this.panels.setListener(undefined);
         let finalResult = result;
+        if (this.nativeGoal && !this.persistenceError) {
+          try { finalResult = { ...result, goal: this.nativeGoal.finish(result.status, result.code) }; }
+          catch (error) { finalResult = { status: "error", steps, code: "persistence_error", message: String(error) }; }
+        }
         try {
-          await this.options.hooks?.run("Stop", { ...hookRequest(), run: result },
+          await this.options.hooks?.run("Stop", { ...hookRequest(), run: finalResult },
             { hurry: { signal: controller.signal, graceMs: HOOK_TEARDOWN_MS },
               ...(terminalDeadline !== undefined || result.status === "cancelled" ? { deadline: terminalDeadline ?? Date.now() + HOOK_TEARDOWN_MS } : {}),
               onReceipt: (receipt) => this.hookReceipt(receipt, emit) });
@@ -1319,28 +1374,32 @@ export class AgentSession {
     let summarizedAt = -1;
     try {
       await this.start(this.messages.length ? "resume" : "create", emit, controller.signal);
-      try { nativeUserContent(input); }
-      catch (error) { return finish({ status: "error", steps, code: "unsupported_content", message: (error as Error).message }); }
-      const promptHook = await this.options.hooks?.run("UserPromptSubmit", { ...hookRequest(), input },
-        { signal: controller.signal, onReceipt: (receipt) => this.hookReceipt(receipt, emit) });
-      if (controller.signal.aborted) return finish(interrupted());
-      if (promptHook?.blocked) return finish({ status: "error", steps,
-        code: promptHook.blocked === "denied" ? "hook_denied" : "hook_error",
-        ...(promptHook.reason ? { message: promptHook.reason } : {}) });
-      // Notes about panel actions the user ran since the last turn travel with this message and are cleared with it (§10).
-      const notes = this.persistence ? this.persistence.store.pendingNotes(this.persistence.sessionId) : [];
-      const noteText = notes.map((note) => note.text).join("\n");
-      const modelInput: UserInput = !notes.length ? input
-        : typeof input === "string" ? `${noteText}\n\n${input}` : [{ type: "text", text: noteText }, ...input];
-      this.commitMessage({ role: "user", content: structuredClone(modelInput) }, firstTask ? { originalTask: input } : {},
-        [{ kind: "user", payload: { input: structuredClone(input) } }], true, undefined, notes.map((note) => note.sequence));
-      emit({ type: "input_committed" });
-      if (firstTask) this.originalTask = structuredClone(input);
-      // A chat still carrying a placeholder title is named from its first message, even when that turn predates this fix.
-      this.durable((store, sessionId, owner) => store.setTitleFromPrompt(sessionId, owner, renderUserInput(input)));
+      if (input !== undefined) {
+        try { nativeUserContent(input); }
+        catch (error) { return finish({ status: "error", steps, code: "unsupported_content", message: (error as Error).message }); }
+        const promptHook = await this.options.hooks?.run("UserPromptSubmit", { ...hookRequest(), input },
+          { signal: controller.signal, onReceipt: (receipt) => this.hookReceipt(receipt, emit) });
+        if (controller.signal.aborted) return finish(interrupted());
+        if (promptHook?.blocked) return finish({ status: "error", steps,
+          code: promptHook.blocked === "denied" ? "hook_denied" : "hook_error",
+          ...(promptHook.reason ? { message: promptHook.reason } : {}) });
+        // Notes about panel actions the user ran since the last turn travel with this message and are cleared with it (§10).
+        const notes = this.persistence ? this.persistence.store.pendingNotes(this.persistence.sessionId) : [];
+        const noteText = notes.map((note) => note.text).join("\n");
+        const modelInput: UserInput = !notes.length ? input
+          : typeof input === "string" ? `${noteText}\n\n${input}` : [{ type: "text", text: noteText }, ...input];
+        this.commitMessage({ role: "user", content: structuredClone(modelInput) }, firstTask ? { originalTask: input } : {},
+          [{ kind: "user", payload: { input: structuredClone(input) } }], true, undefined, notes.map((note) => note.sequence));
+        emit({ type: "input_committed" });
+        if (firstTask) this.originalTask = structuredClone(input);
+        // A chat still carrying a placeholder title is named from its first message, even when that turn predates this fix.
+        this.durable((store, sessionId, owner) => store.setTitleFromPrompt(sessionId, owner, renderUserInput(input)));
+      }
+      this.nativeGoal?.listen(state => emit({ type: "goal_update", ...state }));
       await deliverQueued();
       while (steps < this.options.maxSteps) {
         if (controller.signal.aborted) return finish(interrupted());
+        this.nativeGoal?.boundary();
         let requestEstimate = 0;
         let baseEstimate = 0;
         let measured = false;
@@ -1445,19 +1504,25 @@ export class AgentSession {
           controller.signal.addEventListener("abort", onAbort, { once: true });
           if (controller.signal.aborted) onAbort();
         });
+        // A durable goal checkpoint may abort before generate/race is reached. Observe that rejection too.
+        void aborted.catch(() => {});
         let turn;
         try {
-          const request = () => Promise.race([this.options.provider.generate({
-            system: this.options.system,
-            messages: this.sendMessages(),
-            tools: this.schemaView,
-            timeoutMs: this.options.requestTimeoutMs,
-            cacheKey: this.cacheKey,
-            signal: controller.signal,
-            onTextDelta: (text) => { if (!controller.signal.aborted) emit({ type: "text_delta", text }); },
-            onReasoningDelta: (text) => { if (!controller.signal.aborted) emit({ type: "reasoning_delta", text }); },
-            onUsage: recordUsage,
-          }), aborted]);
+          const request = async () => {
+            const goalRequest = this.nativeGoal?.request(this.options.provider.modelConfig);
+            try {
+              if (controller.signal.aborted) throw new Error("provider request aborted");
+              const turn = await Promise.race([this.options.provider.generate({
+                system: this.requestSystem(), messages: this.sendMessages(), tools: this.schemaView,
+                timeoutMs: this.options.requestTimeoutMs, cacheKey: this.cacheKey, signal: controller.signal,
+                onTextDelta: text => { if (!controller.signal.aborted) emit({ type: "text_delta", text }); },
+                onReasoningDelta: text => { if (!controller.signal.aborted) emit({ type: "reasoning_delta", text }); },
+                onUsage: raw => { if (!controller.signal.aborted) goalRequest?.usage(raw); recordUsage(raw); },
+              }), aborted]);
+              if (!controller.signal.aborted) goalRequest?.settle(turn.usage);
+              return turn;
+            } finally { goalRequest?.settle(); }
+          };
           const retry = this.replayRetryArmed;
           if (retry) {
             // The first request after a compaction consumes the retry, in this runtime or a later one.
@@ -1495,6 +1560,12 @@ export class AgentSession {
             await deliverQueued();
             continue;
           }
+          if (this.nativeGoal) {
+            this.nativeGoal.final();
+            continuedText = "";
+            await deliverQueued();
+            continue;
+          }
           return finish({ status: "completed", steps, text: continuedText });
         }
         continuations = 0;
@@ -1512,6 +1583,14 @@ export class AgentSession {
           if (controller.signal.aborted) {
             for (const remaining of turn.toolCalls.slice(index)) appendResult(remaining, cancelled(remaining));
             return finish(interrupted());
+          }
+          if (this.nativeGoal) {
+            try { this.nativeGoal.boundary(); }
+            catch (error) {
+              if (!(error instanceof GoalStop)) throw error;
+              for (const remaining of turn.toolCalls.slice(index)) appendResult(remaining, cancelled(remaining));
+              return finish({ status: "completed", steps, code: error.reason });
+            }
           }
           const goalCall = !call.argumentError && this.toolIdentity(call.name) === "builtin/goal" && this.persistence
             ? new GoalCall(() => this.persistence!.store.getGoalState(this.persistence!.sessionId), controller.signal) : undefined;
@@ -1547,7 +1626,16 @@ export class AgentSession {
           const result = this.options.provider.modelConfig.vision !== true && dispatched.content.some((block) => block.type === "image")
             ? capResult(errorResult("vision_disabled", "this model cannot receive image content; use a text-description tool"), this.options.maxOutputBytes)
             : dispatched;
+          const priorProgress = goalCall ? JSON.stringify(this.getGoal()?.definition) : undefined;
           appendResult(call, result, panelCall, goalCall);
+          if (this.nativeGoal) {
+            if (goalCall ? priorProgress !== JSON.stringify(this.getGoal()?.definition) : startedCalls.has(call.id)) this.nativeGoal.work();
+            const goal = this.getGoal();
+            if ((!goal || goal.status !== "active") && !controller.signal.aborted) {
+              for (const remaining of turn.toolCalls.slice(index + 1)) appendResult(remaining, cancelled(remaining));
+              return finish({ status: "completed", steps });
+            }
+          }
           if (result.code === "approval_required") {
             for (const remaining of turn.toolCalls.slice(index + 1)) appendResult(remaining, cancelled(remaining));
             return finish({ status: "error", steps, code: "approval_required", message: "tool approval required" });
@@ -1561,6 +1649,7 @@ export class AgentSession {
       }
       return finish({ status: "max_steps", steps, code: "max_steps" });
     } catch (error) {
+      if (error instanceof GoalStop) return finish({ status: "completed", steps, code: error.reason });
       if (this.persistenceError) return finish(interrupted());
       if (controller.signal.aborted) return finish(interrupted());
       const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "provider_error";
