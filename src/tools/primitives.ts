@@ -32,6 +32,8 @@ export interface ToolApprovalRequest {
 }
 
 export interface ToolContext {
+  /** Native builtin/goal only: call-scoped model progress API, never host autonomy controls. */
+  goals?: import("../goals/contract.js").GoalContext;
   /** Host accounting for actual successful builtin writes; never provider metadata. */
   onWriteCompleted?: () => void;
   commandActivity?: CommandActivity;

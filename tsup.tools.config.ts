@@ -2,6 +2,7 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
   entry: {
+    "tools/builtin/goal/index": "src/tools/bundled/goal/index.ts",
     "tools/builtin/list_vars/index": "src/tools/bundled/list_vars/index.ts",
     "tools/builtin/read_var/index": "src/tools/bundled/read_var/index.ts",
     "tools/builtin/read_file/index": "src/tools/bundled/read_file/index.ts",

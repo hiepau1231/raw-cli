@@ -13,3 +13,7 @@ Commands carry a clientRequestId and expectedRevision. Replays return the origin
 Restart never executes a goal automatically. Permissions, approvals, hooks and session ownership remain unchanged. Pause cancels and settles in-flight work; committed external effects cannot be rolled back. Budgets are request-boundary thresholds, not hard billing caps. Requests already in flight can overshoot. Usage reported by providers counts input plus output without double-counting cache tokens or repeated streaming callbacks; missing usage is unknown, not zero. Resume retains usage.
 
 State is limited to 64 KiB UTF-8 including reserved headroom for lifecycle/accounting growth, 50 criteria and 30 steps; labels 200 characters, evidence 300 and step details 200. Invalid input is rejected with the named limit, never silently truncated. Audit history is paginated.
+
+## Native model tool
+
+`builtin/goal` exposes get, update, complete and block only. Update addresses existing criterion/step IDs; it cannot change the objective, required flags, labels or budgets. Block requires a reason and nextAction. The scoped API expires when the handler settles. Goal writes commit atomically with their linked tool result/history and roll back on handler error, cancellation or storage failure. Native goals never create a second persisted panel document.

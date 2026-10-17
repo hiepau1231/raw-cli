@@ -16,8 +16,8 @@ import type { PackageAsset } from "../../packages/resolve-agent.js";
 import { readJsonText, stripBom } from "../../platform/fs.js";
 
 // Built-ins returning host-owned content (selected skills, configured vars) whole rather than within max_output_bytes.
-const hostContentTools = new Set(["builtin/list_skills", "builtin/load_skill", "builtin/list_vars", "builtin/read_var"]);
-const bundledNames = new Set(["read_file", "write_file", "edit_file", "apply_patch", "bash", "powershell", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process"]);
+const hostContentTools = new Set(["builtin/list_skills", "builtin/load_skill", "builtin/list_vars", "builtin/read_var", "builtin/goal"]);
+const bundledNames = new Set(["read_file", "write_file", "edit_file", "apply_patch", "bash", "powershell", "view_image", "list_skills", "load_skill", "list_vars", "read_var", "todo", "ask_user", "process", "goal"]);
 
 export interface LoadToolPluginsOptions {
   selectedIds: readonly string[];
@@ -164,6 +164,7 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
       handler(args, context) {
         const pluginContext: ToolContext = {
           cwd: context.cwd, maxOutputBytes: context.maxOutputBytes,
+          ...(bundled && item.id === "builtin/goal" && context.goals ? { goals: context.goals } : {}),
           ...((options.vars ?? context.vars) ? { vars: options.vars ?? context.vars } : {}),
           ...(context.signal ? { signal: context.signal } : {}),
           ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),

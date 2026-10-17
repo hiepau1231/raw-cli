@@ -1,0 +1,107 @@
+{
+  "api_version": 2,
+  "id": "goal",
+  "version": "1.0.0",
+  "name": "goal",
+  "description": "Read or update the current native goal. Actions: get, update existing criterion/step IDs, complete only when every required criterion is done with evidence, or block with reason and nextAction. Only the user can start/resume a goal, change its definition/budget or abandon it. Evidence records the checks you performed; do not claim checks that did not run.",
+  "entry": "./index.mjs",
+  "display": {
+    "title": "Goal",
+    "kind": "other",
+    "summary": "{action}"
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "get",
+          "update",
+          "complete",
+          "block"
+        ]
+      },
+      "criteria": {
+        "type": "array",
+        "maxItems": 50,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "in_progress",
+                "done",
+                "blocked",
+                "skipped"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "steps": {
+        "type": "array",
+        "maxItems": 30,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "in_progress",
+                "done",
+                "blocked",
+                "skipped"
+              ]
+            },
+            "detail": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "reason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      },
+      "nextAction": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  }
+}

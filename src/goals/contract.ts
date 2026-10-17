@@ -120,9 +120,10 @@ export interface GoalWrites {
   expectedRevision: number;
   goal: GoalSnapshot;
 }
+export type GoalModelCommand = ({action: "update"} & GoalProgressUpdate) | {action: "complete"} | {action: "block"; reason: string; nextAction: string};
 export interface GoalContext {
   get(): GoalSnapshot | undefined;
-  command(command: GoalCommand): GoalSnapshot;
+  command(command: GoalModelCommand): GoalSnapshot;
 }
 export class GoalError extends Error {
   constructor(readonly code: string, message: string) { super(`${code}: ${message}`); this.name = "GoalError"; }

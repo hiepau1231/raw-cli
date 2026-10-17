@@ -1,4 +1,4 @@
-import { GoalError, transitionGoal, validateGoalSize, type GoalActor, type GoalRequest, type GoalReceipt, type GoalState, type GoalSnapshot } from "../goals/contract.js";
+import { GoalError, transitionGoal, validateGoalSize, type GoalActor, type GoalRequest, type GoalReceipt, type GoalState, type GoalSnapshot, type GoalWrites } from "../goals/contract.js";
 import { assertNoLiveProcesses, recoverProcessHosts } from "../processes/store.js";
 import { InteractionError, type InteractionRequest, type InteractionSettlement } from "../interactions/contract.js";
 import { canonicalInteractionResult, validateFormAnswers } from "../panels/forms.js";
@@ -305,6 +305,16 @@ export class SessionStore {
       this.writeGoalState(sessionId, {revision: goal.revision, goal}, action, "host");
       return goal;
     });
+  }
+
+  /** Called only inside the linked result's transaction. */
+  private writeGoalWrites(sessionId: string, writes: GoalWrites): void {
+    const state = this.getGoalState(sessionId);
+    if (state.revision !== writes.expectedRevision || state.goal?.id !== writes.goal.id)
+      throw new GoalError("stale_revision", "goal changed while the tool was running");
+    if (writes.goal.revision !== state.revision + 1) throw new GoalError("invalid_goal", "invalid staged revision");
+    validateGoalSize(writes.goal);
+    this.writeGoalState(sessionId, { revision: writes.goal.revision, goal: writes.goal }, "model_update", "model");
   }
 
   private writeGoalState(sessionId: string, state: GoalState, action: string, actor: string): void {
@@ -1189,7 +1199,7 @@ export class SessionStore {
 
   appendAgentMessage(sessionId: string, owner: SessionOwner, message: ModelMessage, metadata: AgentMetadata = {},
     display: readonly VisibleRecord[] = [], operationId?: string, panels?: PanelWrites, consumeNotes?: readonly number[],
-    consumeQueued?: { id: string; operationId?: string }): void {
+    consumeQueued?: { id: string; operationId?: string }, goals?: GoalWrites): void {
     this.ownerRow(sessionId, owner);
     const staged = this.stageStored(message, owner);
     const visible = display.map((item) => ({ item, stored: this.stageStored(item.payload, owner) }));
@@ -1224,6 +1234,7 @@ export class SessionStore {
           ...(firstSequence !== undefined ? { historySequence: firstSequence } : {}) });
       }
       if (panels) this.writePanels(sessionId, panels);
+      if (goals) this.writeGoalWrites(sessionId, goals);
       for (const sequence of consumeNotes ?? []) this.database.prepare("DELETE FROM session_pending_notes WHERE session_id = ? AND sequence = ?").run(sessionId, sequence);
       this.writeMetadata(sessionId, metadata);
       this.database.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(this.now(), sessionId);

@@ -1,3 +1,5 @@
+import { GoalCall } from "./goals/call.js";
+import { GoalError, type GoalState, type GoalWrites } from "./goals/contract.js";
 import type { ProcessSupervisor } from "./processes/supervisor.js";
 import { FILES_CHANGED_OWNER } from "./tools/write-changes.js";
 import { InteractionError, type InteractionContext, type InteractionAdapter } from "./interactions/contract.js";
@@ -83,6 +85,7 @@ export type RunEvent = (
   | { type: "compact_error"; details: CompactionDetails }
   /** Provider-native compaction was configured but not used for this compaction; the checkpoint strategy ran instead. */
   | { type: "compact_warning"; message: string; details?: CompactionDetails }
+  | ({ type: "goal_update" } & GoalState)
   | { type: "run_end"; result: RunResult }
   /** The user message is in the conversation: the agent received it (docs/chat-design.md §5). */
   | { type: "input_committed" }
@@ -388,13 +391,13 @@ export class AgentSession {
   }
 
   private commitMessage(message: ModelMessage, metadata: AgentMetadata = {}, display: readonly VisibleRecord[] = [], consumeOperation = false,
-    panels?: PanelWrites, consumeNotes?: readonly number[], consumeQueued?: string): void {
+    panels?: PanelWrites, consumeNotes?: readonly number[], consumeQueued?: string, goals?: GoalWrites): void {
     const anchor = message.role === "assistant" ? this.anchorFor(message) : undefined;
     const operationId = this.persistence?.operationId;
     this.durable((store, sessionId, owner) => store.appendAgentMessage(sessionId, owner, message, anchor ? { ...metadata, anchor } : metadata,
       display.map((item) => ({ ...item, payload: this.visiblePayload(item.payload) })),
       consumeOperation ? operationId : undefined, panels, consumeNotes,
-      consumeQueued === undefined ? undefined : { id: consumeQueued, ...(operationId ? { operationId } : {}) }));
+      consumeQueued === undefined ? undefined : { id: consumeQueued, ...(operationId ? { operationId } : {}) }, goals));
     this.messages.push(structuredClone(message));
     if (anchor) { this.anchor = anchor; this.reported = undefined; }
   }
@@ -1255,8 +1258,18 @@ export class AgentSession {
     const completedWriteCalls = new Set<string>();
     // Normalized arguments of calls whose normalization changed them; the raw call stays in the assistant message (§4.3).
     const normalizedCalls = new Map<string, Record<string, unknown>>();
-    const appendResult = (call: ModelToolCall, dispatchedResult: ToolResult, panelCall?: PanelCall) => {
+    const appendResult = (call: ModelToolCall, dispatchedResult: ToolResult, panelCall?: PanelCall, goalCall?: GoalCall) => {
       let result = dispatchedResult;
+      let goalWrites: GoalWrites | undefined;
+      if (goalCall) {
+        try { goalWrites = goalCall.settle(!result.isError); }
+        catch (error) {
+          if (!(error instanceof GoalError)) throw error;
+          result = capResult(errorResult(error.code, error.message), this.options.maxOutputBytes);
+          goalCall.rollback();
+        }
+        if (controller.signal.aborted) result = cancelled(call);
+      }
       let panelWrites: PanelWrites | undefined;
       let panelRecords: VisibleRecord[] = [];
       const preserveCompletedWrites = completedWriteCalls.has(call.id)
@@ -1291,10 +1304,11 @@ export class AgentSession {
       try {
         this.commitMessage({ role: "tool", callId: call.id, name: call.name, result: structuredClone(result),
           ...(normalized ? { arguments: structuredClone(normalized) } : {}) },
-          visibility ? { skillVisibility: visibility } : {}, [...display, ...panelRecords], false, panelWrites);
+          visibility ? { skillVisibility: visibility } : {}, [...display, ...panelRecords], false, panelWrites, undefined, undefined, goalWrites);
         panelCall?.commit();
       } catch (error) { panelCall?.rollback(); throw error; }
       if (visibility) this.skillVisibility = visibility;
+      if (goalWrites) emit({ type: "goal_update", revision: goalWrites.goal.revision, goal: structuredClone(goalWrites.goal) });
       emit({ type: "tool_result", id: call.id, name: call.name, result: publicResult, display: projected,
         ...(normalized ? { arguments: structuredClone(normalized) } : {}),
         ...(panelRecords.length ? { panelReceipts: panelRecords.map((record) => structuredClone(record.payload) as unknown as PanelReceipt) } : {}) });
@@ -1499,6 +1513,8 @@ export class AgentSession {
             for (const remaining of turn.toolCalls.slice(index)) appendResult(remaining, cancelled(remaining));
             return finish(interrupted());
           }
+          const goalCall = !call.argumentError && this.toolIdentity(call.name) === "builtin/goal" && this.persistence
+            ? new GoalCall(() => this.persistence!.store.getGoalState(this.persistence!.sessionId), controller.signal) : undefined;
           const panelInfo = call.argumentError ? undefined : this.options.registry.panelDeclarations(call.name);
           const panelCall = panelInfo ? this.panels.begin(call.id, panelInfo, "tool", this.panelScope()) : undefined;
           dispatchedAt.set(call.id, performance.now());
@@ -1515,7 +1531,8 @@ export class AgentSession {
               ...(this.options.registry.panelDeclarations(call.name)?.owner === FILES_CHANGED_OWNER ? { onWriteCompleted: () => { completedWriteCalls.add(call.id); } } : {}),
               ...(this.options.processes ? { processes: this.options.processes.forSession(this.persistence?.sessionId ?? this.processSessionId), commandActivity: this.options.processes.commands.forSession(this.persistence?.sessionId ?? this.processSessionId) } : {}),
               interactions: this.interactionContext(call.id, panelInfo?.owner ?? call.name, panelCall, controller.signal),
-              onHandlerSettled: () => this.settleHandler(call.id, panelCall),
+              onHandlerSettled: () => { goalCall?.close(); this.settleHandler(call.id, panelCall); },
+              ...(goalCall ? { goals: goalCall.context } : {}),
               ...(panelCall ? { panels: panelCall.context, onPanelUpdates: (updates) => panelCall.collect(updates) } : {}),
               onNormalized: (args) => { normalizedCalls.set(call.id, structuredClone(args)); },
               ...(this.options.hooks ? { onHook: (event: HookEventName, identity: string,
@@ -1530,7 +1547,7 @@ export class AgentSession {
           const result = this.options.provider.modelConfig.vision !== true && dispatched.content.some((block) => block.type === "image")
             ? capResult(errorResult("vision_disabled", "this model cannot receive image content; use a text-description tool"), this.options.maxOutputBytes)
             : dispatched;
-          appendResult(call, result, panelCall);
+          appendResult(call, result, panelCall, goalCall);
           if (result.code === "approval_required") {
             for (const remaining of turn.toolCalls.slice(index + 1)) appendResult(remaining, cancelled(remaining));
             return finish({ status: "error", steps, code: "approval_required", message: "tool approval required" });
