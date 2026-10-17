@@ -115,7 +115,7 @@ test("AC-3 user control after an expired dead lease does not loop on stale revis
     const service = new GoalService({ store: f.store, sessionId: f.session.id });
     const before = service.state();
     const receipt = service.pause("recover-pause", before.revision);
-    assert.equal(receipt.revision, before.revision + 1);
+    assert.equal(receipt.revision, before.revision + 2);
     assert.equal(receipt.goal!.status, "paused");
     assert.equal(receipt.goal!.elapsedApproximate, true);
     assert.deepEqual(service.pause("recover-pause", before.revision), receipt);
@@ -214,4 +214,36 @@ test("AC-3 killed SDK steering cannot auto-handoff after one explicitly submitte
   if(child.exitCode===null&&child.signalCode===null){child.kill("SIGKILL");await exited;}
   await operations?.close();store?.close();if(root)rmSync(root,{recursive:true,force:true});
  }
+});
+
+test("AC-3 killed SDK idle budget removal recovers atomically without authorizing resume", { timeout: 20000 }, async () => {
+  const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), join(process.cwd(), "tests/fixtures/goal-provisional-child.ts"), "budget steering"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const exited = once(child, "exit"); let root: string | undefined, store: ReturnType<typeof openSessionStore> | undefined, host: SessionOperations | undefined;
+  try {
+    const ready = await new Promise<{ root: string; sessionId: string }>((resolve, reject) => {
+      let text = ""; const timeout = setTimeout(() => reject(new Error("child not ready")), 10000);
+      child.once("error", error => { clearTimeout(timeout); reject(error); }); child.once("exit", () => { clearTimeout(timeout); reject(new Error("child exited")); });
+      child.stdout.on("data", b => { text += String(b); for (const line of text.split("\n")) try { const value = JSON.parse(line); if (value.ready) { clearTimeout(timeout); resolve(value); } } catch {} });
+    });
+    root = ready.root; child.kill("SIGKILL"); await exited;
+    store = openSessionStore({ env: { XDG_STATE_HOME: root }, now: () => Date.now() + 16000 }); host = new SessionOperations({ store });
+    const before = store.getGoalState(ready.sessionId);
+    const request = { clientRequestId: "remove-cap-after-crash", expectedRevision: before.revision, command: { action: "setBudget" as const, tokenBudget: null } };
+    const binding = { agentName: "test", configPath: root + "/raw.json" };
+    await assert.rejects(host.commandGoal(ready.sessionId, { ...request, expectedRevision: before.revision - 1 }, binding), /stale_revision/);
+    assert.deepEqual(store.getGoalState(ready.sessionId), before);
+    store.database.exec("CREATE TRIGGER fail_recover_budget BEFORE INSERT ON session_goal_commands BEGIN SELECT RAISE(ABORT,'budget receipt failed'); END");
+    await assert.rejects(host.commandGoal(ready.sessionId, request, binding), /budget receipt failed/);
+    assert.deepEqual(store.getGoalState(ready.sessionId), before);
+    store.database.exec("DROP TRIGGER fail_recover_budget");
+    const receipt = await host.commandGoal(ready.sessionId, request, binding);
+    assert.equal(receipt.goal?.status, "paused"); assert.equal(receipt.goal?.reason, "interrupted"); assert.equal(receipt.goal?.elapsedApproximate, true);
+    assert.equal(receipt.goal?.definition.tokenBudget, undefined); assert.deepEqual(receipt.goal?.usage, before.goal!.usage);
+    assert.equal(store.findQueuedInput(ready.sessionId, "crash-steer")?.state, "paused");
+    assert.equal(store.listOperations(ready.sessionId).length, 0); assert.equal(store.sessionIsBusy(ready.sessionId), false);
+    assert.deepEqual(await host.commandGoal(ready.sessionId, request, binding), receipt);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await exited; }
+    await host?.close(); store?.close(); if (root) rmSync(root, { recursive: true, force: true });
+  }
 });

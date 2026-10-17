@@ -333,7 +333,8 @@ export class AgentSession {
     this.nativeGoal = new GoalRuntime(goal.id, {
       read: () => this.persistence!.store.getGoalState(this.persistence!.sessionId),
       write: (update, action) => this.durable((store, id, owner) => store.updateGoal(id, owner, update, action)),
-      notice: payload => this.recordVisible("goal_notice", payload),
+      notice: payload => this.recordVisible("goal_notice", { ...payload }),
+      continuation: () => this.persistence!.store.goalContinuation(this.persistence!.sessionId, goal.id),
     });
   }
   async runGoal(definition: GoalDefinition, onEvent?: (event: RunEvent) => void): Promise<RunResult> {
@@ -1598,7 +1599,8 @@ export class AgentSession {
           // An answer cut at the output token limit continues in a new request instead of ending the run half written.
           if (turn.truncated && continuations < MAX_OUTPUT_CONTINUATIONS && steps < this.options.maxSteps) {
             continuations++;
-            this.commitMessage({ role: "user", content: OUTPUT_LIMIT_NOTICE });
+            if (this.nativeGoal) this.nativeGoal.outputLimit();
+            else this.commitMessage({ role: "user", content: OUTPUT_LIMIT_NOTICE });
             await deliverQueued();
             continue;
           }
@@ -1637,6 +1639,7 @@ export class AgentSession {
           const goalCall = !call.argumentError && this.toolIdentity(call.name) === "builtin/goal" && this.persistence
             ? new GoalCall(() => this.persistence!.store.getGoalState(this.persistence!.sessionId), controller.signal) : undefined;
           this.pendingGoalCall = !!goalCall;
+          let goalAdmissionStopped = false;
           const panelInfo = call.argumentError ? undefined : this.options.registry.panelDeclarations(call.name);
           const panelCall = panelInfo ? this.panels.begin(call.id, panelInfo, "tool", this.panelScope()) : undefined;
           dispatchedAt.set(call.id, performance.now());
@@ -1664,9 +1667,13 @@ export class AgentSession {
                 { ...(event === "PreToolUse" ? { signal: controller.signal } : { hurry: { signal: controller.signal, graceMs: HOOK_TEARDOWN_MS },
                   ...(controller.signal.aborted ? { deadline: terminalDeadline ??= Date.now() + HOOK_TEARDOWN_MS } : {}) }),
                   onReceipt: (receipt) => this.hookReceipt(receipt, emit) }) } : {}),
+              ...(this.nativeGoal ? { beforeInvoke: () => {
+                try { this.nativeGoal!.boundary(); }
+                catch (error) { if (error instanceof GoalStop) goalAdmissionStopped = true; throw error; }
+              } } : {}),
               onStart: (name, args) => emit({ type: "tool_start", id: call.id, name, arguments: args }),
             });
-          const result = this.options.provider.modelConfig.vision !== true && dispatched.content.some((block) => block.type === "image")
+          const result = goalAdmissionStopped ? cancelled(call) : this.options.provider.modelConfig.vision !== true && dispatched.content.some((block) => block.type === "image")
             ? capResult(errorResult("vision_disabled", "this model cannot receive image content; use a text-description tool"), this.options.maxOutputBytes)
             : dispatched;
           const priorProgress = goalCall ? JSON.stringify(this.getGoal()?.definition) : undefined;

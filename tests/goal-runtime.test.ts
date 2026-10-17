@@ -2,7 +2,8 @@ import type { HookDispatcher } from "../src/hooks/dispatcher.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { goalFixture, goalUsage } from "./fixtures/goals.js";
-import type { RunEvent } from "../src/agent.js";
+import { createAgent, type RunEvent } from "../src/agent.js";
+import { isCompactionRequest } from "./fixtures/compaction.js";
 test("AC-3 continues natural final replies inside one run and completes without extra inference", async () => {
   const seenSystems: string[] = [];
   const f = goalFixture((request, n) => { seenSystems.push(request.system); return n < 3 ? { text: `working ${n}`, toolCalls: [], finishReason: "stop", usage: goalUsage } : { text: "", toolCalls: n === 3 ? [{ id: "progress", name: "goal", arguments: { action: "update", criteria: [{ id: "c", status: "done", evidence: "node --test passed" }] } }] : [{ id: "complete", name: "goal", arguments: { action: "complete" } }, { id: "should-not-run", name: "effect", arguments: {} }], finishReason: "tool_calls", usage: goalUsage }; }, {}, [{ name: "effect", description: "Effect", inputSchema: { type: "object" }, async handler() { throw new Error("must not dispatch after complete"); } }]);
@@ -155,4 +156,32 @@ test("AC-3 elapsed heartbeat during a slow post-tool hook does not invalidate st
     assert.ok(f.agent.getGoal()!.elapsedMs >= 5300);
     assert.ok(!f.agent.transcript.some(m => m.role === "tool" && m.result.code === "stale_revision"));
   } finally { await f.cleanup(); }
+});
+
+test("AC-3 truncated native continuation retains host provenance across compaction and reopen", async () => {
+  const captured: { system: string; messages: unknown }[] = [];
+  const f = goalFixture(request => {
+    if (isCompactionRequest(request)) return { text: "Checkpoint of partial work", toolCalls: [], finishReason: "stop", usage: goalUsage };
+    captured.push({ system: request.system, messages: request.messages });
+    return { text: "partial result ".repeat(300), toolCalls: [], finishReason: "length", truncated: true, usage: goalUsage };
+  });
+  let reopened: ReturnType<typeof createAgent> | undefined;
+  try {
+    await f.agent.runGoal({ objective: "Keep genuine user input", maxRequests: 3 });
+    assert.equal(f.requests(), 3);
+    assert.equal(f.agent.transcript.filter(message => message.role === "user").length, 1);
+    assert.match(captured[1]!.system, /"origin":"host".*"reason":"output_limit"/);
+    const notices = f.store.getSessionHistory({ sessionId: f.session.id, limit: 100 }).items.filter(item => item.kind === "goal_notice");
+    assert.equal(notices.length, 2);
+    assert.ok(notices.every(item => (item.payload as { reason?: string }).reason === "output_limit"));
+    f.agent.commandGoal({ clientRequestId: "raise-after-truncation", expectedRevision: f.agent.getGoal()!.revision, command: { action: "setBudget", maxRequests: 5 } });
+    assert.equal((await f.agent.compact({ keepRecentTurns: 1, keepRecentTokens: 1, maxOutputTokens: 64 })).status, "compacted");
+    await f.agent.close();
+    reopened = createAgent({ provider: f.provider, registry: f.registry, cwd: f.root, persistence: { store: f.store, sessionId: f.session.id, surface: "cli" } });
+    await reopened.resumeGoal();
+    assert.match(captured[3]!.system, /"origin":"host".*"reason":"output_limit"/);
+    assert.equal(f.store.readAgentState(f.session.id, { token: String(f.store.database.prepare("SELECT owner_token FROM sessions WHERE id=?").get(f.session.id)!.owner_token), generation: Number(f.store.database.prepare("SELECT owner_generation FROM sessions WHERE id=?").get(f.session.id)!.owner_generation) }).originalTask, "Keep genuine user input");
+    assert.equal(f.store.getSessionHistory({ sessionId: f.session.id, limit: 100 }).items.filter(item => item.kind === "user").length, 1);
+    assert.ok(!JSON.stringify(reopened.transcript).includes("Your previous response reached the output token limit"));
+  } finally { await reopened?.close(); await f.cleanup(); }
 });

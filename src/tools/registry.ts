@@ -288,6 +288,7 @@ export class ToolRegistry {
     let result: ToolHandlerResult;
     try {
       if (context.signal?.aborted) return finish(errorResult("aborted", "tool call aborted"));
+      context.beforeInvoke?.();
       context.onStart?.(name, args as Record<string, unknown>);
       if (context.signal?.aborted) return finish(errorResult("aborted", "tool call aborted"));
       invoked = true;
@@ -297,7 +298,7 @@ export class ToolRegistry {
           ...(context.whitelist ? { whitelist: context.whitelist } : {}), ...(context.approve ? { approve: context.approve } : {}),
           ...(context.autoApprove !== undefined ? { autoApprove: context.autoApprove } : {}), ...(context.onHook ? { onHook: context.onHook } : {}),
           ...(context.processes ? { processes: context.processes } : {}), ...(context.vars ? { vars: context.vars } : {}),
-          ...(context.bashPath ? { bashPath: context.bashPath } : {}) }))
+          ...(context.bashPath ? { bashPath: context.bashPath } : {}), ...(context.beforeInvoke ? { beforeInvoke: context.beforeInvoke } : {}) }))
         : await tool.handler(args as Record<string, unknown>, { ...context, maxOutputBytes, ...(effects ? { effects } : {}) });
     } catch (error) {
       result = errorResult("tool_error", `${name} failed: ${(error as Error).message}`);

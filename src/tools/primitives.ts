@@ -47,6 +47,8 @@ export interface ToolContext {
   approve?: (request: ToolApprovalRequest) => boolean | Promise<boolean>;
   toolCallId?: string;
   onStart?: (name: string, args: Record<string, unknown>) => void;
+  /** Host-only admission after asynchronous gates, including delegated calls. Not forwarded to plugins. */
+  beforeInvoke?: () => void;
   /** `raw` is the call as the model sent it, present only when normalization changed it. */
   onHook?: (event: HookEventName, identity: string, name: string, args: Record<string, unknown>,
     result?: ToolResult, effects?: Record<string, unknown>, raw?: Record<string, unknown>) => Promise<HookDispatchResult>;

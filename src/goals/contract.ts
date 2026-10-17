@@ -65,6 +65,15 @@ export interface GoalSnapshot {
   createdAt: number;
   updatedAt: number;
 }
+/** Durable host provenance; never represented as a user turn or ledger fact. */
+export interface GoalContinuationNotice {
+  origin: "host";
+  kind: "goal_continuation";
+  reason: "final_response" | "output_limit";
+  goalId: string;
+  revision: number;
+  noProgress: number;
+}
 export interface GoalState {
   revision: number;
   goal: GoalSnapshot | null;

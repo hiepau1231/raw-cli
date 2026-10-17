@@ -173,3 +173,25 @@ test("AC-3 incomplete Anthropic stream retains provisional consumption without f
     await assert.rejects(agent.resumeGoal(), /usage_unknown/); assert.equal(mock.requests.length, 1);
   } finally { await agent.close(); await mock.close(); await f.cleanup(); }
 });
+
+for (const delegated of [false, true]) test(`AC-3 final admission rechecks a budget lowered during ${delegated ? "delegated " : ""}approval`, { timeout: 15000 }, async () => {
+  let ready!: () => void, allow!: (value: boolean) => void, effects = 0;
+  const waiting = new Promise<void>(resolve => { ready = resolve; });
+  const f = goalFixture(() => ({ text: "", toolCalls: [{ id: "effect", name: delegated ? "wrapper" : "effect", arguments: {} }, { id: "remaining", name: "effect", arguments: {} }], finishReason: "tool_calls", usage: goalUsage }),
+    { approve: async () => { ready(); return new Promise<boolean>(resolve => { allow = resolve; }); } },
+    [{ canonicalName: "test/effect", name: "effect", description: "Effect", inputSchema: { type: "object" }, async handler() { effects++; return { isError: false, content: [] }; } },
+     { name: "wrapper", description: "Delegates", inputSchema: { type: "object" }, delegate: () => ({ identity: "test/effect", arguments: {}, finish: result => result }), async handler() { throw new Error("delegation was not selected"); } }], [{ match: "test/effect", effect: "ask" }]);
+  try {
+    const run = f.agent.runGoal({ objective: "Approval does not raise budget", maxRequests: 10 });
+    await waiting;
+    f.agent.commandGoal({ clientRequestId: "lower-while-waiting", expectedRevision: f.agent.getGoal()!.revision, command: { action: "setBudget", maxRequests: 1 } });
+    allow(true);
+    const result = await run;
+    assert.equal(effects, 0);
+    assert.equal(f.requests(), 1);
+    assert.equal(result.goal?.stopReason, "request_budget_exhausted");
+    const results = f.agent.transcript.filter(message => message.role === "tool");
+    assert.equal(results.length, 2);
+    assert.ok(results.every(message => message.role === "tool" && message.result.code === "cancelled"));
+  } finally { allow?.(false); await f.cleanup(); }
+});

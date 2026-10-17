@@ -1,4 +1,4 @@
-import { GoalError, transitionGoal, validateGoalSize, type GoalActor, type GoalRequest, type GoalReceipt, type GoalState, type GoalSnapshot, type GoalWrites } from "../goals/contract.js";
+import { GoalError, transitionGoal, validateGoalSize, type GoalActor, type GoalContinuationNotice, type GoalRequest, type GoalReceipt, type GoalState, type GoalSnapshot, type GoalWrites } from "../goals/contract.js";
 import { assertNoLiveProcesses, recoverProcessHosts } from "../processes/store.js";
 import { InteractionError, type InteractionRequest, type InteractionSettlement } from "../interactions/contract.js";
 import { canonicalInteractionResult, validateFormAnswers } from "../panels/forms.js";
@@ -280,6 +280,14 @@ export class SessionStore {
     return digest(JSON.stringify(stable({ actor, revision: request.expectedRevision, command: request.command })));
   }
 
+  /** Passive projection from the canonical audit; restored context never invents user input. */
+  goalContinuation(sessionId: string, goalId: string): GoalContinuationNotice | undefined {
+    const row = this.database.prepare("SELECT payload_json FROM history WHERE session_id = ? AND kind = 'goal_notice' ORDER BY sequence DESC LIMIT 1").get(sessionId);
+    if (!row) return undefined;
+    const notice = JSON.parse(String(row.payload_json)) as GoalContinuationNotice;
+    return notice.origin === "host" && notice.kind === "goal_continuation" && notice.goalId === goalId ? notice : undefined;
+  }
+
   /** Passive retry lookup: validate payload identity before checking a live owner or revision. */
   goalCommandReceipt(sessionId: string, request: GoalRequest, actor: GoalActor = "user"): GoalReceipt | undefined {
     const hash = this.goalRequestHash(request, actor);
@@ -311,8 +319,13 @@ export class SessionStore {
       const interrupted = !owner && this.database.prepare("SELECT owner_token FROM sessions WHERE id = ?").get(sessionId)?.owner_token != null;
       const controlOwner = owner ?? this.claimInTransaction(sessionId);
       this.ownerRow(sessionId, controlOwner);
-      const before = this.getGoalState(sessionId);
+      let before = this.getGoalState(sessionId);
       if (settledGoalId === undefined ? before.revision !== request.expectedRevision : before.goal?.id !== settledGoalId) throw new GoalError("stale_revision", `expected ${request.expectedRevision}, current ${before.revision}`);
+      // Validate the user's revision before internal recovery advances it. Both writes/receipt roll back together.
+      if (!owner) {
+        this.recoverGoalInTransaction(sessionId);
+        before = this.getGoalState(sessionId);
+      }
       const after = transitionGoal(before, request.command, actor, this.now(), defaultMaxRequests);
       if (interrupted && after.goal && before.goal?.id === after.goal.id) after.goal.elapsedApproximate = true;
       const receipt: GoalReceipt = { ...after, clientRequestId: request.clientRequestId, goalId: (after.goal ?? before.goal)!.id, action: request.command.action, ...(operationId ? { operationId } : {}) };
