@@ -1370,6 +1370,7 @@ export class AgentSession {
       emit({ type: "tool_result", id: call.id, name: call.name, result: publicResult, display: projected,
         ...(normalized ? { arguments: structuredClone(normalized) } : {}),
         ...(panelRecords.length ? { panelReceipts: panelRecords.map((record) => structuredClone(record.payload) as unknown as PanelReceipt) } : {}) });
+      return goalWrites?.goal.status === "complete" || goalWrites?.goal.status === "blocked";
     };
     const firstTask = this.originalTask === undefined;
     // Thrash guard (§6.5): the class of the last automatic compaction or fallback, and the step count when tier 1 last ran.
@@ -1632,11 +1633,11 @@ export class AgentSession {
             : dispatched;
           const priorProgress = goalCall ? JSON.stringify(this.getGoal()?.definition) : undefined;
           this.pendingGoalCall = false;
-          appendResult(call, result, panelCall, goalCall);
-          if (this.nativeGoal || goalCall) {
+          const committedGoalTerminal = appendResult(call, result, panelCall, goalCall);
+          if (this.nativeGoal || committedGoalTerminal) {
             if (goalCall ? priorProgress !== JSON.stringify(this.getGoal()?.definition) : startedCalls.has(call.id)) this.nativeGoal?.work();
             const goal = this.getGoal();
-            if ((!goal || goal.status !== "active") && !controller.signal.aborted) {
+            if ((committedGoalTerminal || !goal || goal.status !== "active") && !controller.signal.aborted) {
               for (const remaining of turn.toolCalls.slice(index + 1)) appendResult(remaining, cancelled(remaining));
               return finish({ status: "completed", steps });
             }

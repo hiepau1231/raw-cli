@@ -175,3 +175,31 @@ for (const action of ["complete", "block"] as const) test(`AC-2 standalone nativ
     assert.ok(f.agent.transcript.some(m => m.role === "tool" && m.callId === "effect" && m.result.code === "cancelled"));
   } finally { await f.cleanup(); }
 });
+
+for (const state of ["none", "paused", "blocked", "complete", "abandoned"] as const) {
+  for (const action of ["get", "update"] as const) {
+    test(`AC-2 ordinary ${action} of ${state} goal never cancels unrelated work`, async () => {
+      let effects = 0;
+      const f = goalFixture((_request, n) => n === 1 ? { text: "", toolCalls: [{ id: "read", name: "goal", arguments: action === "get" ? { action } : { action, criteria: [{ id: "c", status: "done", evidence: "new proof" }] } }, { id: "effect", name: "effect", arguments: {} }], finishReason: "tool_calls", usage: goalUsage } : { text: "Ordinary work finished", toolCalls: [], finishReason: "stop", usage: goalUsage }, {}, [{ name: "effect", description: "Ordinary effect", inputSchema: { type: "object" }, async handler() { effects++; return { isError: false, content: [] }; } }]);
+      try {
+        if (state !== "none") {
+          const row = f.store.database.prepare("SELECT owner_token,owner_generation FROM sessions WHERE id=?").get(f.session.id)!;
+          const service = new GoalService({ store: f.store, sessionId: f.session.id, owner: { token: String(row.owner_token), generation: Number(row.owner_generation) } });
+          service.start({ objective: "Existing goal", criteria: [{ id: "c", label: "Proof" }] }, "start-read", 0);
+          if (state === "complete") {
+            service.command({ clientRequestId: "old-proof", expectedRevision: service.state().revision, command: { action: "update", criteria: [{ id: "c", status: "done", evidence: "old proof" }] } }, "model");
+            service.complete("complete-read", service.state().revision);
+          } else if (state === "paused") service.pause("pause-read", service.state().revision);
+          else if (state === "abandoned") service.abandon("abandon-read", service.state().revision);
+          else service.command({ clientRequestId: "block-read", expectedRevision: service.state().revision, command: { action: "block", reason: "Need user", nextAction: "Supply input" } }, "model");
+        }
+        const before = f.store.getGoalState(f.session.id);
+        const result = await f.agent.run("Ordinary work, with a goal status check");
+        assert.equal(result.status, "completed");
+        assert.equal(f.requests(), 2); assert.equal(effects, 1); assert.deepEqual(f.store.getGoalState(f.session.id), before);
+        assert.ok(f.agent.transcript.some(m => m.role === "assistant" && m.text === "Ordinary work finished"));
+        assert.ok(f.agent.transcript.some(m => m.role === "tool" && m.callId === "effect" && !m.result.isError));
+      } finally { await f.cleanup(); }
+    });
+  }
+}
