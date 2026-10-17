@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openSessionStore } from "../src/sessions/store.js";
+import { transitionGoal } from "../src/goals/contract.js";
 import { GoalService } from "../src/goals/service.js";
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "raw-goal-store-"));
@@ -136,6 +137,46 @@ test("AC-1 ownership fencing and bounded updates preserve state and usage", () =
     assert.equal(f.service.get()!.status, "blocked");
     f.command({ action: "resume" });
     assert.equal(f.command({ action: "abandon" }).goal!.status, "abandoned");
+  }
+  finally {
+    f.cleanup();
+  }
+});
+test("AC-1 accepted capacity boundary always retains lifecycle and accounting headroom", () => {
+  const f = fixture();
+  try {
+    let low = 1, high = 65536;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      try {
+        transitionGoal({ revision: 0, goal: null }, { action: "start", definition: { objective: "x".repeat(mid), doneWhen: "done" } }, "user", Date.now());
+        low = mid;
+      }
+      catch (error) {
+        assert.match(String(error), /goal_limit/);
+        high = mid - 1;
+      }
+    }
+    f.command({ action: "start", definition: { objective: "x".repeat(low), doneWhen: "done" } });
+    f.store.updateGoal(f.session.id, f.owner, g => { g.elapsedMs = Number.MAX_SAFE_INTEGER; g.noProgress = Number.MAX_SAFE_INTEGER; g.elapsedApproximate = true; g.usage = { requests: Number.MAX_SAFE_INTEGER, inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: Number.MAX_SAFE_INTEGER, inputCoverage: Number.MAX_SAFE_INTEGER, outputCoverage: Number.MAX_SAFE_INTEGER, currentRequest: { id: "x".repeat(36), inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: Number.MAX_SAFE_INTEGER } }; });
+    f.command({ action: "setBudget", tokenBudget: Number.MAX_SAFE_INTEGER, maxRequests: Number.MAX_SAFE_INTEGER });
+    assert.equal(f.command({ action: "pause", reason: "\ud800".repeat(300) }).goal!.status, "paused");
+    assert.equal(f.command({ action: "abandon" }).goal!.status, "abandoned");
+    assert.ok(Buffer.byteLength(JSON.stringify(f.service.get()), "utf8") <= 65536);
+  }
+  finally {
+    f.cleanup();
+  }
+});
+test("AC-1 a paused goal cannot be mutated by a late model completion", () => {
+  const f = fixture();
+  try {
+    f.command({ action: "start", definition: { objective: "Ship", criteria: [{ id: "c", label: "Proof" }] } });
+    f.command({ action: "update", criteria: [{ id: "c", status: "done", evidence: "passed" }] }, "model");
+    f.command({ action: "pause" });
+    const before = f.service.state();
+    assert.throws(() => f.command({ action: "complete" }, "model"), /goal_inactive/);
+    assert.deepEqual(f.service.state(), before);
   }
   finally {
     f.cleanup();

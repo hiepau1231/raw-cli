@@ -141,11 +141,25 @@ function text(v: unknown, at: string, max?: number): string {
     fail("goal_limit", `${at}: at most ${max} characters`);
   return value;
 }
-function positive(v: unknown, at: string): number { if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1)
-  fail("invalid_goal", `${at} must be a positive safe integer`); return v as number; }
+function positive(v: unknown, at: string): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1)
+    fail("invalid_goal", `${at} must be a positive safe integer`);
+  return v as number;
+}
+/** Keep every accepted state controllable as bounded lifecycle and accounting fields grow. */
 export function validateGoalSize(goal: GoalSnapshot): void {
-  if (Buffer.byteLength(JSON.stringify(goal), "utf8") > 65536)
-    fail("goal_limit", "canonical state: at most 64 KiB UTF-8");
+  const max = Number.MAX_SAFE_INTEGER;
+  // A lone surrogate is six JSON bytes per code point: the worst case text() accepts.
+  const maxText = "\ud800".repeat(300);
+  const envelope: GoalSnapshot = {
+    ...goal, revision: max, status: "abandoned", reason: maxText, nextAction: maxText,
+    definition: { ...goal.definition, tokenBudget: max, maxRequests: max },
+    usage: { requests: max, inputTokens: max, outputTokens: max, inputCoverage: max, outputCoverage: max,
+      currentRequest: { id: "x".repeat(36), inputTokens: max, outputTokens: max } },
+    elapsedMs: max, elapsedApproximate: false, noProgress: max, createdAt: max, updatedAt: max,
+  };
+  if (Buffer.byteLength(JSON.stringify(goal), "utf8") > 65536 || Buffer.byteLength(JSON.stringify(envelope), "utf8") > 65536)
+    fail("goal_limit", "canonical state: at most 64 KiB UTF-8 including lifecycle/accounting headroom");
 }
 export function resolveGoalDefinition(input: GoalDefinition, defaultMaxRequests = 10000): GoalResolvedDefinition {
   keys(input, ["objective", "doneWhen", "criteria", "steps", "tokenBudget", "maxRequests"], "definition");
@@ -170,11 +184,21 @@ export function resolveGoalDefinition(input: GoalDefinition, defaultMaxRequests 
       ids.add(id);
     }
   }
-  const id = (provided: unknown, prefix: string, i: number) => { if (provided !== undefined)
-    return text(provided, "id", 200); let next = `${prefix}-${i + 1}`; while (ids.has(next))
-    next += "-"; ids.add(next); return next; };
-  const criteria = rawCriteria.map((item, i): GoalCriterion => { keys(item, ["id", "label", "required"], "criterion"); if (item.required !== undefined && typeof item.required !== "boolean")
-    fail("invalid_goal", "required must be boolean"); return { id: id(item.id, "criterion", i), label: text(item.label, "criterion label", 200), required: item.required !== false, status: "pending" }; });
+  const id = (provided: unknown, prefix: string, i: number) => {
+    if (provided !== undefined)
+      return text(provided, "id", 200);
+    let next = `${prefix}-${i + 1}`;
+    while (ids.has(next))
+      next += "-";
+    ids.add(next);
+    return next;
+  };
+  const criteria = rawCriteria.map((item, i): GoalCriterion => {
+    keys(item, ["id", "label", "required"], "criterion");
+    if (item.required !== undefined && typeof item.required !== "boolean")
+      fail("invalid_goal", "required must be boolean");
+    return { id: id(item.id, "criterion", i), label: text(item.label, "criterion label", 200), required: item.required !== false, status: "pending" };
+  });
   if (!criteria.some(c => c.required))
     fail("invalid_goal", "at least one required criterion is required");
   const steps = rawSteps.map((item, i): GoalStep => { keys(item, ["id", "label", "detail"], "step"); return { id: id(item.id, "step", i), label: text(item.label, "step label", 200), status: "pending", ...(item.detail === undefined ? {} : { detail: text(item.detail, "step detail", 200) }) }; });
@@ -216,6 +240,8 @@ export function transitionGoal(state: GoalState, command: GoalCommand, actor: Go
     return { revision, goal: null };
   if (goal.status === "complete" || goal.status === "abandoned")
     fail("goal_terminal", "clear a terminal goal before starting another");
+  if (actor === "model" && goal.status !== "active")
+    fail("goal_inactive", "only an active goal accepts model mutations");
   switch (command.action) {
     case "pause":
       goal.status = "paused";
