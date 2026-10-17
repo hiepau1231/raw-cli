@@ -352,6 +352,14 @@ export class AgentSession {
     this.attachGoal(receipt.goal!);
     return this.runInput(this.originalTask === undefined ? receipt.goal!.definition.objective : undefined, onEvent);
   }
+  /** @internal Run only a Goal already authorized atomically with this host-owned operation. */
+  async runAcceptedGoal(goalId: string, start: boolean, onEvent?: (event: RunEvent) => void): Promise<RunResult> {
+    if (this.currentState !== "idle" || this.persistenceFailed) throw new GoalError("goal_active", "agent is not ready");
+    const goal = this.hostGoalControl(() => this.goalService().get());
+    if (goal?.id !== goalId || goal.status !== "active") throw new GoalError("goal_inactive", "authorized goal is no longer active");
+    this.attachGoal(goal);
+    return this.runInput(start || this.originalTask === undefined ? goal.definition.objective : undefined, onEvent);
+  }
   async pauseGoal(): Promise<GoalSnapshot | undefined> {
     const service = this.goalService(); const before = this.hostGoalControl(() => service.state());
     if (before.goal?.status === "active") this.hostGoalControl(() => service.pause(randomUUID(), before.revision));

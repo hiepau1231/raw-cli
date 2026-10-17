@@ -6,7 +6,7 @@ export type OperationState = "accepted" | "starting" | "running" | "compacting" 
 export interface OperationIntent {
   sessionId: string;
   clientRequestId: string;
-  kind: "turn" | "compact" | "panel_action";
+  kind: "turn" | "compact" | "panel_action" | "goal";
   agentName: string;
   configPath: string;
   input?: string;
@@ -15,6 +15,7 @@ export interface OperationIntent {
 }
 export interface SessionOperation extends OperationIntent {
   id: string;
+  goal?: { id: string; start: boolean };
   state: OperationState;
   ownerGeneration: number;
   acceptedAt: number;

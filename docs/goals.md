@@ -54,3 +54,12 @@ const result = await running;
 console.log(result.goal?.snapshot?.status, result.goal?.stopReason);
 // Resume only following another explicit user action: await agent.resumeGoal().
 ```
+
+
+## Dashboard native controls
+
+Native Goal is separate from legacy panels. Select `builtin/goal` explicitly; the composer metadata reports `nativeGoal: true` only for that selection. `GET /api/sessions/:id/goal` is passive and returns `{ revision, goal }`, including a revisioned `goal: null` tombstone after clear. Ordinary snapshots and the `goal` SSE frame carry the same canonical state; older revisions must never restore a cleared/replaced goal. Foreign-process writes are readable but not controllable here.
+
+`POST /api/sessions/:id/goal/commands` accepts `{clientRequestId, expectedRevision, command}` under the existing dashboard authorization. Commands are start/resume/pause/edit/setBudget/complete/clear/abandon. Start and resume atomically persist a Goal receipt linked to one operation, then launch that operation once. Duplicate payloads return the original receipt even after the run ends; changed payloads conflict and stale revisions do not stop or alter work. A failed runtime attachment pauses the accepted Goal instead of leaving it apparently running.
+
+Live pause/edit/budget/clear/abandon/complete serialize on the owning host: validate revision first, stop and settle work under the same fenced lease, then commit the requested change. Edits remain paused and reset criteria/evidence while retaining cumulative usage. While controls settle, other mutations answer busy. A different process cannot stop a live host in this version (no IPC). Stopped Goal operations never hand queued input to a new run, including when their ordinary run result says completed. Plain composer text is steering, not approval and not implicit resume. The UI shows criteria/evidence as recorded claims, usage coverage, elapsed approximation, stop reason and activity/approval separately from lifecycle. Removing a token cap requires an explicit warning/confirmation.

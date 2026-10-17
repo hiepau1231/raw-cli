@@ -1,3 +1,4 @@
+import type { GoalState } from "../goals/contract.js";
 import type { CommandRecord } from "../processes/presentation.js";
 import type { ProcessControl } from "../processes/controls.js";
 import type { InteractionRequest } from "../interactions/contract.js";
@@ -23,6 +24,7 @@ import type { LoadedDeclarations } from "../panels/stack.js";
 const PANEL_FRAME_INTERVAL_MS = 250;
 
 export interface DashboardEventData {
+  goal: GoalState;
   commands: { items: CommandRecord[]; omitted?: number };
   process_control: ProcessControl;
   interaction: InteractionRequest;
@@ -45,7 +47,7 @@ export type DashboardEvent = {
   id: string; instanceId: string; sessionId: string; operationId?: string; sequence: number;
 } & { [K in keyof DashboardEventData]: { type: K; data: DashboardEventData[K] } }[keyof DashboardEventData];
 interface Channel { epoch: string; sequence: number; bytes: number; frames: Array<{ event: DashboardEvent; frame: string; bytes: number }>;
-  clients: Set<ServerResponse>; history: number; ownership: string }
+  clients: Set<ServerResponse>; history: number; ownership: string; goalRevision: number }
 
 export class SessionStreams {
   private readonly channels = new Map<string, Channel>();
@@ -79,7 +81,7 @@ export class SessionStreams {
         if (!old.clients.size && this.ownership(id) !== "here") { this.channels.delete(id); break; }
       }
       channel = { epoch: randomUUID(), sequence: 0, bytes: 0, frames: [], clients: new Set(),
-        history: this.context.store!.historyWatermark(sessionId), ownership: this.ownership(sessionId) };
+        history: this.context.store!.historyWatermark(sessionId), ownership: this.ownership(sessionId), goalRevision: -1 };
       this.channels.set(sessionId, channel);
     }
     return channel;
@@ -100,6 +102,7 @@ export class SessionStreams {
   publish<K extends keyof DashboardEventData>(sessionId: string, type: K, data: DashboardEventData[K], operationId?: string): void {
     if (type !== "text") this.flushText();
     const channel = this.channel(sessionId); channel.sequence++;
+    if (type === "goal") channel.goalRevision = (data as GoalState).revision;
     const event = this.envelope(sessionId, channel, type, data, operationId);
     const frame = `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`; const bytes = Buffer.byteLength(frame);
     channel.frames.push({ event, frame, bytes }); channel.bytes += bytes;
@@ -151,7 +154,10 @@ export class SessionStreams {
   syncHistory(sessionId: string): void {
     this.context.store!.recoverInteractions();
     this.flushText();
-    const channel = this.channel(sessionId); const through = this.context.store!.historyWatermark(sessionId);
+    const channel = this.channel(sessionId);
+    const goal = this.context.store!.getGoalState(sessionId);
+    if (goal.revision !== channel.goalRevision) this.publish(sessionId, "goal", goal);
+    const through = this.context.store!.historyWatermark(sessionId);
     while (channel.history < through) {
       const items = this.context.store!.historyAfter(sessionId, channel.history, through).map(projectHistoryItem);
       if (!items.length) break;
@@ -170,6 +176,7 @@ export class SessionStreams {
   observe(message: OperationEvent): void {
     const { sessionId, operationId } = message;
     this.channel(sessionId);
+    if (message.type === "goal") { this.publish(sessionId, "goal", message.state, operationId); return; }
     if (message.type === "operation") {
       this.syncHistory(sessionId);
       if (terminalOperationStates.has(message.operation.state)) {
@@ -191,6 +198,7 @@ export class SessionStreams {
       return;
     }
     const event = message.event;
+    if (event.type === "goal_update") { this.publish(sessionId, "goal", this.context.store!.getGoalState(sessionId), operationId); return; }
     if (event.type === "text_delta" || event.type === "reasoning_delta") {
       const kind = event.type === "text_delta" ? "assistant" : "reasoning";
       const segmentId = event.segmentId ?? `${operationId}:${kind}`;

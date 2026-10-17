@@ -1,3 +1,4 @@
+import { GoalError } from "../goals/contract.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { ManagementError } from "../management/files.js";
 import { SessionOperationError } from "../sessions/operations.js";
@@ -16,6 +17,7 @@ export function sendError(response: ServerResponse, error: unknown): void {
   if (response.headersSent) { response.end(); return; }
   let status = 500; let code = "internal_error"; let message = "Dashboard operation failed"; let details: unknown;
   if (error instanceof DashboardError) { ({ status, code, message, details } = error); }
+  else if (error instanceof GoalError) { code = error.code; message = error.message; status = code === "not_found" ? 404 : code === "forbidden" ? 403 : ["invalid_goal", "goal_limit", "goals_unavailable"].includes(code) ? 422 : 409; }
   else if (error instanceof ManagementError || error instanceof SessionOperationError) {
     code = error.code; message = error.message;
     status = code === "not_found" ? 404 : code === "invalid_input" ? 422 : code === "read_only" ? 403 : 409;

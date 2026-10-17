@@ -64,6 +64,7 @@ export function reduceEvent(
       : event.data.history.nextCursor;
     return {
       ...event.data,
+      goal: ((state?.goal?.revision ?? -1) > (event.data.goal?.revision ?? -1) ? state!.goal : event.data.goal) ?? { revision: 0, goal: null },
       history: {
         items: mergeHistory(
           state?.history.items ?? [],
@@ -82,6 +83,8 @@ export function reduceEvent(
   }
   if (!state) return state;
   switch (event.type) {
+    case "goal":
+      return (state.goal?.revision ?? -1) >= event.data.revision ? state : { ...state, goal: event.data };
     case "commands":
       return { ...state, commands: event.data.items, commandsOmitted: event.data.omitted ?? 0 };
     case "inputs":

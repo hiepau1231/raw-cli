@@ -1,3 +1,4 @@
+import { GoalError, type GoalRequest, type GoalState } from "../goals/contract.js";
 import { ProcessControls } from "../processes/controls.js";
 import { ProcessError } from "../processes/contract.js";
 import { terminalText, type CommandRecord } from "../processes/presentation.js";
@@ -33,6 +34,7 @@ import { SessionStreams } from "./streams.js";
 import type { DashboardContext, DashboardRoute } from "./server.js";
 
 export interface SessionSnapshot {
+  goal?: GoalState;
   session: SessionSummary; history: Page<HistoryView>; historyWatermark: number;
   ownership: "idle" | "here" | "elsewhere"; operations: SessionOperation[];
   metrics: SessionMetrics | null; metricsStale: boolean;
@@ -91,9 +93,10 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
     const config = await readManagedConfig(options);
     if (!Object.hasOwn(record(config.data?.agents), name)) throw new DashboardError(404, "not_found", `Agent ${name} is not configured`);
     // The effective selection (direct agents and installed package agents) needs no model credentials; a broken skill only empties the list.
-    let vision = false; let skills: Array<{ name: string; description: string }> = []; let controls: RequestControl[] = [];
+    let nativeGoal = false; let vision = false; let skills: Array<{ name: string; description: string }> = []; let controls: RequestControl[] = [];
     try {
       const runtime = await loadConfig({ ...options, configPath: context.configPath, flags: { agent: name }, requireModel: false });
+      nativeGoal = runtime.toolIds.includes("builtin/goal");
       vision = runtime.modelConfig?.vision === true;
       if (runtime.modelConfig) controls = requestControls(runtime.modelConfig.provider, runtime.modelConfig.method, runtime.modelConfig.request);
       for (const skillId of runtime.skillIds) {
@@ -104,7 +107,7 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
         } catch { /* skipped */ }
       }
     } catch { /* metadata stays best-effort so the composer never blocks */ }
-    return { vision, skills, controls, attachmentKinds: staging.kinds.list().map((kind) => ({ id: kind.id, accept: kind.mimeTypes, maxBytes: kind.maxBytes, enabled: true,
+    return { nativeGoal, vision, skills, controls, attachmentKinds: staging.kinds.list().map((kind) => ({ id: kind.id, accept: kind.mimeTypes, maxBytes: kind.maxBytes, enabled: true,
       ...(kind.needsVision && !vision ? { warning: "This agent cannot see images; it will receive a text placeholder instead." } : {}) })) };
   };
   const agentControls = async (name: string): Promise<RequestControl[]> => {
@@ -184,7 +187,7 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
     const page = store.getSessionHistory({ sessionId: id, limit: 50, atOrBefore: historyWatermark });
     const receipts = store.listOperations(id, 20);
     const commands = processes.commands.listing(id);
-    return { session, history: { ...page, items: page.items.map(projectHistoryItem) }, historyWatermark,
+    return { goal: store.getGoalState(id), session, history: { ...page, items: page.items.map(projectHistoryItem) }, historyWatermark,
       ownership: streams.ownership(id), operations: receipts, ...metrics(id), context: store.getContextSummary(id),
       live: output.list(new Set(receipts.filter((op) => !terminalOperationStates.has(op.state)).map((op) => op.id))), approvals: approvals.list(id),
       agent: session.agentName ?? null, commands: commands.items, ...(commands.omitted ? { commandsOmitted: commands.omitted } : {}), interactions: store.pendingInteractions(id),
@@ -442,6 +445,26 @@ export function createSessionRoutes(context: DashboardContext, attach?: AttachSe
         operations.publishInputs(id);
         response.writeHead(204, { "Cache-Control": "no-store" }); response.end();
         return true;
+      }
+    }
+    const goalRoute = /^\/api\/sessions\/([^/]+)\/goal(\/commands)?$/.exec(path);
+    if (goalRoute) {
+      const id = decodeURIComponent(goalRoute[1]!), session = requireSession(id);
+      if (!goalRoute[2] && method === "GET") return reply(store.getGoalState(id));
+      if (goalRoute[2] && method === "POST") {
+        const body = await context.readJson(request);
+        if (Object.keys(body).some(key => !["clientRequestId", "expectedRevision", "command"].includes(key))) throw new GoalError("invalid_goal", "unsupported command envelope fields");
+        const command = body as unknown as GoalRequest;
+        const prior = store.goalCommandReceipt(id, command); if (prior) return reply(prior);
+        let runtime;
+        try { runtime = await loadConfig({ cwd: session.cwd, configPath: context.configPath, env: context.env, flags: { ...(session.agentName ? { agent: session.agentName } : {}) }, requireModel: false }); }
+        catch (error) { const replay = store.goalCommandReceipt(id, command); if (replay) return reply(replay); throw error; }
+        // Another request may have committed while config/package metadata was loading.
+        const replay = store.goalCommandReceipt(id, command); if (replay) return reply(replay);
+        if (!runtime.toolIds.includes("builtin/goal")) throw new GoalError("goals_unavailable", "select builtin/goal before controlling a native goal");
+        const receipt = await operations.commandGoal(id, command, { agentName: textField(runtime.agentName, "saved agent"), configPath: context.configPath, maxRequests: runtime.maxSteps });
+        streams.publish(id, "goal", store.getGoalState(id));
+        return reply(receipt, receipt.operationId ? 202 : 200);
       }
     }
     const sessionRoute = /^\/api\/sessions\/([^/]+)(?:\/(history|operations|metrics|events|output))?$/.exec(path);

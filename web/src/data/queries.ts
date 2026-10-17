@@ -24,6 +24,7 @@ export interface ActivityView {
 const idleActivity: ActivityView = { operations: [], approvals: [] };
 
 export interface ComposerMeta {
+  nativeGoal?: boolean;
   vision: boolean;
   skills: ComposerSkill[];
   controls: RequestControlMeta[];

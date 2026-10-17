@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { GoalError, transitionGoal, type GoalRequest, type GoalReceipt, type GoalState } from "../goals/contract.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
 import type { InteractionService } from "../interactions/service.js";
 import type { AgentSession, RunEvent, RunResult } from "../agent.js";
@@ -35,6 +37,7 @@ export type AttachSessionRuntime = (options: {
 export type OperationEvent = { sessionId: string; operationId: string } & (
   | { type: "operation"; operation: SessionOperation }
   | { type: "event"; event: RunEvent }
+  | { type: "goal"; state: GoalState }
   | { type: "host_error"; message: string }
   /** The session's waiting messages changed; `items` is the full list. */
   | { type: "inputs"; items: QueuedInputView[] }
@@ -50,12 +53,14 @@ interface ActiveOperation {
   done: Promise<SessionOperation>;
   agent?: AgentSession;
   measure?: () => SessionMetrics;
+  holdGoalControl?: boolean;
 }
 
 export class SessionOperations {
   private readonly active = new Map<string, ActiveOperation>();
   private readonly observers = new Set<(event: OperationEvent) => void>();
   private closed = false;
+  private readonly goalControls = new Map<string, { id: string; promise: Promise<GoalReceipt> }>();
   constructor(private readonly options: {
     store: SessionStore; attach?: AttachSessionRuntime; env?: NodeJS.ProcessEnv;
     interactions?: InteractionService;
@@ -77,8 +82,71 @@ export class SessionOperations {
   approvalTimeout(_operationId: string): number { return approvalTimeoutMs(this.options.env); }
   toolIdentity(operationId: string, name: string): string | undefined { return this.active.get(operationId)?.agent?.toolIdentity(name); }
 
+  publishGoal(sessionId: string): void {
+    this.publish({ type: "goal", sessionId, operationId: this.holder(sessionId)?.operationId ?? "", state: this.options.store.getGoalState(sessionId) });
+  }
+
+  /** Commands belong to this host or an idle fenced lease, never a foreign live process. */
+  commandGoal(sessionId: string, request: GoalRequest, binding: { agentName: string; configPath: string; maxRequests?: number }): Promise<GoalReceipt> {
+    if (this.closed) return Promise.reject(new SessionOperationError("closed", "session operations are closed"));
+    const prior = this.options.store.goalCommandReceipt(sessionId, request);
+    if (prior) return Promise.resolve(prior);
+    const pending = this.goalControls.get(sessionId);
+    if (pending) {
+      if (pending.id !== request.clientRequestId) return Promise.reject(new SessionOperationError("busy", "a goal command is settling"));
+      return pending.promise.then(() => this.commandGoal(sessionId, request, binding));
+    }
+    const promise = Promise.resolve().then(() => {
+      if (this.closed) throw new SessionOperationError("closed", "session operations are closed");
+      return this.applyGoalCommand(sessionId, request, binding);
+    }).finally(() => {
+      if (this.goalControls.get(sessionId)?.promise === promise) this.goalControls.delete(sessionId);
+    });
+    this.goalControls.set(sessionId, { id: request.clientRequestId, promise });
+    return promise;
+  }
+
+  private async applyGoalCommand(sessionId: string, request: GoalRequest, binding: { agentName: string; configPath: string; maxRequests?: number }): Promise<GoalReceipt> {
+    const { store } = this.options;
+    if (["update", "block"].includes(request.command.action)) throw new GoalError("forbidden", "model-only progress actions are not dashboard controls");
+    if (request.command.action === "start" || request.command.action === "resume") {
+      const accepted = store.acceptGoalOperation({ sessionId, clientRequestId: request.clientRequestId, kind: "goal", agentName: binding.agentName, configPath: binding.configPath }, request, binding.maxRequests);
+      if (accepted.owner) { this.launch(accepted.operation, accepted.owner); this.publishGoal(sessionId); }
+      return accepted.receipt;
+    }
+    const before = store.getGoalState(sessionId);
+    if (before.revision !== request.expectedRevision) throw new GoalError("stale_revision", "goal changed before the command");
+    // Validate the complete payload/guard before stopping anything. Only edit requires an anticipated pause.
+    const check = request.command.action === "edit" && before.goal?.status === "active"
+      ? { ...before, goal: { ...before.goal, status: "paused" as const } } : before;
+    transitionGoal(check, request.command, "user");
+    const holder = this.holder(sessionId), active = holder && this.active.get(holder.operationId);
+    if (!holder || !active) {
+      const receipt = store.commandGoal(sessionId, request, "user"); this.publishGoal(sessionId); return receipt;
+    }
+    active.holdGoalControl = true;
+    try {
+      if (before.goal?.status === "active") {
+        store.commandGoal(sessionId, { clientRequestId: randomUUID(), expectedRevision: before.revision, command: { action: "pause" } }, "user", holder.owner);
+        this.publishGoal(sessionId);
+      }
+      active.controller.abort(); active.agent?.abort();
+      await active.done;
+      const receipt = store.settledGoalCommand(sessionId, request, holder.owner, before.goal!.id);
+      this.publishGoal(sessionId);
+      return receipt;
+    } catch (error) {
+      active.controller.abort(); active.agent?.abort(); await active.done.catch(() => {}); throw error;
+    } finally { active.holdGoalControl = false; store.releaseSession(sessionId, holder.owner); }
+  }
+
+  private ensureNoGoalControl(sessionId: string): void {
+    if (this.goalControls.has(sessionId)) throw new SessionOperationError("busy", "a goal command is settling");
+  }
+
   submit(intent: OperationIntent, blocks?: UserInput, request?: RequestOverride): SessionOperation {
     if (this.closed) throw new SessionOperationError("closed", "session operations are closed");
+    this.ensureNoGoalControl(intent.sessionId);
     this.options.store.recoverOperations();
     const { operation, owner } = this.options.store.acceptOperation(intent);
     if (!owner) return operation;
@@ -95,6 +163,7 @@ export class SessionOperations {
     { operation: SessionOperation } | { queued: QueuedInputView } {
     if (this.closed) throw new SessionOperationError("closed", "session operations are closed");
     this.options.store.recoverOperations();
+    this.ensureNoGoalControl(intent.sessionId);
     const holder = this.holder(intent.sessionId);
     if (holder) {
       try {
@@ -109,6 +178,17 @@ export class SessionOperations {
         if (!(error instanceof Error && error.message === "session ownership lost")) throw error;
       }
     }
+    const goal = this.options.store.getGoalState(intent.sessionId).goal;
+    if (goal && !["complete", "abandoned"].includes(goal.status)) {
+      const owner = this.options.store.claimSession(intent.sessionId);
+      try {
+        const queued = this.options.store.enqueueInput(intent.sessionId, owner, { ...intent, mode: "queue",
+          ...(options.blocks ? { blocks: options.blocks } : {}), ...(options.request ? { request: options.request } : {}) });
+        this.options.store.pauseGoalInputs(intent.sessionId, owner, "Resume Goal explicitly to deliver steering");
+        this.publishInputs(intent.sessionId);
+        return { queued: this.options.store.queuedInputView(intent.sessionId, queued.id)! };
+      } finally { this.options.store.releaseSession(intent.sessionId, owner); }
+    }
     return { operation: this.submit(intent, options.blocks, options.request) };
   }
 
@@ -116,6 +196,9 @@ export class SessionOperations {
   sendNow(sessionId: string, inputId: string): { operation: SessionOperation } | { queued: QueuedInputView } {
     if (this.closed) throw new SessionOperationError("closed", "session operations are closed");
     this.options.store.recoverOperations();
+    this.ensureNoGoalControl(sessionId);
+    const goal = this.options.store.getGoalState(sessionId).goal;
+    if (goal && !["complete", "abandoned"].includes(goal.status)) throw new GoalError("goal_inactive", "Resume Goal explicitly to deliver steering");
     const holder = this.holder(sessionId);
     if (holder) {
       try {
@@ -166,6 +249,11 @@ export class SessionOperations {
   }
 
   private async execute(operation: SessionOperation, owner: SessionOwner, active: ActiveOperation): Promise<SessionOperation> {
+    try { return await this.executeOwned(operation, owner, active); }
+    finally { if (!active.holdGoalControl) this.options.store.releaseSession(operation.sessionId, owner); }
+  }
+
+  private async executeOwned(operation: SessionOperation, owner: SessionOwner, active: ActiveOperation): Promise<SessionOperation> {
     const { store } = this.options;
     const startedAt = performance.now();
     let runtime: SessionRuntime | undefined;
@@ -209,6 +297,8 @@ export class SessionOperations {
       publishState(operation.kind === "compact" ? "compacting" : "running");
       if (operation.kind === "turn") {
         result = await runtime.agent.run(active.blocks ?? operation.input!, event); state = result.status;
+      } else if (operation.kind === "goal") {
+        result = await runtime.agent.runAcceptedGoal(operation.goal!.id, operation.goal!.start, event); state = result.status;
       } else if (operation.kind === "panel_action") {
         const run = await runtime.agent.runPanelAction(operation.action!, event);
         result = run; state = run.status;
@@ -231,13 +321,22 @@ export class SessionOperations {
     } catch (cause) {
       state = "error"; error = { code: "cleanup_error", message: cause instanceof Error ? cause.message : String(cause) };
     }
+    if (operation.kind === "goal" && store.getGoalState(operation.sessionId).goal?.status === "active") {
+      // Startup may fail before an AgentSession/GoalRuntime exists. Never leave a ghost active Goal.
+      const goal = store.getGoalState(operation.sessionId);
+      store.commandGoal(operation.sessionId, { clientRequestId: randomUUID(), expectedRevision: goal.revision,
+        command: { action: "pause", reason: error?.code ?? "runtime_stopped" } }, "user", owner);
+    }
+    if (operation.kind === "goal") this.publishGoal(operation.sessionId);
+    const goalStopped = operation.kind === "goal" || !!(result && "goal" in result && result.goal);
+    if (goalStopped || active.holdGoalControl) store.pauseGoalInputs(operation.sessionId, owner, "Goal stopped; explicit user action is required");
     const details = { ...(result ? { result } : {}), ...(error ? { error } : {}), ...(metrics ? { metrics } : {}) };
     // The interrupting message starts the next turn whatever the ending; otherwise a completed turn hands the session to
     // the oldest waiting message, and any other ending, or a Stop that arrived during cleanup, pauses them all.
     let pauseReason: string | undefined;
     const waiting = this.closed ? [] : store.queuedInputs(operation.sessionId).filter((item) => item.state === "queued");
-    const next = waiting.find((item) => item.mode === "interrupt")
-      ?? (state === "completed" && !active.controller.signal.aborted ? waiting[0] : undefined);
+    const next = goalStopped || active.holdGoalControl ? undefined : (waiting.find((item) => item.mode === "interrupt")
+      ?? (state === "completed" && !active.controller.signal.aborted ? waiting[0] : undefined));
     if (next) {
       try {
         const handed = store.handOff({ id: operation.id, owner, state, details }, next.id);
@@ -249,14 +348,14 @@ export class SessionOperations {
     }
     try {
       const terminal = store.updateOperation(operation.id, owner, state, details, pauseReason);
-      store.releaseSession(operation.sessionId, owner);
+      if (!active.holdGoalControl) store.releaseSession(operation.sessionId, owner);
       this.publish({ type: "operation", sessionId: operation.sessionId, operationId: operation.id, operation: terminal });
       if (store.queuedInputs(operation.sessionId).length) this.publishInputs(operation.sessionId, operation.id);
       return terminal;
     } catch (cause) {
       this.publish({ type: "host_error", sessionId: operation.sessionId, operationId: operation.id, message: String(cause) });
       throw cause;
-    } finally { store.releaseSession(operation.sessionId, owner); }
+    } finally { if (!active.holdGoalControl) store.releaseSession(operation.sessionId, owner); }
   }
 
   async wait(operationId: string): Promise<SessionOperation> {
@@ -277,6 +376,7 @@ export class SessionOperations {
     this.closed = true;
     for (const id of this.active.keys()) this.cancel(id);
     await Promise.allSettled([...this.active.values()].map((item) => item.done));
+    await Promise.allSettled([...this.goalControls.values()].map(item => item.promise));
     this.observers.clear();
   }
 }

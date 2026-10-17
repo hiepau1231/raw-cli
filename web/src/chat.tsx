@@ -1,3 +1,6 @@
+import type { GoalCommand, GoalReceipt, GoalState } from "../../src/goals/contract.js";
+import { GoalControls } from "./goals/GoalControls.js";
+import { nativeGoalCommand } from "./goals/commands.js";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type Ref } from "react";
 import {
   Activity,
@@ -471,6 +474,25 @@ export function Chat({
       if (cause.code === "unknown_attachment") att.expire();
     }
   };
+  const [goalPending, setGoalPending] = useState(false);
+  const goalSubmitting = useRef(false);
+  const commandGoal = async (command: GoalCommand) => {
+    if (!state || goalSubmitting.current) throw new Error("A Goal command is already pending");
+    if (command.action === "setBudget" && command.tokenBudget === null && !window.confirm("Removing the token cap allows continuation without reliable usage when coverage is unknown. Usage is retained. Remove the cap?")) return;
+    goalSubmitting.current = true; setGoalPending(true); setError("");
+    try {
+      const result = await api<GoalReceipt>(`/sessions/${id}/goal/commands`, "POST", { clientRequestId: crypto.randomUUID(), expectedRevision: state.goal?.revision ?? 0, command });
+      const canonical = await api<GoalState>(`/sessions/${id}/goal`);
+      setState(old => old && (old.goal?.revision ?? -1) <= canonical.revision ? { ...old, goal: canonical } : old);
+      if (result.operationId) receipt(await api<SessionOperation>(`/operations/${result.operationId}`));
+      onChanged();
+    } catch (cause) {
+      setError(errorText(cause));
+      // A stale tab refreshes its projection, but never retries a mutation with a newer revision automatically.
+      void api<GoalState>(`/sessions/${id}/goal`).then(goal => setState(old => old && (old.goal?.revision ?? -1) <= goal.revision ? { ...old, goal } : old)).catch(() => {});
+      throw cause;
+    } finally { goalSubmitting.current = false; setGoalPending(false); }
+  };
   const send = async (kind: "turn" | "compact", mode: "queue" | "interrupt" = "queue") => {
     const draft = store.get();
     if (
@@ -482,6 +504,16 @@ export function Chat({
       (kind === "turn" && (att.uploading || (!draft.trim() && !hasContent)))
     )
       return;
+    if (kind === "turn" && meta.nativeGoal && /^\/goal(?:\s|$)/.test(draft.trim())) {
+      if (hasContent) { setError("Native Goal commands do not accept attachments"); return; }
+      try {
+        const command = nativeGoalCommand(draft.trim());
+        if (command) await commandGoal(command);
+        else { const goal = await api<GoalState>(`/sessions/${id}/goal`); setState(old => old && (old.goal?.revision ?? -1) <= goal.revision ? { ...old, goal } : old); }
+        store.set("");
+      } catch (cause) { setError(errorText(cause)); }
+      return;
+    }
     submitting.current = true;
     setPending(true);
     setError("");
@@ -809,6 +841,7 @@ export function Chat({
             setDialogError("");
             setRenaming(true);
           },
+          nativeGoal: !!meta.nativeGoal,
           newChat: onNewChat,
           details: () => setInspector((value) => !value),
         },
@@ -818,7 +851,7 @@ export function Chat({
     ],
     // `send` closes over live state; the rebuilt provider only needs to track what changes the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [skills, compactDisabled, state, agent, busy, files],
+    [meta.nativeGoal, skills, compactDisabled, state, agent, busy, files],
   );
   return (
     <Dialog.Root open={inspector} onOpenChange={setInspector} modal={narrow}>
@@ -1030,6 +1063,7 @@ export function Chat({
                 </button>
               </div>
             )}
+            <GoalControls state={state?.goal} selected={!!meta.nativeGoal && (!state?.session.agentName || state.session.agentName === agent)} disabled={!state || goalPending || state.ownership === "elsewhere" || !!(current && current.kind !== "goal" && !state.goal?.goal)} activity={goalPending ? "Applying / settling Goal command" : state?.approvals.length ? "Waiting for approval" : state?.interactions?.some(item => item.state === "pending") ? "Waiting for input" : current ? "Running" : undefined} command={commandGoal} />
             <QueuedInputs items={queuedItems} notices={queuedNotices} onEdit={editInput} onDelete={deleteInput} onSendNow={sendNow} />
             <form
               className="composer"

@@ -6478,3 +6478,15 @@ textarea.panel-input {
     grid-area: chevron;
   }
 }
+
+/* Native runtime projection; no legacy panel state is persisted here. */
+.native-goal { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; max-height: 42vh; overflow: auto; overflow-wrap: anywhere; background: var(--surface); }
+.native-goal-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+.native-goal-heading > span { font-size: 12px; text-transform: uppercase; }
+.native-goal p { margin: 8px 0; white-space: pre-wrap; }
+.native-goal small { color: var(--muted); }
+.native-goal .actions { flex-wrap: wrap; margin-top: 10px; gap: 8px; }
+.native-goal details { margin-top: 10px; }
+.native-goal label { display: grid; gap: 4px; margin: 8px 0; font-size: 12px; }
+.native-goal textarea { min-height: 54px; width: 100%; resize: vertical; }
+.native-goal input { width: 100%; }

@@ -266,17 +266,39 @@ export class SessionStore {
     return { revision: Number(row?.revision ?? 0), goal: row?.payload_json == null ? null : JSON.parse(String(row.payload_json)) as GoalSnapshot };
   }
 
-  /** The receipt is looked up before ownership/revision checks: retries never perform a second mutation. */
-  commandGoal(sessionId: string, request: GoalRequest, actor: GoalActor, owner?: SessionOwner, defaultMaxRequests = 10000): GoalReceipt {
+  private goalRequestHash(request: GoalRequest, actor: GoalActor): string {
     if (!request || typeof request.clientRequestId !== "string" || !request.clientRequestId.trim() || request.clientRequestId.length > 128
       || !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0 || !request.command) throw new GoalError("invalid_goal", "invalid request id, revision or command");
     if (actor !== "user" && actor !== "model") throw new GoalError("forbidden", "unknown goal actor");
     if (actor === "model" && !["update", "complete", "block"].includes(request.command.action)) throw new GoalError("forbidden", "model cannot control autonomy or definition");
-    if (actor === "model" && !owner) throw new GoalError("forbidden", "model writes require an active owner scope");
     const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable)
       : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,stable(v)])) : value;
-    const requestHash = digest(JSON.stringify(stable({ actor, revision: request.expectedRevision, command: request.command })));
-    return this.transaction(() => {
+    return digest(JSON.stringify(stable({ actor, revision: request.expectedRevision, command: request.command })));
+  }
+
+  /** Passive retry lookup: validate payload identity before checking a live owner or revision. */
+  goalCommandReceipt(sessionId: string, request: GoalRequest, actor: GoalActor = "user"): GoalReceipt | undefined {
+    const hash = this.goalRequestHash(request, actor);
+    const row = this.database.prepare("SELECT request_hash, receipt_json FROM session_goal_commands WHERE session_id = ? AND client_request_id = ?").get(sessionId, request.clientRequestId);
+    if (!row) return undefined;
+    if (row.request_hash !== hash) throw new GoalError("conflict", "request id was used for a different command");
+    return JSON.parse(String(row.receipt_json)) as GoalReceipt;
+  }
+
+  commandGoal(sessionId: string, request: GoalRequest, actor: GoalActor, owner?: SessionOwner, defaultMaxRequests = 10000): GoalReceipt {
+    const hash = this.goalRequestHash(request, actor);
+    if (actor === "model" && !owner) throw new GoalError("forbidden", "model writes require an active owner scope");
+    return this.transaction(() => this.commandGoalInTransaction(sessionId, request, actor, hash, owner, defaultMaxRequests));
+  }
+
+  /** Trusted owning host only: original revision was checked before stopping; the fenced lease stays held until settle. */
+  settledGoalCommand(sessionId: string, request: GoalRequest, owner: SessionOwner, goalId: string): GoalReceipt {
+    const hash = this.goalRequestHash(request, "user");
+    return this.transaction(() => this.commandGoalInTransaction(sessionId, request, "user", hash, owner, 10000, undefined, goalId));
+  }
+
+  private commandGoalInTransaction(sessionId: string, request: GoalRequest, actor: GoalActor, requestHash: string,
+    owner?: SessionOwner, defaultMaxRequests = 10000, operationId?: string, settledGoalId?: string): GoalReceipt {
       const prior = this.database.prepare("SELECT request_hash, receipt_json FROM session_goal_commands WHERE session_id = ? AND client_request_id = ?").get(sessionId, request.clientRequestId);
       if (prior) {
         if (prior.request_hash !== requestHash) throw new GoalError("conflict", "request id was used for a different command");
@@ -286,15 +308,40 @@ export class SessionStore {
       const controlOwner = owner ?? this.claimInTransaction(sessionId);
       this.ownerRow(sessionId, controlOwner);
       const before = this.getGoalState(sessionId);
-      if (before.revision !== request.expectedRevision) throw new GoalError("stale_revision", `expected ${request.expectedRevision}, current ${before.revision}`);
+      if (settledGoalId === undefined ? before.revision !== request.expectedRevision : before.goal?.id !== settledGoalId) throw new GoalError("stale_revision", `expected ${request.expectedRevision}, current ${before.revision}`);
       const after = transitionGoal(before, request.command, actor, this.now(), defaultMaxRequests);
       if (interrupted && after.goal && before.goal?.id === after.goal.id) after.goal.elapsedApproximate = true;
-      const receipt: GoalReceipt = { ...after, clientRequestId: request.clientRequestId, goalId: (after.goal ?? before.goal)!.id, action: request.command.action };
+      const receipt: GoalReceipt = { ...after, clientRequestId: request.clientRequestId, goalId: (after.goal ?? before.goal)!.id, action: request.command.action, ...(operationId ? { operationId } : {}) };
       this.writeGoalState(sessionId, after, request.command.action, actor);
       this.database.prepare("INSERT INTO session_goal_commands(session_id, client_request_id, request_hash, receipt_json) VALUES (?, ?, ?, ?)")
         .run(sessionId, request.clientRequestId, requestHash, JSON.stringify(receipt));
       if (!owner) this.releaseSession(sessionId, controlOwner);
       return receipt;
+  }
+
+  /** Goal transition, receipt and authorized operation are all-or-nothing; only a fresh receipt returns an owner. */
+  acceptGoalOperation(intent: OperationIntent, request: GoalRequest, defaultMaxRequests = 10000): { receipt: GoalReceipt; operation: SessionOperation; owner?: SessionOwner } {
+    if (intent.kind !== "goal" || !["start", "resume"].includes(request.command.action) || intent.clientRequestId !== request.clientRequestId)
+      throw new GoalError("invalid_goal", "a native start/resume operation is required");
+    const { normalized, requestHash } = this.normalizeIntent(intent);
+    const hash = this.goalRequestHash(request, "user");
+    return this.transaction(() => {
+      const prior = this.goalCommandReceipt(intent.sessionId, request);
+      if (prior) return { receipt: prior, operation: this.getOperation(prior.operationId!)! };
+      if (this.findOperation(intent.sessionId, intent.clientRequestId)) throw new GoalError("conflict", "request id already identifies an ordinary operation");
+      const owner = this.claimInTransaction(intent.sessionId);
+      const before = this.getGoalState(intent.sessionId);
+      if (before.revision !== request.expectedRevision) throw new GoalError("stale_revision", "goal changed before authorization");
+      // An explicit resume may recover an orphaned SDK Goal under the newly fenced idle lease.
+      if (request.command.action === "resume" && before.goal?.status === "active") this.recoverGoalInTransaction(intent.sessionId);
+      const id = randomUUID();
+      const receipt = this.commandGoalInTransaction(intent.sessionId, request, "user", hash, owner, defaultMaxRequests, id,
+        request.command.action === "resume" && before.goal?.status === "active" ? before.goal.id : undefined);
+      const operation: SessionOperation = { ...normalized, id, state: "accepted", goal: { id: receipt.goalId, start: request.command.action === "start" },
+        ownerGeneration: owner.generation, acceptedAt: this.now(), updatedAt: this.now() };
+      this.database.prepare(`INSERT INTO session_operations(id, session_id, client_request_id, request_hash, owner_generation, state, accepted_at, updated_at, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, intent.sessionId, intent.clientRequestId, requestHash, owner.generation, operation.state, operation.acceptedAt, operation.updatedAt, JSON.stringify(operation));
+      return { receipt, operation, owner };
     });
   }
 
@@ -399,7 +446,7 @@ export class SessionStore {
   private normalizeIntent(intent: OperationIntent, unboundSteering = false): { normalized: OperationIntent; requestHash: string } {
     if (![intent.sessionId, intent.clientRequestId, intent.agentName].every((value) => typeof value === "string" && value.trim())
       || typeof intent.configPath !== "string" || (!unboundSteering && !intent.configPath.trim())
-      || intent.clientRequestId.length > 128 || !["turn", "compact", "panel_action"].includes(intent.kind)
+      || intent.clientRequestId.length > 128 || !["turn", "compact", "panel_action", "goal"].includes(intent.kind)
       || (intent.kind === "turn" ? typeof intent.input !== "string" || !intent.input.trim() : intent.input !== undefined)
       || (intent.kind === "panel_action" ? !validAction(intent.action) : intent.action !== undefined)
       || Buffer.byteLength(intent.input ?? "") > 1024 * 1024) {

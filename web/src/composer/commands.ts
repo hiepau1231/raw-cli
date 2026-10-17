@@ -10,6 +10,7 @@ export interface ComposerSkill {
 }
 
 export interface CommandActions {
+  nativeGoal?: boolean;
   compact: { run: () => void; disabled?: string };
   rename: () => void;
   newChat: () => void;
@@ -70,7 +71,8 @@ export function slashProvider(
       },
     },
   ];
-  const skillItems: SuggestionItem[] = skills.map((skill) => ({
+  if (actions.nativeGoal) commands.unshift({ id: "command:native-goal", label: "/goal", description: "Native runtime: status, start, pause, resume, edit, budget, clear, abandon", onSelect: ({ replace }) => replace("/goal ") });
+  const skillItems: SuggestionItem[] = skills.filter(skill => !actions.nativeGoal || skill.name !== "goal").map((skill) => ({
     id: `skill:${skill.name}`,
     label: `/${skill.name}`,
     description: skill.description || "Agent skill",
