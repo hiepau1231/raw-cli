@@ -227,7 +227,7 @@ async function run(): Promise<void> {
       if (!savedConfigPath || !savedAgentName) throw new InputError("saved session has no config/agent identity");
       runtime = await inputAsync(() => loadConfig({ cwd: selected.cwd, flags: {
         ...parsed.flags, configPath: parsed.flags.configPath ? configFilePath({ flags: parsed.flags }) : savedConfigPath,
-        ...(!parsed.flags.agent && !parsed.flags.configPath ? { agent: savedAgentName } : {}),
+        ...(!parsed.flags.agent && (!parsed.flags.configPath || parsed.flags.goalResume) ? { agent: savedAgentName } : {}),
       }, requireModel: true }));
       process.stderr.write(`raw: resuming in ${selected.cwd}\n`);
     } else runtime = await inputAsync(() => loadConfig({ flags: parsed.flags, requireModel: true }));

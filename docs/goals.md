@@ -78,3 +78,5 @@ raw --config CONFIG --resume SESSION_ID --goal-resume
 ```
 
 The recipient supplies the model/provider and keeps its existing default agent. Packing records builtin references, not checkout paths or a second Goal tool. Exporting an agent that selects `builtin/goal` also declares `raw.goal/1`. A host without that capability rejects the native package explicitly. Selecting native and legacy tools under the same visible name `goal` is an error; choose one. Ordinary SDK/CLI/ACP runs do not start or resume native autonomy merely because the tool is selected. ACP has no native Goal controls in this release; use SDK, CLI or dashboard for explicit lifecycle controls. Removing the native package/tool does not erase canonical Goal audit or migrate it into a panel.
+
+Native `--goal-resume` keeps the session's saved agent unless `--agent` is explicitly supplied, including when `--config` is present. A different default agent in that config does not silently replace the native agent. Ordinary (non-native) resume/config override behavior is unchanged.

@@ -141,3 +141,14 @@ test("AC-4 controls buffered during SessionStart stop before the first provider 
     assert.equal(code, 4, running.output()); assert.equal(provider.requests.length, 0);
   } finally { running.child.kill(); await running.done; await provider.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test("AC-4 native resume with explicit config preserves the saved agent instead of unrelated default",async()=>{
+ const root=mkdtempSync(join(tmpdir(),"raw-goal-saved-agent-")),configPath=join(root,"config.json"),env={...process.env,XDG_STATE_HOME:root,XDG_CONFIG_HOME:root};
+ const provider=await startMockProvider([{frames:[openAiFrame({tool_calls:[{index:0,id:"proof",type:"function",function:{name:"goal",arguments:JSON.stringify({action:"update",criteria:[{id:"criterion-1",status:"done",evidence:"saved-agent result checked"}]})}},{index:1,id:"done",type:"function",function:{name:"goal",arguments:JSON.stringify({action:"complete"})}}]},"tool_calls"),openAiDone]}]);
+ try {
+ writeFileSync(configPath,JSON.stringify({default_agent:"unrelated",models:{local:{provider:"local",method:"openai-chat-completions",model_id:"fixture",base_url:provider.url}},agents:{unrelated:{model:"local",tools:{use:[]}},coder:{model:"local",tools:{use:["builtin/goal"]},compact:{trigger_tokens:false}}}}));
+ const store=openSessionStore({env}),session=store.createSession({cwd:root,title:"saved native",agentName:"coder",configPath}),service=new GoalService({store,sessionId:session.id});const started=service.start({objective:"Ship"},"start",0);service.pause("pause",started.revision);store.close();
+ const child=spawn(process.execPath,[join(process.cwd(),"dist/raw.js"),"--config",configPath,"--resume",session.id,"--goal-resume"],{cwd:root,env,stdio:["pipe","pipe","pipe"],windowsHide:true});let output="";child.stdout.on("data",b=>{output+=String(b);});child.stderr.on("data",b=>{output+=String(b);});child.stdin.end();const code=await new Promise<number|null>((resolve,reject)=>{child.once("exit",resolve);child.once("error",reject);});assert.equal(code,0,output);assert.equal(provider.requests.length,1);
+ const reopened=openSessionStore({env});try{assert.equal(reopened.getGoalState(session.id).goal?.status,"complete");assert.equal(reopened.getSession(session.id)?.agentName,"coder");}finally{reopened.close();}
+ }finally{await provider.close();rmSync(root,{recursive:true,force:true});}
+});
