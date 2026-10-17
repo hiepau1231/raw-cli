@@ -396,8 +396,9 @@ export class SessionStore {
   }
 
   /** Validates an intent; its normalized form's hash identifies the request when it is replayed. */
-  private normalizeIntent(intent: OperationIntent): { normalized: OperationIntent; requestHash: string } {
-    if (![intent.sessionId, intent.clientRequestId, intent.agentName, intent.configPath].every((value) => typeof value === "string" && value.trim())
+  private normalizeIntent(intent: OperationIntent, unboundSteering = false): { normalized: OperationIntent; requestHash: string } {
+    if (![intent.sessionId, intent.clientRequestId, intent.agentName].every((value) => typeof value === "string" && value.trim())
+      || typeof intent.configPath !== "string" || (!unboundSteering && !intent.configPath.trim())
       || intent.clientRequestId.length > 128 || !["turn", "compact", "panel_action"].includes(intent.kind)
       || (intent.kind === "turn" ? typeof intent.input !== "string" || !intent.input.trim() : intent.input !== undefined)
       || (intent.kind === "panel_action" ? !validAction(intent.action) : intent.action !== undefined)
@@ -1267,12 +1268,23 @@ export class SessionStore {
   }
 
   /** A message sent while a turn runs; resolving its request id again returns the same row. */
+  enqueueGoalInput(sessionId: string, owner: SessionOwner, input: { clientRequestId: string; agentName: string; configPath?: string; input: UserInput }): QueuedInputView {
+    const goal = this.getGoalState(sessionId).goal;
+    if (!goal || goal.status === "complete" || goal.status === "abandoned") throw new GoalError("goal_inactive", "a nonterminal native goal is required for steering");
+    return this.enqueueInputWithConfig(sessionId, owner, { sessionId, clientRequestId: input.clientRequestId,
+      agentName: input.agentName, configPath: input.configPath ?? "", kind: "turn", mode: "queue",
+      input: typeof input.input === "string" ? input.input : renderUserInput(input.input),
+      ...(typeof input.input === "string" ? {} : { blocks: input.input }) }, true);
+  }
   enqueueInput(sessionId: string, owner: SessionOwner, queued: QueuedIntent): QueuedInputView {
+    return this.enqueueInputWithConfig(sessionId, owner, queued);
+  }
+  private enqueueInputWithConfig(sessionId: string, owner: SessionOwner, queued: QueuedIntent, unboundSteering = false): QueuedInputView {
     const { blocks, request, mode, ...intent } = queued;
     if (intent.sessionId !== sessionId || intent.kind !== "turn" || (mode !== "queue" && mode !== "interrupt")) {
       throw new SessionOperationError("invalid_input", "invalid queued message");
     }
-    const { normalized, requestHash } = this.normalizeIntent(intent);
+    const { normalized, requestHash } = this.normalizeIntent(intent, unboundSteering);
     this.ownerRow(sessionId, owner);
     const staged = blocks === undefined ? undefined : this.stageStored(blocks, owner);
     const attachments: HistoryAttachment[] = userAttachments(blocks);
@@ -1385,6 +1397,10 @@ export class SessionStore {
     });
     if (released) { try { this.reclaimUnreferencedPayloads(); } catch { /* Idle maintenance retries reclamation. */ } }
     return result;
+  }
+
+  pauseGoalInputs(sessionId: string, owner: SessionOwner, reason?: string): void {
+    this.transaction(() => { this.ownerRow(sessionId, owner); this.pauseOpenInputs(sessionId, reason); });
   }
 
   private pauseOpenInputs(sessionId: string, reason?: string): void {

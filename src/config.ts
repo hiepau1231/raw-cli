@@ -42,6 +42,9 @@ export interface RawFlags {
   port?: number;
   continue?: boolean;
   resumeId?: string;
+  goal?: string;
+  goalTokenBudget?: number;
+  goalResume?: boolean;
   allSessions?: boolean;
   json?: boolean;
   before?: string;
@@ -49,7 +52,7 @@ export interface RawFlags {
 
 export type CliCommand = "help" | "version" | "config-init" | "config-list" | "task" | "interactive" | "acp"
   | "vars-list" | "vars-get"
-  | "sessions-list" | "sessions-show" | "sessions-delete" | "sessions-stats" | "sessions-panels";
+  | "sessions-list" | "sessions-show" | "sessions-delete" | "sessions-stats" | "sessions-panels" | "sessions-goal";
 
 export interface CliArgs {
   variableName?: string;
@@ -928,7 +931,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     "--agent": "agent", "--config": "configPath", "--system-prompt": "systemPrompt",
     "--max-steps": "maxSteps", "--max-output-bytes": "maxOutputBytes",
     "--request-timeout-ms": "requestTimeoutMs", "--host": "host", "--port": "port",
-    "--resume": "resumeId", "--before": "before",
+    "--goal": "goal", "--goal-token-budget": "goalTokenBudget", "--resume": "resumeId", "--before": "before",
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -944,6 +947,10 @@ export function parseCliArgs(argv: string[]): CliArgs {
       if (arg === "--continue") flags.continue = true;
       else flags.allSessions = true;
       continue;
+    }
+    if (arg === "--goal-resume") {
+      if (seen.has(arg)) throw new Error(`duplicate option ${arg}`);
+      seen.add(arg); flags.goalResume = true; continue;
     }
     if (arg === "--json") {
       if (seen.has(arg)) throw new Error(`duplicate option ${arg}`);
@@ -963,18 +970,20 @@ export function parseCliArgs(argv: string[]): CliArgs {
       seen.add(arg);
       const next = argv[++i];
       if (next === undefined || (next.startsWith("--") && arg !== "--system-prompt")) throw new Error(`${arg} requires a value`);
-      if (key === "maxSteps" || key === "maxOutputBytes" || key === "requestTimeoutMs" || key === "port") {
+      if (key === "maxSteps" || key === "maxOutputBytes" || key === "requestTimeoutMs" || key === "port" || key === "goalTokenBudget") {
         if (!/^[0-9]+$/.test(next)) throw new Error(`${arg} requires a positive integer`);
         const numeric = positive(Number(next), arg);
         if (key === "maxSteps") flags.maxSteps = numeric;
         if (key === "maxOutputBytes") flags.maxOutputBytes = numeric;
         if (key === "requestTimeoutMs") flags.requestTimeoutMs = numeric;
         if (key === "port") flags.port = numeric;
+        if (key === "goalTokenBudget") flags.goalTokenBudget = numeric;
       } else {
         if (key === "density" || key === "reasoning" || key === "color" || key === "icons" || key === "theme") {
           validateUiFlag(key, next);
           (flags as Record<string, unknown>)[key] = next;
         }
+        if (key === "goal") flags.goal = next;
         if (key === "agent") flags.agent = next;
         if (key === "configPath") flags.configPath = next;
         if (key === "systemPrompt") flags.systemPrompt = next;
@@ -989,6 +998,12 @@ export function parseCliArgs(argv: string[]): CliArgs {
   }
   if (help) return { command: "help", flags };
   if (version) return { command: "version", flags };
+  const nativeGoal = flags.goal !== undefined || flags.goalResume || flags.goalTokenBudget !== undefined;
+  if (flags.goal !== undefined && !flags.goal.trim()) throw new Error("--goal requires nonempty text");
+  if (flags.goal !== undefined && flags.goalResume) throw new Error("--goal and --goal-resume are mutually exclusive");
+  if (flags.goalResume && !flags.resumeId) throw new Error("--goal-resume requires --resume ID");
+  if (flags.goalTokenBudget !== undefined && flags.goal === undefined) throw new Error("--goal-token-budget requires --goal");
+  if (nativeGoal && (acp || acpTransport || interactive || positional.length)) throw new Error("native goal flags cannot be combined with a task, subcommand, --interactive or ACP");
   if (positional[0] === "vars") {
     if (interactive || acp || acpTransport || Object.keys(flags).some(key => key !== "configPath" && key !== "agent")) throw new Error("vars accepts only --config and --agent");
     if (positional.length === 2 && positional[1] === "list") return { command: "vars-list", flags };
@@ -1000,11 +1015,13 @@ export function parseCliArgs(argv: string[]): CliArgs {
     if (interactive || acp || acpTransport || flags.host || flags.port || flags.continue || flags.resumeId
       || flags.agent || flags.configPath || flags.systemPrompt || flags.maxSteps || flags.maxOutputBytes
       || flags.requestTimeoutMs || flags.autoApprove) throw new Error("sessions cannot be combined with run options");
-    if (flags.json && positional[1] !== "panels") throw new Error("--json is only available with sessions panels");
+    if (flags.json && positional[1] !== "panels" && positional[1] !== "goal") throw new Error("--json is only available with sessions panels or goal");
     if (positional.length === 1) return { command: "sessions-list", flags };
     if (positional[1] === "show" && positional.length === 3 && !flags.allSessions) {
       return { command: "sessions-show", flags, sessionId: positional[2]! };
     }
+    if (positional[1] === "goal" && positional.length === 3 && !flags.allSessions && !flags.before)
+      return { command: "sessions-goal", flags, sessionId: positional[2]! };
     // `--all` here includes closed panels; `--json` prints machine-readable output.
     if (positional[1] === "panels" && (positional.length === 3 || positional.length === 4) && !flags.before) {
       return { command: "sessions-panels", flags, sessionId: positional[2]!, ...(positional[3] ? { panelId: positional[3] } : {}) };

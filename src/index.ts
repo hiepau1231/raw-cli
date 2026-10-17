@@ -105,3 +105,7 @@ export type { InteractionResult, PreparedForm } from "./panels/forms.js";
 export { ProcessSupervisor } from "./processes/supervisor.js";
 export { ProcessError } from "./processes/contract.js";
 export type { ProcessContext, ProcessRecord, ProcessState, ProcessOutput, ProcessChunk, ProcessStart } from "./processes/contract.js";
+
+export { GoalService } from "./goals/service.js";
+export { GoalError } from "./goals/contract.js";
+export type { GoalDefinition, GoalSnapshot, GoalCommand, GoalReceipt, GoalRequest, GoalState, GoalUsage, GoalCriterion, GoalStep, GoalStatus } from "./goals/contract.js";

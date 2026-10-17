@@ -34,6 +34,7 @@ Usage: raw [options] [task]
        raw sessions [--all] [--before CURSOR]
        raw sessions show ID [--before CURSOR]
        raw sessions panels ID [PANEL] [--all] [--json]
+       raw sessions goal ID [--json]
        raw sessions delete ID|stats
        raw --acp --stdio
        raw --acp --ws --host 127.0.0.1 --port 8765
@@ -53,12 +54,15 @@ Options:
   --interactive              Start a terminal REPL
   --continue                 Resume latest session in current workspace
   --resume ID                Resume a selected session in its stored cwd
+  --goal TEXT                Explicitly start a native goal (select builtin/goal)
+  --goal-token-budget N      Optional cumulative token threshold for --goal
+  --goal-resume              Explicitly resume a goal with --resume ID
   -y, --auto-approve         Compatibility alias (tools run automatically)
   --help, --version          Show help or version
 
 Session options: --all (list all workspaces), --before CURSOR (older page)
 
-REPL: /compact, /clear, /stats, /exit
+REPL: /compact, /clear, /stats, /exit; native /goal status|start|pause|resume|edit|budget|clear|abandon
 Config: models define access paths; agents select a model, prompt, tools and policy.
 Packages: raw package install PATH --as ALIAS; raw package update ALIAS --from PATH.
 Vision: a model with vision=true may select builtin/view_image.
@@ -67,6 +71,7 @@ Setup: config init selects seven packaged setup skills for the raw agent.
 Examples: installed examples/tools/ can be forked; examples/agents/project-helper/ is copyable.
 Compact: automatic at 80% of the input budget when the model declares context_window_tokens; agent compact.trigger_tokens sets the threshold, false keeps it manual.
 Exit: 0 complete, 1 runtime error, 2 invalid input, 3 max steps, 130 cancelled
+Native Goal: 0 complete, 3 request cap, 4 pause/token/no-progress, 5 blocked, 130 cancel/abandon
 `;
 }
 
@@ -184,6 +189,12 @@ async function run(): Promise<void> {
           ...(parsed.flags.before ? { before: parsed.flags.before } : {}) }));
         for (const item of page.items) process.stdout.write(renderTerminalHistory(item, ui, caps, process.stdout.columns || 80));
         if (page.nextCursor) process.stdout.write(`next: ${page.nextCursor}\n`);
+      } else if (parsed.command === "sessions-goal") {
+        if (!store.getSession(parsed.sessionId!)) throw new InputError(store.missingSessionMessage());
+        const state = store.getGoalState(parsed.sessionId!);
+        const { goalStatus } = await import("../src/goals/cli.js");
+        const { safeTerminalText } = await import("../src/terminal/safe.js");
+        process.stdout.write(`${parsed.flags.json ? JSON.stringify(state) : safeTerminalText(goalStatus(state.goal ?? undefined))}\n`);
       } else if (parsed.command === "sessions-panels") {
         if (!store.getSession(parsed.sessionId!)) throw new InputError(store.missingSessionMessage());
         const { selectPanels, renderPanelsText, panelTitle } = await import("../src/panels/render.js");
@@ -221,7 +232,7 @@ async function run(): Promise<void> {
       process.stderr.write(`raw: resuming in ${selected.cwd}\n`);
     } else runtime = await inputAsync(() => loadConfig({ flags: parsed.flags, requireModel: true }));
     const { runCli } = await import("../src/cli.js");
-    process.exitCode = await runCli(runtime, parsed.command === "task" ? parsed.task : undefined, store, selected);
+    process.exitCode = await runCli(runtime, parsed.command === "task" ? parsed.task : undefined, store, selected, parsed.flags);
   } finally {
     try { runSessionMaintenance(store); }
     catch { process.stderr.write("raw: session maintenance deferred\n"); }
@@ -231,5 +242,5 @@ async function run(): Promise<void> {
 
 void run().catch((error) => {
   process.stderr.write(`raw: ${redact(error instanceof Error ? error.message : String(error))}\n`);
-  process.exitCode = error instanceof InputError ? 2 : 1;
+  process.exitCode = error instanceof InputError || (error instanceof Error && error.name === "GoalError") ? 2 : 1;
 });

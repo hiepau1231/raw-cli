@@ -1,7 +1,8 @@
+import { SessionOperationError } from "./sessions/operation-types.js";
 import { GoalCall } from "./goals/call.js";
 import { GoalService } from "./goals/service.js";
 import { GoalRuntime, GoalStop } from "./goals/runtime.js";
-import { GoalError, type GoalDefinition, type GoalSnapshot, type GoalState, type GoalWrites } from "./goals/contract.js";
+import { GoalError, type GoalRequest, type GoalReceipt, type GoalDefinition, type GoalSnapshot, type GoalState, type GoalWrites } from "./goals/contract.js";
 import type { ProcessSupervisor } from "./processes/supervisor.js";
 import { FILES_CHANGED_OWNER } from "./tools/write-changes.js";
 import { InteractionError, type InteractionContext, type InteractionAdapter } from "./interactions/contract.js";
@@ -317,6 +318,17 @@ export class AgentSession {
       throw new GoalError("goals_unavailable", "select builtin/goal before starting a native goal");
     return new GoalService({ store: this.persistence.store, sessionId: this.persistence.sessionId, owner: this.persistence.owner, defaultMaxRequests: this.options.maxSteps });
   }
+  private hostGoalControl<T>(action: () => T): T {
+    try { return action(); }
+    catch (error) {
+      if (!(error instanceof GoalError) && !(error instanceof SessionOperationError)) {
+        this.persistenceFailed = true;
+        this.persistenceError = error instanceof Error ? error : new Error(String(error));
+        this.controller?.abort();
+      }
+      throw error;
+    }
+  }
   private attachGoal(goal: GoalSnapshot): void {
     this.nativeGoal = new GoalRuntime(goal.id, {
       read: () => this.persistence!.store.getGoalState(this.persistence!.sessionId),
@@ -327,24 +339,39 @@ export class AgentSession {
   async runGoal(definition: GoalDefinition, onEvent?: (event: RunEvent) => void): Promise<RunResult> {
     if (this.currentState !== "idle") throw new Error("agent session is busy or closed");
     if (this.persistenceFailed) throw new Error("session persistence failed; close and resume to recover");
-    const service = this.goalService(); const before = service.state();
-    const receipt = service.start(definition, randomUUID(), before.revision);
+    const service = this.goalService(); const before = this.hostGoalControl(() => service.state());
+    const receipt = this.hostGoalControl(() => service.start(definition, randomUUID(), before.revision));
     this.attachGoal(receipt.goal!);
     return this.runInput(definition.objective, onEvent);
   }
   async resumeGoal(onEvent?: (event: RunEvent) => void): Promise<RunResult> {
     if (this.currentState !== "idle") throw new Error("agent session is busy or closed");
     if (this.persistenceFailed) throw new Error("session persistence failed; close and resume to recover");
-    const service = this.goalService(); const before = service.state();
-    const receipt = service.resume(randomUUID(), before.revision);
+    const service = this.goalService(); const before = this.hostGoalControl(() => service.state());
+    const receipt = this.hostGoalControl(() => service.resume(randomUUID(), before.revision));
     this.attachGoal(receipt.goal!);
     return this.runInput(this.originalTask === undefined ? receipt.goal!.definition.objective : undefined, onEvent);
   }
   async pauseGoal(): Promise<GoalSnapshot | undefined> {
-    const service = this.goalService(); const before = service.state();
-    if (before.goal?.status === "active") service.pause(randomUUID(), before.revision);
-    if (this.nativeGoal) { this.abort(); await this.activeRun; }
+    const service = this.goalService(); const before = this.hostGoalControl(() => service.state());
+    if (before.goal?.status === "active") this.hostGoalControl(() => service.pause(randomUUID(), before.revision));
+    if (this.nativeGoal || before.goal) { this.abort(); await this.activeRun; }
     return this.getGoal();
+  }
+  /** Host-only controls. Definition edits/clear/abandon require the caller to pause and settle first. */
+  commandGoal(request: GoalRequest): GoalReceipt {
+    if (["edit", "clear", "abandon"].includes(request.command.action) && this.currentState !== "idle")
+      throw new GoalError("goal_active", "pause and settle the goal before this command");
+    return this.hostGoalControl(() => this.goalService().command(request));
+  }
+  /** Durable steering, not an approval response or permission to resume autonomy. */
+  queueUserInput(input: UserInput, clientRequestId: string = randomUUID()) {
+    this.goalService();
+    if (this.persistenceFailed) throw new GoalError("persistence_error", "session persistence failed; reopen before steering");
+    const p = this.persistence!;
+    return this.hostGoalControl(() => p.store.enqueueGoalInput(p.sessionId, p.owner, { input, clientRequestId,
+      agentName: this.options.provider.modelConfig.agentName,
+      ...(p.store.getSession(p.sessionId)?.configPath ? { configPath: p.store.getSession(p.sessionId)!.configPath! } : {}) }));
   }
   /** @internal Flushes monotonic goal elapsed time from the existing owner heartbeat. */
   checkpointGoal(): void { if (!this.pendingGoalCall) this.nativeGoal?.heartbeat(); }
@@ -1279,7 +1306,10 @@ export class AgentSession {
         this.panels.setListener(undefined);
         let finalResult = result;
         if (this.nativeGoal && !this.persistenceError) {
-          try { finalResult = { ...result, goal: this.nativeGoal.finish(result.status, result.code) }; }
+          try {
+            finalResult = { ...result, goal: this.nativeGoal.finish(result.status, result.code) };
+            this.durable((store, id, owner) => store.pauseGoalInputs(id, owner, finalResult.goal?.stopReason));
+          }
           catch (error) { finalResult = { status: "error", steps, code: "persistence_error", message: String(error) }; }
         }
         try {

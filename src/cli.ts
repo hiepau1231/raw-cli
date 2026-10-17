@@ -1,8 +1,9 @@
+import { goalCliCommand, goalStatus, nativeGoalExit } from "./goals/cli.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { terminalInteractionAdapter } from "./interactions/terminal.js";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { createAgent, type AgentSession, type RunResult } from "./agent.js";
-import type { RuntimeConfig } from "./config.js";
+import type { RawFlags, RuntimeConfig } from "./config.js";
 import { createProvider } from "./llm/client.js";
 import { createRuntimeTools } from "./tools/plugins/runtime.js";
 import { runtimeAgentOptions } from "./sessions/runtime.js";
@@ -46,13 +47,17 @@ function lineQueue(rl: ReadlineInterface): {
   next(signal?: AbortSignal): Promise<string | undefined>;
   nextAfter(mark: number, signal?: AbortSignal): Promise<string | undefined>;
   mark(): number;
+  intercept(handler: ((line: string) => boolean) | undefined): void;
+  drain(): void;
 } {
   const buffered: Array<{ id: number; line: string }> = [];
   let closed = false;
+  let interceptor: ((line: string) => boolean) | undefined;
   let lastId = 0;
   let waiting: { after: number; deliver: (line: string | undefined) => void } | undefined;
   rl.on("line", (line) => {
     const entry = { id: ++lastId, line };
+    if (interceptor?.(line)) return;
     if (waiting && entry.id > waiting.after) { const deliver = waiting.deliver; waiting = undefined; deliver(line); }
     else buffered.push(entry);
   });
@@ -70,7 +75,8 @@ function lineQueue(rl: ReadlineInterface): {
       if (signal?.aborted) onAbort();
     });
   };
-  return { next: (signal) => take(0, signal), nextAfter: take, mark: () => lastId };
+  return { next: (signal) => take(0, signal), nextAfter: take, mark: () => lastId, intercept: handler => { interceptor = handler; },
+    drain: () => { for (let i = 0; i < buffered.length;) { if (interceptor?.(buffered[i]!.line)) buffered.splice(i, 1); else i++; } } };
 }
 
 async function askPermission(lines: ReturnType<typeof lineQueue>, request: ToolApprovalRequest, renderer?: TerminalRenderer): Promise<boolean> {
@@ -84,7 +90,7 @@ async function askPermission(lines: ReturnType<typeof lineQueue>, request: ToolA
 }
 
 export async function runCli(runtime: RuntimeConfig, task: string | undefined,
-  store: SessionStore, selected?: SessionSummary): Promise<number> {
+  store: SessionStore, selected?: SessionSummary, flags: RawFlags = {}): Promise<number> {
   if (!runtime.modelConfig) throw new Error("provider and model are required");
   const cwd = selected?.cwd ?? process.cwd();
   const provider = createProvider(runtime.modelConfig);
@@ -104,13 +110,18 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
     offStartup();
   }
   if (startupCancelled) { await tools.mcp.close(); return 130; }
-  const rl = task === undefined || process.stdin.isTTY
+  const oneShotGoal = flags.goal !== undefined || flags.goalResume === true;
+  const rl = oneShotGoal || task === undefined || process.stdin.isTTY
     ? createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) })
     : undefined;
   const lines = rl ? lineQueue(rl) : undefined;
   let closed = false;
   let cancelledWhileIdle = false;
   let currentRenderer: TerminalRenderer | undefined;
+  let nativeRunning = false;
+  let nativeUserCancelled = false;
+  let reader: "approval" | "interaction" | undefined;
+  let liveCommands = Promise.resolve();
   let lastTurn: { elapsedMs: number; firstTextMs?: number } | undefined;
   let sessionResumable = true;
   const caps = terminalCapabilities(Boolean(process.stderr.isTTY), process.env, runtime.ui);
@@ -137,12 +148,14 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
   const processes = new ProcessSupervisor({ store });
   const createRuntimeAgent = (id: string) => createAgent({ ...runtimeAgentOptions(runtime, tools, provider, cwd),
     processes, persistence: { store, sessionId: id, surface: "cli" },
-    ...(process.stdin.isTTY && lines ? { interactionAdapter: (request, signal) => {
+    ...(process.stdin.isTTY && lines ? { interactionAdapter: async (request, signal) => {
       currentRenderer?.beforeInput();
-      return terminalInteractionAdapter(lines, text => process.stderr.write(text))(request, signal);
-    }, approve: (request: ToolApprovalRequest) => {
+      reader = "interaction";
+      try { return await terminalInteractionAdapter(lines, text => process.stderr.write(text))(request, signal); } finally { reader = undefined; }
+    }, approve: async (request: ToolApprovalRequest) => {
       if (request.effects) process.stderr.write(`raw: intended effects ${JSON.stringify(request.effects)}\n`);
-      return askPermission(lines, request, currentRenderer);
+      reader = "approval";
+      try { return await askPermission(lines, request, currentRenderer); } finally { reader = undefined; }
     } } : {}) });
   const hookEvent = (event: import("./agent.js").RunEvent) => {
     if (currentRenderer) currentRenderer.event(event);
@@ -156,6 +169,7 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
     await session.start(selected ? "resume" : "create", selected && task === undefined ? undefined : hookEvent);
   } catch (error) { rl?.close(); try { await processes.close(); } finally { await tools.mcp.close(); } throw error; }
   const interrupt = () => {
+    nativeUserCancelled = true;
     currentRenderer?.beforeInput();
     if (session.abort()) return;
     cancelledWhileIdle = true;
@@ -163,14 +177,50 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
   };
   const onClose = () => {
     closed = true;
-    session.abort();
+    if (!oneShotGoal) session.abort();
   };
-  const onTerm = () => { closed = true; session.abort(); rl?.close(); };
+  const onTerm = () => { nativeUserCancelled = true; closed = true; session.abort(); rl?.close(); };
+  const nativeSelected = () => session.toolDefinitions.some(tool => session.toolIdentity(tool.name) === "builtin/goal");
+  const writeGoal = (text: string) => process.stderr.write(`raw: ${safeTerminalText(text)}\n`);
+  const runNative = async (mode: "start" | "resume", objective?: string): Promise<RunResult> => {
+    const renderer = new TerminalRenderer(session, runtime, cwd, true, Boolean(selected));
+    currentRenderer = renderer; nativeRunning = true; renderer.start();
+    try {
+      const pending = mode === "start" ? session.runGoal({ objective: objective!, ...(flags.goalTokenBudget === undefined ? {} : { tokenBudget: flags.goalTokenBudget }) }, renderer.event)
+        : session.resumeGoal(renderer.event);
+      if (session.state !== "idle") lines?.drain();
+      const result = await pending;
+      renderer.finish(result);
+      writeGoal(goalStatus(result.goal?.snapshot ?? session.getGoal()));
+      process.stderr.write(formatFooter(result, renderer, record.id, result.code !== "persistence_error", !oneShotGoal));
+      return result;
+    } finally { nativeRunning = false; currentRenderer = undefined; }
+  };
+  const command = (line: string) => goalCliCommand(session, line, { write: writeGoal,
+    run: async (mode, objective) => { await runNative(mode, objective); } });
+  lines?.intercept(line => {
+    if (!nativeRunning) return false;
+    if (/^\/goal(?:\s|$)/.test(line)) {
+      liveCommands = liveCommands.then(() => command(line)).catch(error => { writeGoal(String(error)); });
+      return true;
+    }
+    if (reader === "interaction" || (reader === "approval" && /^(?:y|yes|n|no)$/i.test(line.trim()))) return false;
+    if (!line.trim()) return true;
+    try { const queued = session.queueUserInput(line); writeGoal(`queued ${queued.id}`); }
+    catch (error) { writeGoal(String(error)); }
+    return true;
+  });
   process.on("SIGINT", interrupt);
   const offTerm = onShutdown(onTerm);
   rl?.on("SIGINT", interrupt);
   rl?.on("close", onClose);
   try {
+    if (oneShotGoal) {
+      const result = await runNative(flags.goalResume ? "resume" : "start", flags.goal);
+      await liveCommands;
+      const snapshot = session.getGoal();
+      return nativeUserCancelled ? 130 : nativeGoalExit({ ...result, goal: { snapshot: snapshot ?? null, stopReason: snapshot?.reason ?? snapshot?.status ?? result.goal?.stopReason ?? "goal_cleared" } });
+    }
     if (task !== undefined) {
       currentRenderer = new TerminalRenderer(session, runtime, cwd, true, Boolean(selected));
       const result = await textRun(session, task, currentRenderer);
@@ -194,6 +244,10 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
       if (closed) break;
       if (!line.trim()) continue;
       if (line === "/exit") break;
+      if (nativeSelected() && /^\/goal(?:\s|$)/.test(line)) {
+        try { await command(line); } catch (error) { writeGoal(String(error)); }
+        continue;
+      }
       if (line === "/clear") {
         await session.close(hookEvent);
         record = createSavedSession("New session");
@@ -229,6 +283,12 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
         } catch { process.stderr.write("raw: compaction failed\n"); }
         continue;
       }
+      const goal = nativeSelected() ? session.getGoal() : undefined;
+      if (goal && (goal.status === "paused" || goal.status === "blocked")) {
+        try { const queued = session.queueUserInput(line); writeGoal(`queued ${queued.id}; goal remains ${goal.status}`); }
+        catch (error) { writeGoal(String(error)); }
+        continue;
+      }
       currentRenderer = new TerminalRenderer(session, runtime, cwd, false);
       const result = await textRun(session, line, currentRenderer);
       lastTurn = { elapsedMs: currentRenderer.elapsedMs,
@@ -241,6 +301,8 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
     if (sessionResumable && store.getSession(record.id)) process.stderr.write(formatResumeCommand(record.id, runtime.ui, caps));
     return cancelledWhileIdle ? 130 : 0;
   } finally {
+    lines?.intercept(undefined);
+    await liveCommands;
     rl?.close();
     process.off("SIGINT", interrupt);
     offTerm();
