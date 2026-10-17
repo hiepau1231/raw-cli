@@ -1,3 +1,4 @@
+import { GoalError, transitionGoal, validateGoalSize, type GoalActor, type GoalRequest, type GoalReceipt, type GoalState, type GoalSnapshot } from "../goals/contract.js";
 import { assertNoLiveProcesses, recoverProcessHosts } from "../processes/store.js";
 import { InteractionError, type InteractionRequest, type InteractionSettlement } from "../interactions/contract.js";
 import { canonicalInteractionResult, validateFormAnswers } from "../panels/forms.js";
@@ -257,6 +258,64 @@ export class SessionStore {
   }
 
   close(): void { this.database.close(); }
+
+  /** Passive canonical read: does not attach a provider, claim a lease, or update retention. */
+  getGoalState(sessionId: string): GoalState {
+    if (!this.getSession(sessionId)) throw new GoalError("not_found", this.missingSessionMessage());
+    const row = this.database.prepare("SELECT revision, payload_json FROM session_goals WHERE session_id = ?").get(sessionId);
+    return { revision: Number(row?.revision ?? 0), goal: row?.payload_json == null ? null : JSON.parse(String(row.payload_json)) as GoalSnapshot };
+  }
+
+  /** The receipt is looked up before ownership/revision checks: retries never perform a second mutation. */
+  commandGoal(sessionId: string, request: GoalRequest, actor: GoalActor, owner?: SessionOwner, defaultMaxRequests = 10000): GoalReceipt {
+    if (!request || typeof request.clientRequestId !== "string" || !request.clientRequestId.trim() || request.clientRequestId.length > 128
+      || !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0 || !request.command) throw new GoalError("invalid_goal", "invalid request id, revision or command");
+    if (actor !== "user" && actor !== "model") throw new GoalError("forbidden", "unknown goal actor");
+    if (actor === "model" && !["update", "complete", "block"].includes(request.command.action)) throw new GoalError("forbidden", "model cannot control autonomy or definition");
+    const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable)
+      : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,stable(v)])) : value;
+    const requestHash = digest(JSON.stringify(stable({ actor, revision: request.expectedRevision, command: request.command })));
+    return this.transaction(() => {
+      const prior = this.database.prepare("SELECT request_hash, receipt_json FROM session_goal_commands WHERE session_id = ? AND client_request_id = ?").get(sessionId, request.clientRequestId);
+      if (prior) {
+        if (prior.request_hash !== requestHash) throw new GoalError("conflict", "request id was used for a different command");
+        return JSON.parse(String(prior.receipt_json)) as GoalReceipt;
+      }
+      const controlOwner = owner ?? this.claimInTransaction(sessionId);
+      this.ownerRow(sessionId, controlOwner);
+      const before = this.getGoalState(sessionId);
+      if (before.revision !== request.expectedRevision) throw new GoalError("stale_revision", `expected ${request.expectedRevision}, current ${before.revision}`);
+      const after = transitionGoal(before, request.command, actor, this.now(), defaultMaxRequests);
+      const receipt: GoalReceipt = { ...after, clientRequestId: request.clientRequestId, goalId: (after.goal ?? before.goal)!.id, action: request.command.action };
+      this.writeGoalState(sessionId, after, request.command.action, actor);
+      this.database.prepare("INSERT INTO session_goal_commands(session_id, client_request_id, request_hash, receipt_json) VALUES (?, ?, ?, ?)")
+        .run(sessionId, request.clientRequestId, requestHash, JSON.stringify(receipt));
+      if (!owner) this.releaseSession(sessionId, controlOwner);
+      return receipt;
+    });
+  }
+
+  /** Trusted runtime checkpoint; usage/elapsed updates never go through model permissions. */
+  updateGoal(sessionId: string, owner: SessionOwner, update: (goal: GoalSnapshot) => void, action = "checkpoint"): GoalSnapshot | undefined {
+    return this.transaction(() => {
+      this.ownerRow(sessionId, owner);
+      const state = this.getGoalState(sessionId); if (!state.goal) return undefined;
+      const goal = structuredClone(state.goal); update(goal);
+      goal.id = state.goal.id; goal.revision = state.revision + 1; goal.updatedAt = this.now(); validateGoalSize(goal);
+      this.writeGoalState(sessionId, {revision: goal.revision, goal}, action, "host");
+      return goal;
+    });
+  }
+
+  private writeGoalState(sessionId: string, state: GoalState, action: string, actor: string): void {
+    this.database.prepare(`INSERT INTO session_goals(session_id, revision, payload_json) VALUES (?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision, payload_json=excluded.payload_json`)
+      .run(sessionId, state.revision, state.goal ? JSON.stringify(state.goal) : null);
+    const sequence = Number(this.database.prepare("SELECT coalesce(max(sequence), 0) AS n FROM history WHERE session_id = ?").get(sessionId)?.n ?? 0) + 1;
+    this.database.prepare("INSERT INTO history(session_id, sequence, created_at, kind, payload_json, status) VALUES (?, ?, ?, 'goal_update', ?, 'complete')")
+      .run(sessionId, sequence, this.now(), JSON.stringify({revision: state.revision, goal: state.goal, action, actor}));
+    this.database.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(this.now(), sessionId);
+  }
 
   missingSessionMessage(): string {
     return `session not found or expired in the active store${this.preservedLegacyPath

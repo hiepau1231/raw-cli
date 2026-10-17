@@ -135,6 +135,18 @@ export function initializeSessionSchema(database: DatabaseSync): void {
       created_at INTEGER NOT NULL, state TEXT NOT NULL, record_json TEXT NOT NULL,
       UNIQUE(session_id,client_request_id)
     )`);
+    // Native goals are independent from legacy tool panels; additive format-6 tables.
+    database.exec(`CREATE TABLE IF NOT EXISTS session_goals (
+      session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL,
+      payload_json TEXT
+    ); CREATE TABLE IF NOT EXISTS session_goal_commands (
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      client_request_id TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      receipt_json TEXT NOT NULL,
+      PRIMARY KEY(session_id, client_request_id)
+    )`);
     // Latest tool panel documents (docs/panels-design.md §12). Created like session_runtime_metadata: no version bump.
     database.exec(`CREATE TABLE IF NOT EXISTS session_panels (
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
