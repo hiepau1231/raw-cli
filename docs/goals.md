@@ -63,3 +63,18 @@ Native Goal is separate from legacy panels. Select `builtin/goal` explicitly; th
 `POST /api/sessions/:id/goal/commands` accepts `{clientRequestId, expectedRevision, command}` under the existing dashboard authorization. Commands are start/resume/pause/edit/setBudget/complete/clear/abandon. Start and resume atomically persist a Goal receipt linked to one operation, then launch that operation once. Duplicate payloads return the original receipt even after the run ends; changed payloads conflict and stale revisions do not stop or alter work. A failed runtime attachment pauses the accepted Goal instead of leaving it apparently running.
 
 Live pause/edit/budget/clear/abandon/complete serialize on the owning host: validate revision first, stop and settle work under the same fenced lease, then commit the requested change. Edits remain paused and reset criteria/evidence while retaining cumulative usage. While controls settle, other mutations answer busy. A different process cannot stop a live host in this version (no IPC). Stopped Goal operations never hand queued input to a new run, including when their ordinary run result says completed. Plain composer text is steering, not approval and not implicit resume. The UI shows criteria/evidence as recorded claims, usage coverage, elapsed approximation, stop reason and activity/approval separately from lifecycle. Removing a token cap requires an explicit warning/confirmation.
+
+
+## Choose tracker or runtime (opt-in package)
+
+`examples/packages/coding-kit` v1 remains a portable panel tracker. It does not continue after final responses. No config, starter, session or panel is migrated automatically. For host-owned bounded continuation, install the separate `examples/packages/native-goal-kit`, which selects `builtin/goal` and requires `raw.goal/1`:
+
+```sh
+raw package pack examples/packages/native-goal-kit --out native-goal-kit.rawpkg
+raw package install native-goal-kit.rawpkg --as native-goal --config CONFIG
+raw agent add native-coder --from pkg/native-goal/agents/coder --model LOCAL_MODEL --config CONFIG
+raw --config CONFIG --agent native-coder --goal "Complete the acceptance checks"
+raw --config CONFIG --resume SESSION_ID --goal-resume
+```
+
+The recipient supplies the model/provider and keeps its existing default agent. Packing records builtin references, not checkout paths or a second Goal tool. Exporting an agent that selects `builtin/goal` also declares `raw.goal/1`. A host without that capability rejects the native package explicitly. Selecting native and legacy tools under the same visible name `goal` is an error; choose one. Ordinary SDK/CLI/ACP runs do not start or resume native autonomy merely because the tool is selected. ACP has no native Goal controls in this release; use SDK, CLI or dashboard for explicit lifecycle controls. Removing the native package/tool does not erase canonical Goal audit or migrate it into a panel.

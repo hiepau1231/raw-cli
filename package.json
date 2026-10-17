@@ -42,6 +42,7 @@
     "examples/skills",
     "examples/agents",
     "examples/packages",
+    "docs/goals.md",
     "docs/skill-authoring.md",
     "docs/hooks.md",
     "docs/configuration.md",

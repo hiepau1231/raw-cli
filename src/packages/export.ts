@@ -295,7 +295,7 @@ export async function exportAgentPackage(options: ExportAgentOptions): Promise<{
     description: `Exported agent ${options.agentName}`, files, exports: exported,
     ...(inputRequired.length ? { inputs: { type: "object", properties: inputProperties, required: inputRequired } } : {}),
     requires: ["raw.agent/1", "raw.tool-api/2", "raw.skill/1", ...(Object.keys(emittedHooks).length ? ["raw.hook/2"] : []),
-      ...(usesPanels ? ["raw.panel/2"] : []), ...(usesEffects ? ["raw.tool-effects/1"] : [])],
+      ...(selectedToolIds.includes("builtin/goal") ? ["raw.goal/1"] : []), ...(usesPanels ? ["raw.panel/2"] : []), ...(usesEffects ? ["raw.tool-effects/1"] : [])],
     ...(prerequisites.size ? { metadata: { external_executables: [...prerequisites].sort() } } : {}) };
   await writeFile(join(out, "raw-package.json"), JSON.stringify(manifest, null, 2) + "\n");
   const report = await inspectPackage(out);

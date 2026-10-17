@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "@raw/native-goal-kit",
+  "version": "1.0.0",
+  "description": "Opt-in host-owned native Goal runtime; legacy coding-kit remains unchanged",
+  "files": [
+    "agents/coder.json",
+    "prompts/coder.md",
+    "README.md"
+  ],
+  "exports": {
+    "agents": {
+      "coder": "agents/coder.json"
+    }
+  },
+  "requires": [
+    "raw.agent/1",
+    "raw.tool-api/2",
+    "raw.goal/1"
+  ]
+}

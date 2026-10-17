@@ -1,0 +1,3 @@
+# Native Goal kit (opt-in)
+
+This package exports `coder`, selecting the host's `builtin/goal` runtime tool. It requires `raw.goal/1`. It is separate from `@raw/coding-kit` v1's panel tracker; do not select both under the name `goal`. Install and bind to a recipient-supplied model, then explicitly start with `raw --agent coder --goal "Your objective"`. Ordinary turns, including ACP prompts, do not activate Goal continuation. See the installed host's `docs/goals.md` for SDK, live CLI/dashboard controls, budgets, stop reasons and recovery. No daemon, automatic restart resume or ACP native controls are included.

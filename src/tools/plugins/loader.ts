@@ -108,7 +108,7 @@ export async function readToolManifests(options: LoadToolPluginsOptions): Promis
 export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<ToolPlugin[]> {
   const roots = toolRoots(options);
   const seenIds = new Set<string>();
-  const seenNames = new Set<string>();
+  const seenNames = new Map<string, string>();
   const prepared: Array<Awaited<ReturnType<typeof selectedManifest>>> = [];
   for (const id of options.selectedIds) {
     if (seenIds.has(id)) throw new Error(`duplicate tool id: ${id}`);
@@ -118,8 +118,9 @@ export async function loadToolPlugins(options: LoadToolPluginsOptions): Promise<
     if (parsed?.scope === "builtin" && !bundledNames.has(parsed.folder)) throw new Error(`unknown bundled tool: ${id}`);
     const item = await selectedManifest(id, direct ? dirname(direct.folder) : roots[parsed!.scope], direct, options.onWarning);
     const visibleName = direct?.as ?? item.manifest.name;
-    if (seenNames.has(visibleName)) throw new Error(`duplicate tool name: ${visibleName}`);
-    seenNames.add(visibleName);
+    const prior = seenNames.get(visibleName);
+    if (prior) throw new Error(`duplicate tool name: ${visibleName} (${prior}, ${id})${id === "builtin/goal" || prior === "builtin/goal" ? "; native Goal runtime and legacy Goal tracker cannot share a model-visible name; select one" : ""}`);
+    seenNames.set(visibleName, id);
     prepared.push(item);
   }
   const result: ToolPlugin[] = [];
