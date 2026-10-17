@@ -87,3 +87,18 @@ for (const origin of ["released-sdk", "dead-operation"] as const) test(`AC-4 rec
   assert.ok(seen.length>0); assert.equal(seen[0]!.split("IMPORTANT_RECOVERED_STEERING").length-1,1);assert.equal(f.store.findQueuedInput(f.session.id,"recover-steer")?.state,"delivered");
  }finally{await host?.close();await f.cleanup();}
 });
+
+test("AC-4 native steering cannot become an automatic ordinary successor after owner recovery",async()=>{
+ const f=goalFixture(()=>({text:"unused",toolCalls:[],finishReason:"stop",usage:goalUsage}));let host:SessionOperations|undefined;
+ try{
+  const row=f.store.database.prepare("SELECT owner_token,owner_generation FROM sessions WHERE id=?").get(f.session.id)!;const owner={token:String(row.owner_token),generation:Number(row.owner_generation)};
+  new GoalService({store:f.store,sessionId:f.session.id,owner}).start({objective:"Orphaned native work"},"native-start",0);
+  const input=f.agent.queueUserInput("NATIVE_ONLY_NOT_AN_AUTOMATIC_TURN","orphaned-steering");await f.agent.close();
+  f.store.database.prepare("UPDATE sessions SET owner_token='2147483647-dead',lease_until=0 WHERE id=?").run(f.session.id);
+  const captured:string[]=[];
+  host=new SessionOperations({store:f.store,attach:async({owner,operation})=>({agent:createAgent({cwd:f.root,registry:goalRegistry(),deliverQueuedInputs:true,provider:{modelConfig:goalModel,async generate(request){captured.push(JSON.stringify(request.messages));return{text:"Ordinary result",toolCalls:[],finishReason:"stop",usage:goalUsage};}},persistence:{store:f.store,sessionId:f.session.id,owner,ownership:"host",surface:"web",operationId:operation.id}}),modelConfig:goalModel,compactOptions:{keepRecentTurns:1,maxOutputTokens:64},async close(){}})});
+  const first=host.submit({sessionId:f.session.id,clientRequestId:"explicit-ordinary",kind:"turn",input:"One explicitly submitted ordinary task",agentName:"test",configPath:f.root+"/raw.json"});await host.wait(first.id);
+  const deadline=Date.now()+5000;while(host.activeIds().length){assert.ok(Date.now()<deadline);await new Promise(resolve=>setTimeout(resolve,10));}
+  assert.equal(captured.length,1);assert.equal(captured[0]!.includes("NATIVE_ONLY_NOT_AN_AUTOMATIC_TURN"),false);assert.equal(f.store.listOperations(f.session.id).length,1);assert.equal(f.store.queuedInputView(f.session.id,input.id)?.state,"paused");
+ }finally{await host?.close();await f.cleanup();}
+});

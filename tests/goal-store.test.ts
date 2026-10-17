@@ -209,3 +209,15 @@ test("AC-1 native input association survives requeue and fences delivery to a re
   assert.equal(f.store.queuedInputView(f.session.id,queued.id)?.state,"paused");assert.ok(f.store.queuedInputView(f.session.id,queued.id)?.reason?.includes(a.id));assert.equal(f.store.claimQueuedInput(f.session.id,f.owner),undefined);
  }finally{f.cleanup();}
 });
+
+test("AC-1 automatic handoff refuses native steering and rolls back the terminal transition",()=>{
+ const f=fixture();try{
+  f.command({action:"start",definition:{objective:"Native"}});f.store.releaseSession(f.session.id,f.owner);
+  const accepted=f.store.acceptOperation({sessionId:f.session.id,clientRequestId:"ordinary",kind:"turn",input:"One task",agentName:"test",configPath:join(f.root,"raw.json")}),owner=accepted.owner!;
+  const service=new GoalService({store:f.store,sessionId:f.session.id,owner});service.resume("resume-under-owner",service.state().revision);
+  const queued=f.store.enqueueGoalInput(f.session.id,owner,{clientRequestId:"native-steer",input:"only native",agentName:"test"});
+  f.store.updateOperation(accepted.operation.id,owner,"starting");f.store.updateOperation(accepted.operation.id,owner,"running");
+  assert.throws(()=>f.store.handOff({id:accepted.operation.id,owner,state:"completed"},queued.id),/native Goal steering/);
+  assert.equal(f.store.getOperation(accepted.operation.id)?.state,"running");assert.equal(f.store.queuedInputView(f.session.id,queued.id)?.state,"queued");assert.equal(f.store.listOperations(f.session.id).length,1);
+ }finally{f.cleanup();}
+});

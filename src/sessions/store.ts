@@ -90,7 +90,7 @@ export interface SessionOwner { token: string; generation: number }
 export const MAX_QUEUED_INPUTS = 20;
 // Host-owned association in the existing queue reason; retained until the input reaches a final receipt.
 const goalInputPrefix = (id: string) => `Goal ${id}: `;
-const queuedGoalId = (reason: unknown): string | undefined => typeof reason === "string"
+export const queuedGoalId = (reason: unknown): string | undefined => typeof reason === "string"
   ? /^Goal ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}): /.exec(reason)?.[1] : undefined;
 /** A turn intent sent while another turn runs, with its process-built blocks and request override. */
 export type QueuedIntent = OperationIntent & { blocks?: UserInput; request?: RequestOverride; mode: "queue" | "interrupt" };
@@ -388,6 +388,7 @@ export class SessionStore {
     goal.revision = Number(row.revision) + 1; goal.updatedAt = this.now();
     validateGoalSize(goal);
     this.writeGoalState(sessionId, { revision: goal.revision, goal }, "recovery", "host", false);
+    this.pauseOpenInputs(sessionId, `${goalInputPrefix(goal.id)}interrupted; explicit resume required`);
   }
 
   private writeGoalState(sessionId: string, state: GoalState, action: string, actor: string, touch = true): void {
@@ -594,6 +595,7 @@ export class SessionStore {
       const row = this.database.prepare("SELECT * FROM session_queued_inputs WHERE id = ? AND session_id = ? AND state = 'queued'")
         .get(inputId, ended.sessionId);
       if (!row) throw new Error("the queued message is no longer waiting");
+      if (queuedGoalId(row.reason)) throw new SessionOperationError("invalid_input", "native Goal steering requires explicit Goal resume, not an ordinary successor turn");
       const owner = { token: `${process.pid}-${randomUUID()}`, generation: previous.owner.generation + 1 };
       const moved = this.database.prepare(`UPDATE sessions SET owner_token = ?, owner_generation = ?, lease_until = ?
         WHERE id = ? AND owner_token = ? AND owner_generation = ?`)

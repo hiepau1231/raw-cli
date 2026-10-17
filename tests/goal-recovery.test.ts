@@ -188,3 +188,30 @@ test("AC-3 a queued host turn recovers an expired SDK goal on its own idle claim
     assert.equal(f.store.getGoalState(f.session.id).goal?.status, "paused"); assert.equal(f.store.getGoalState(f.session.id).goal?.reason, "interrupted"); assert.equal(f.requests(), count);
   } finally { await f.cleanup(); }
 });
+
+test("AC-3 killed SDK steering cannot auto-handoff after one explicitly submitted ordinary turn",{timeout:20000},async()=>{
+ const marker="NATIVE_STEERING_MUST_NOT_START_AN_ORDINARY_TURN";
+ const child=spawn(process.execPath,["--import",import.meta.resolve("tsx"),join(process.cwd(),"tests/fixtures/goal-provisional-child.ts"),marker],{stdio:["ignore","pipe","pipe"],windowsHide:true});
+ const exited=once(child,"exit");let root:string|undefined,store:ReturnType<typeof openSessionStore>|undefined,operations:SessionOperations|undefined;
+ try{
+  const ready=await new Promise<{root:string;sessionId:string}>((resolve,reject)=>{
+   let text="";const timeout=setTimeout(()=>reject(new Error("child not ready")),10000);
+   child.once("error",error=>{clearTimeout(timeout);reject(error);});child.once("exit",()=>{clearTimeout(timeout);reject(new Error("child exited"));});
+   child.stdout.on("data",b=>{text+=String(b);for(const line of text.split("\n"))try{const value=JSON.parse(line);if(value.ready){clearTimeout(timeout);resolve(value);}}catch{}});
+  });
+  root=ready.root;child.kill("SIGKILL");await exited;
+  store=openSessionStore({env:{XDG_STATE_HOME:root},now:()=>Date.now()+16000});const current=store;const captured:string[]=[];
+  operations=new SessionOperations({store:current,attach:async({owner,operation})=>({
+   agent:createAgent({cwd:root!,registry:goalRegistry(),deliverQueuedInputs:true,provider:{modelConfig:goalModel,async generate(request){captured.push(JSON.stringify(request.messages));return{text:"Explicit ordinary result",toolCalls:[],finishReason:"stop",usage:goalUsage};}},persistence:{store:current,sessionId:ready.sessionId,owner,ownership:"host",surface:"web",operationId:operation.id}}),
+   modelConfig:goalModel,compactOptions:{keepRecentTurns:1,maxOutputTokens:64},async close(){}
+  })});
+  assert.equal(captured.length,0);
+  const operation=operations.submit({sessionId:ready.sessionId,clientRequestId:"one-ordinary-turn",kind:"turn",agentName:"test",configPath:root+"/raw.json",input:"Explicit ordinary task"});await operations.wait(operation.id);
+  const deadline=Date.now()+5000;while(operations.activeIds().length){assert.ok(Date.now()<deadline,"host cleanup timed out");await new Promise(resolve=>setTimeout(resolve,10));}
+  assert.equal(captured.length,1);assert.equal(captured[0]!.includes(marker),false);assert.equal(current.listOperations(ready.sessionId).length,1);
+  assert.equal(current.getGoalState(ready.sessionId).goal?.status,"paused");assert.equal(current.findQueuedInput(ready.sessionId,"crash-steer")?.state,"paused");
+ }finally{
+  if(child.exitCode===null&&child.signalCode===null){child.kill("SIGKILL");await exited;}
+  await operations?.close();store?.close();if(root)rmSync(root,{recursive:true,force:true});
+ }
+});

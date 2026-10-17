@@ -12,7 +12,7 @@ import type { UserInput } from "../llm/types.js";
 import { measureSession, type SessionMetrics } from "./metrics.js";
 import { approvalTimeoutMs, SessionOperationError, terminalOperationStates, type OperationIntent, type OperationState, type SessionOperation } from "./operation-types.js";
 import { attachSessionRuntime } from "./runtime.js";
-import type { QueuedIntent, SessionOwner, SessionStore, SessionSummary } from "./store.js";
+import { queuedGoalId, type QueuedIntent, type SessionOwner, type SessionStore, type SessionSummary } from "./store.js";
 import type { QueuedInputView } from "./view.js";
 
 
@@ -334,7 +334,8 @@ export class SessionOperations {
     // The interrupting message starts the next turn whatever the ending; otherwise a completed turn hands the session to
     // the oldest waiting message, and any other ending, or a Stop that arrived during cleanup, pauses them all.
     let pauseReason: string | undefined;
-    const waiting = this.closed ? [] : store.queuedInputs(operation.sessionId).filter((item) => item.state === "queued");
+    // Native steering belongs to an explicitly resumed Goal, never an automatically launched ordinary turn.
+    const waiting = this.closed ? [] : store.queuedInputs(operation.sessionId).filter((item) => item.state === "queued" && !queuedGoalId(item.reason));
     const next = goalStopped || active.holdGoalControl ? undefined : (waiting.find((item) => item.mode === "interrupt")
       ?? (state === "completed" && !active.controller.signal.aborted ? waiting[0] : undefined));
     if (next) {
