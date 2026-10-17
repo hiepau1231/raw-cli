@@ -74,8 +74,9 @@ test("the workspace list reports chat counts, running operations and whether eac
 
 test("the workspace list names a folder by its canonical path even when a chat stored a symlinked cwd", async () => {
   const f = await dashboardFixture({ responses: [{ hold: true }] });
-  const real = tempDir("raw-ws-real-"); const aliasRoot = tempDir("raw-ws-alias-"); const alias = join(aliasRoot, "link"); symlinkSync(real, alias);
+  const real = tempDir("raw-ws-real-"); const aliasRoot = tempDir("raw-ws-alias-"); const alias = join(aliasRoot, "link");
   try {
+    symlinkSync(real, alias);
     const chat = await f.json<SessionSummary>("/sessions", "POST", { cwd: real });
     const db = new DatabaseSync(join(f.root, "state", "raw", "sessions.sqlite"));
     db.prepare("UPDATE workspaces SET display_path = ? WHERE canonical_path = ?").run(alias, real);
