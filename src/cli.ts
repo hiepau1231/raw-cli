@@ -122,6 +122,7 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
   let nativeUserCancelled = false;
   let reader: "approval" | "interaction" | undefined;
   let liveCommands = Promise.resolve();
+  let nativeRun: Promise<RunResult> | undefined;
   let lastTurn: { elapsedMs: number; firstTextMs?: number } | undefined;
   let sessionResumable = true;
   const caps = terminalCapabilities(Boolean(process.stderr.isTTY), process.env, runtime.ui);
@@ -182,7 +183,14 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
   const onTerm = () => { nativeUserCancelled = true; closed = true; session.abort(); rl?.close(); };
   const nativeSelected = () => session.toolDefinitions.some(tool => session.toolIdentity(tool.name) === "builtin/goal");
   const writeGoal = (text: string) => process.stderr.write(`raw: ${safeTerminalText(text)}\n`);
-  const runNative = async (mode: "start" | "resume", objective?: string): Promise<RunResult> => {
+  const runNative = (mode: "start" | "resume", objective?: string): Promise<RunResult> => {
+    const pending = performNative(mode, objective);
+    nativeRun = pending;
+    // A live command launches work; its admission must not wait for that work's lifetime.
+    void pending.catch(() => {});
+    return pending;
+  };
+  const performNative = async (mode: "start" | "resume", objective?: string): Promise<RunResult> => {
     const renderer = new TerminalRenderer(session, runtime, cwd, true, Boolean(selected));
     currentRenderer = renderer; nativeRunning = true; renderer.start();
     try {
@@ -197,7 +205,16 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
     } finally { nativeRunning = false; currentRenderer = undefined; }
   };
   const command = (line: string) => goalCliCommand(session, line, { write: writeGoal,
-    run: async (mode, objective) => { await runNative(mode, objective); } });
+    run: async (mode, objective) => { runNative(mode, objective); } });
+  const settleNative = async (): Promise<RunResult> => {
+    let observed = nativeRun!;
+    for (;;) {
+      const result = await observed;
+      await liveCommands;
+      if (nativeRun === observed) return result;
+      observed = nativeRun!;
+    }
+  };
   lines?.intercept(line => {
     if (!nativeRunning) return false;
     if (/^\/goal(?:\s|$)/.test(line)) {
@@ -216,8 +233,8 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
   rl?.on("close", onClose);
   try {
     if (oneShotGoal) {
-      const result = await runNative(flags.goalResume ? "resume" : "start", flags.goal);
-      await liveCommands;
+      runNative(flags.goalResume ? "resume" : "start", flags.goal);
+      const result = await settleNative();
       const snapshot = session.getGoal();
       return nativeUserCancelled ? 130 : nativeGoalExit({ ...result, goal: { snapshot: snapshot ?? null, stopReason: snapshot?.reason ?? snapshot?.status ?? result.goal?.stopReason ?? "goal_cleared" } });
     }
@@ -245,7 +262,11 @@ export async function runCli(runtime: RuntimeConfig, task: string | undefined,
       if (!line.trim()) continue;
       if (line === "/exit") break;
       if (nativeSelected() && /^\/goal(?:\s|$)/.test(line)) {
-        try { await command(line); } catch (error) { writeGoal(String(error)); }
+        try {
+          const previous = nativeRun;
+          await command(line);
+          if (nativeRun !== previous) await settleNative();
+        } catch (error) { writeGoal(String(error)); }
         continue;
       }
       if (line === "/clear") {

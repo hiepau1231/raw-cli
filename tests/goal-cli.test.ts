@@ -152,3 +152,18 @@ test("AC-4 native resume with explicit config preserves the saved agent instead 
  const reopened=openSessionStore({env});try{assert.equal(reopened.getGoalState(session.id).goal?.status,"complete");assert.equal(reopened.getSession(session.id)?.agentName,"coder");}finally{reopened.close();}
  }finally{await provider.close();rmSync(root,{recursive:true,force:true});}
 });
+
+test("AC-4 accepted live resume keeps status and a second pause dispatchable", {timeout:30000},async()=>{
+ const root=mkdtempSync(join(tmpdir(),"raw-goal-cli-live-resume-")),provider=await startMockProvider([{hold:true},{hold:true}]);
+ const running=raw(root,["--config",config(root,provider.url),"--goal","Ship"]);
+ try{
+  await until(()=>provider.requests.length===1,running.output); running.child.stdin.write("/goal pause\n/goal resume\n");
+  await until(()=>provider.requests.length===2,running.output); const previous=running.output();
+  running.child.stdin.write("/goal status\n/goal pause\n");
+  await until(()=>running.output().slice(previous.length).includes("active"),running.output);
+  let timeout:ReturnType<typeof setTimeout>|undefined;
+  const code=await Promise.race([running.done.finally(()=>clearTimeout(timeout)),new Promise<never>((_,reject)=>{timeout=setTimeout(()=>reject(new Error(`second pause ignored: ${running.output()}`)),8000);})]);
+  assert.equal(code,4,running.output()); assert.equal(provider.requests.length,2);
+  const store=openSessionStore({env:{XDG_STATE_HOME:root}});try{const goal=store.getGoalState(store.listSessions({}).items[0]!.id).goal!;assert.equal(goal.status,"paused");assert.equal(goal.usage.requests,2);}finally{store.close();}
+ }finally{running.child.kill();await running.done;await provider.close();rmSync(root,{recursive:true,force:true});}
+});

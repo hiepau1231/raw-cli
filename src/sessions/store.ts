@@ -313,6 +313,12 @@ export class SessionStore {
       if (interrupted && after.goal && before.goal?.id === after.goal.id) after.goal.elapsedApproximate = true;
       const receipt: GoalReceipt = { ...after, clientRequestId: request.clientRequestId, goalId: (after.goal ?? before.goal)!.id, action: request.command.action, ...(operationId ? { operationId } : {}) };
       this.writeGoalState(sessionId, after, request.command.action, actor);
+      if (request.command.action === "resume") {
+        // Only steering paused for this Goal is released. Hook-blocked and ordinary paused inputs stay untouched.
+        this.database.prepare(`UPDATE session_queued_inputs SET state = 'queued', reason = NULL, updated_at = ?
+          WHERE session_id = ? AND state = 'paused' AND substr(reason, 1, ?) = ?`)
+          .run(this.now(), sessionId, `Goal ${after.goal!.id}: `.length, `Goal ${after.goal!.id}: `);
+      }
       this.database.prepare("INSERT INTO session_goal_commands(session_id, client_request_id, request_hash, receipt_json) VALUES (?, ?, ?, ?)")
         .run(sessionId, request.clientRequestId, requestHash, JSON.stringify(receipt));
       if (!owner) this.releaseSession(sessionId, controlOwner);
@@ -1447,7 +1453,11 @@ export class SessionStore {
   }
 
   pauseGoalInputs(sessionId: string, owner: SessionOwner, reason?: string): void {
-    this.transaction(() => { this.ownerRow(sessionId, owner); this.pauseOpenInputs(sessionId, reason); });
+    this.transaction(() => {
+      this.ownerRow(sessionId, owner);
+      const goal = this.getGoalState(sessionId).goal;
+      this.pauseOpenInputs(sessionId, goal ? `Goal ${goal.id}: ${reason ?? "explicit resume required"}` : reason);
+    });
   }
 
   private pauseOpenInputs(sessionId: string, reason?: string): void {

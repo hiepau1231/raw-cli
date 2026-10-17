@@ -182,3 +182,19 @@ test("AC-1 a paused goal cannot be mutated by a late model completion", () => {
     f.cleanup();
   }
 });
+
+test("AC-1 resume reactivates only same-Goal paused steering atomically and idempotently",()=>{
+ const f=fixture();
+ try{
+  const enqueue=(key:string)=>f.store.enqueueInput(f.session.id,f.owner,{sessionId:f.session.id,clientRequestId:key,kind:"turn",agentName:"test",configPath:join(f.root,"config.json"),input:key,mode:"queue"});
+  f.command({action:"start",definition:{objective:"First"}});
+  const ordinary=enqueue("ordinary");f.store.database.prepare("UPDATE session_queued_inputs SET state='paused',reason='ordinary paused' WHERE id=?").run(ordinary.id);
+  const native=enqueue("native");f.store.pauseGoalInputs(f.session.id,f.owner,"user_paused");f.command({action:"pause"});
+  const revision=f.service.state().revision,request={clientRequestId:"resume-atomic",expectedRevision:revision,command:{action:"resume" as const}};
+  f.store.database.exec("CREATE TRIGGER fail_resume_receipt BEFORE INSERT ON session_goal_commands BEGIN SELECT RAISE(ABORT,'receipt failure'); END");
+  assert.throws(()=>f.service.command(request),/receipt failure/);assert.equal(f.service.state().revision,revision);assert.equal(f.store.queuedInputView(f.session.id,native.id)?.state,"paused");f.store.database.exec("DROP TRIGGER fail_resume_receipt");
+  const receipt=f.service.command(request);assert.equal(f.store.queuedInputView(f.session.id,native.id)?.state,"queued");assert.equal(f.store.queuedInputView(f.session.id,ordinary.id)?.state,"paused");
+  const claimed=f.store.claimQueuedInput(f.session.id,f.owner)!;assert.equal(claimed.id,native.id);f.store.releaseQueuedInput(f.session.id,f.owner,native.id,"blocked","hook refused");assert.deepEqual(f.service.command(request),receipt);assert.equal(f.store.queuedInputView(f.session.id,native.id)?.state,"blocked");
+  const old=enqueue("old-goal");f.store.pauseGoalInputs(f.session.id,f.owner,"old goal stopped");f.command({action:"pause"});f.command({action:"clear"});f.command({action:"start",definition:{objective:"Second"}});f.command({action:"pause"});f.command({action:"resume"});assert.equal(f.store.queuedInputView(f.session.id,old.id)?.state,"paused");
+ }finally{f.cleanup();}
+});

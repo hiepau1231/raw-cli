@@ -476,12 +476,12 @@ export function Chat({
   };
   const [goalPending, setGoalPending] = useState(false);
   const goalSubmitting = useRef(false);
-  const commandGoal = async (command: GoalCommand) => {
+  const commandGoal = async (command: GoalCommand, expectedRevision = state?.goal?.revision ?? 0) => {
     if (!state || goalSubmitting.current) throw new Error("A Goal command is already pending");
     if (command.action === "setBudget" && command.tokenBudget === null && !window.confirm("Removing the token cap allows continuation without reliable usage when coverage is unknown. Usage is retained. Remove the cap?")) return;
     goalSubmitting.current = true; setGoalPending(true); setError("");
     try {
-      const result = await api<GoalReceipt>(`/sessions/${id}/goal/commands`, "POST", { clientRequestId: crypto.randomUUID(), expectedRevision: state.goal?.revision ?? 0, command });
+      const result = await api<GoalReceipt>(`/sessions/${id}/goal/commands`, "POST", { clientRequestId: crypto.randomUUID(), expectedRevision, command });
       const canonical = await api<GoalState>(`/sessions/${id}/goal`);
       setState(old => old && (old.goal?.revision ?? -1) <= canonical.revision ? { ...old, goal: canonical } : old);
       if (result.operationId) receipt(await api<SessionOperation>(`/operations/${result.operationId}`));

@@ -31,3 +31,28 @@ test.describe("native approval waiting",()=>{
   await goal.getByRole("button",{name:"Pause Goal",exact:true}).click(); await expect(page.getByTestId("goal-status")).toHaveText("paused"); expect(existsSync(join(raw.root,"forbidden"))).toBe(false); expect(raw.provider.requests.length).toBe(1);
  });
 });
+
+test.describe("native editor concurrency and preservation",()=>{
+ test.use({scenario:{agent:{tools:{use:["builtin/goal"]}},responses:[{hold:true}]}});
+ async function pausedGoal(raw:Awaited<ReturnType<typeof import("../fixtures/dashboard.js").dashboardFixture>>){
+  const session=await raw.json<{id:string}>("/sessions","POST",{cwd:raw.root,agent:"raw"}),path=`/sessions/${session.id}/goal`;
+  await raw.json(`${path}/commands`,"POST",{clientRequestId:"start",expectedRevision:0,command:{action:"start",definition:{objective:"Original objective",steps:[{id:"verify",label:"Verify",detail:"KEEP_THIS_DETAILED_INSTRUCTION"}]}}});
+  await expect.poll(()=>raw.provider.requests.length).toBe(1);
+  const active=await raw.json<{revision:number}>(path);
+  const paused=await raw.json<{revision:number}>(`${path}/commands`,"POST",{clientRequestId:"pause",expectedRevision:active.revision,command:{action:"pause"}});
+  return {session,path,paused};
+ }
+ test("AC-5 editor rejects stale draft instead of overwriting remote required criteria",async({page,raw})=>{
+  const f=await pausedGoal(raw);await page.goto(raw.server.launchUrl);await page.goto(`${raw.server.url}/chat/${f.session.id}`);
+  const goal=page.getByTestId("native-goal");await goal.getByRole("button",{name:"Edit Goal",exact:true}).click();await goal.getByRole("textbox",{name:"Goal objective",exact:true}).fill("Local old draft");
+  await raw.json(`${f.path}/commands`,"POST",{clientRequestId:"remote-edit",expectedRevision:f.paused.revision,command:{action:"edit",definition:{objective:"Remote new objective",criteria:[{label:"NEW_REMOTE_REQUIRED_ACCEPTANCE"}]}}});
+  await expect(goal.locator(".goal-objective")).toHaveText("Remote new objective");await goal.getByRole("button",{name:"Save Goal edits",exact:true}).click();
+  await expect(page.getByText(/stale_revision/).first()).toBeVisible();
+  const state=await raw.json<{goal:{definition:{objective:string;criteria:{label:string}[]}}}>(f.path);expect(state.goal.definition.objective).toBe("Remote new objective");expect(state.goal.definition.criteria[0]?.label).toBe("NEW_REMOTE_REQUIRED_ACCEPTANCE");
+ });
+ test("AC-5 objective-only edit preserves structured step IDs and details",async({page,raw})=>{
+  const f=await pausedGoal(raw);await page.goto(raw.server.launchUrl);await page.goto(`${raw.server.url}/chat/${f.session.id}`);
+  const goal=page.getByTestId("native-goal");await goal.getByRole("button",{name:"Edit Goal",exact:true}).click();await goal.getByRole("textbox",{name:"Goal objective",exact:true}).fill("Updated objective only");await goal.getByRole("button",{name:"Save Goal edits",exact:true}).click();await expect(goal.locator(".goal-objective")).toHaveText("Updated objective only");
+  const state=await raw.json<{goal:{definition:{steps:{id:string;detail?:string}[]}}}>(f.path);expect(state.goal.definition.steps[0]).toMatchObject({id:"verify",detail:"KEEP_THIS_DETAILED_INSTRUCTION"});
+ });
+});

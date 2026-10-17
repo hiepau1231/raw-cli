@@ -2,9 +2,10 @@ import { useState } from "react";
 import type { GoalCommand, GoalDefinition, GoalState } from "../../../src/goals/contract.js";
 export function GoalControls({ state, selected, disabled, activity, command }: {
   state: GoalState | undefined; selected: boolean; disabled: boolean; activity: string | undefined;
-  command: (value: GoalCommand) => Promise<void>;
+  command: (value: GoalCommand, expectedRevision?: number) => Promise<void>;
 }) {
   const goal = state?.goal;
+  const [draft, setDraft] = useState<GoalState>();
   const [editing, setEditing] = useState(false), [objective, setObjective] = useState(""), [doneWhen, setDoneWhen] = useState("");
   const [criteria, setCriteria] = useState(""), [steps, setSteps] = useState("");
   const [tokens, setTokens] = useState(""), [requests, setRequests] = useState("");
@@ -12,16 +13,23 @@ export function GoalControls({ state, selected, disabled, activity, command }: {
   const terminal = goal?.status === "complete" || goal?.status === "abandoned";
   const blocked = disabled || !selected;
   const openEdit = () => {
+    setDraft(structuredClone(state ?? { revision: 0, goal: null }));
     setObjective(goal?.definition.objective ?? ""); setDoneWhen(goal?.definition.doneWhen ?? "");
     setCriteria(goal?.definition.criteria.map(item => `${item.required ? "" : "? "}${item.label}`).join("\n") ?? "");
     setSteps(goal?.definition.steps.map(item => item.label).join("\n") ?? ""); setEditing(true);
   };
   const lines = (value: string) => value.split("\n").map(s => s.trim()).filter(Boolean);
   const submit = async () => {
+    if (!draft) return;
+    const originalSteps = [...(draft.goal?.definition.steps ?? [])];
     const definition: GoalDefinition = { objective, ...(doneWhen.trim() ? { doneWhen } : {}),
       ...(criteria.trim() ? { criteria: lines(criteria).map(label => ({ label: label.startsWith("? ") ? label.slice(2) : label, required: !label.startsWith("? ") })) } : {}),
-      ...(steps.trim() ? { steps: lines(steps).map(label => ({ label })) } : {}) };
-    await command({ action: goal ? "edit" : "start", definition }); setEditing(false);
+      steps: lines(steps).map(label => {
+        const index = originalSteps.findIndex(item => item.label === label);
+        const original = index < 0 ? undefined : originalSteps.splice(index, 1)[0];
+        return { label, ...(original ? { id: original.id, ...(original.detail === undefined ? {} : { detail: original.detail }) } : {}) };
+      }) };
+    await command({ action: draft.goal ? "edit" : "start", definition }, draft.revision); setEditing(false);
   };
   return <section className="native-goal" aria-label="Native Goal" data-testid="native-goal">
     <div className="native-goal-heading"><strong>Native Goal</strong><span data-testid="goal-status">{goal?.status ?? "not started"}</span>{activity && <small>{activity}</small>}</div>
@@ -48,7 +56,7 @@ export function GoalControls({ state, selected, disabled, activity, command }: {
       <label>Criteria (one per line; prefix optional with ? )<textarea aria-label="Goal criteria" value={criteria} onChange={e => setCriteria(e.target.value)} /></label>
       <label>Steps (one per line)<textarea aria-label="Goal steps" value={steps} onChange={e => setSteps(e.target.value)} /></label>
       <small>Editing pauses and settles work, resets criteria/evidence and keeps cumulative usage. It does not resume.</small>
-      <div className="actions"><button disabled={blocked} type="submit">{goal ? "Save Goal edits" : "Start Goal"}</button><button type="button" onClick={() => setEditing(false)}>Cancel Goal edits</button></div>
+      <div className="actions"><button disabled={blocked} type="submit">{draft?.goal ? "Save Goal edits" : "Start Goal"}</button><button type="button" onClick={() => setEditing(false)}>Cancel Goal edits</button></div>
     </form>}
     {goal && !terminal && <details><summary>Goal budget</summary><form onSubmit={e => { e.preventDefault(); const budget = { action: "setBudget" as const, ...(tokens ? { tokenBudget: Number(tokens) } : {}), ...(requests ? { maxRequests: Number(requests) } : {}) }; void command(budget).catch(() => {}); }}>
       <label>Token cap<input aria-label="Goal token cap" type="number" min="1" step="1" value={tokens} onChange={e => setTokens(e.target.value)} /></label>

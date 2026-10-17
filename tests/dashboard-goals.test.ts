@@ -70,11 +70,13 @@ test("AC-5 paused Goal text remains steering and explicit resume retains usage",
   const s=await f.json<SessionSummary>("/sessions","POST",{cwd:f.root,agent:"raw"}),path=`/sessions/${s.id}/goal`;
   await f.json<GoalReceipt>(`${path}/commands`,"POST",{clientRequestId:"start",expectedRevision:0,command:{action:"start",definition:{objective:"Ship"}}}); await until(()=>f.provider.requests.length===1);
   const active=await f.json<GoalState>(path); const paused=await f.json<GoalReceipt>(`${path}/commands`,"POST",{clientRequestId:"pause",expectedRevision:active.revision,command:{action:"pause"}});
-  const queued=await f.json<{queued?:{id:string;state:string}}>(`/sessions/${s.id}/inputs`,"POST",{clientRequestId:"steer-paused",agent:"raw",input:"keep the original constraints",mode:"queue"});
+  const queued=await f.json<{queued?:{id:string;state:string}}>(`/sessions/${s.id}/inputs`,"POST",{clientRequestId:"steer-paused",agent:"raw",input:"IMPORTANT_PAUSED_STEERING",mode:"queue"});
   assert.ok(queued.queued); assert.equal(queued.queued.state,"paused"); assert.equal(f.provider.requests.length,1); assert.equal(f.server.context.store!.listOperations(s.id).length,1);
   const request={clientRequestId:"resume",expectedRevision:paused.revision,command:{action:"resume"}};
   const [a,b]=await Promise.all([f.json<GoalReceipt>(`${path}/commands`,"POST",request),f.json<GoalReceipt>(`${path}/commands`,"POST",request)]); assert.ok(a); assert.deepEqual(a,b); await f.wait(a.operationId!);
   const done=await f.json<GoalState>(path); assert.equal(done.goal?.status,"complete"); assert.equal(done.goal?.usage.requests,2); assert.equal(f.provider.requests.length,2);
+  const seen=JSON.stringify(f.provider.requests[1]!.body); assert.equal(seen.split("IMPORTANT_PAUSED_STEERING").length-1,1);
+  assert.equal(f.server.context.store!.queuedInputs(s.id).length,0);
  } finally {await f.close();}
 });
 test("AC-5 a completed Goal run never hands a waiting queued message to a new operation",async()=>{
@@ -107,4 +109,22 @@ test("AC-5 closing the host before an accepted command microtask cannot launch w
  const rejected=assert.rejects(command,/closed/); await operations.close(); await rejected;
  assert.equal(f.provider.requests.length,0); assert.equal(f.server.context.store!.getGoalState(session.id).goal,null);
  } finally {await f.close();}
+});
+
+test("AC-5 explicit resume delivers pre-stop steering exactly once but never retries hook-blocked input",async()=>{
+ const f=await dashboardFixture({agent:tools,responses:[{hold:true},final("resumed once"),complete]});
+ try {
+  const s=await f.json<SessionSummary>("/sessions","POST",{cwd:f.root,agent:"raw"}),path=`/sessions/${s.id}/goal`;
+  await f.json<GoalReceipt>(`${path}/commands`,"POST",{clientRequestId:"start",expectedRevision:0,command:{action:"start",definition:{objective:"Ship"}}}); await until(()=>f.provider.requests.length===1);
+  const store=f.server.context.store!,ownerRow=store.database.prepare("SELECT owner_token,owner_generation FROM sessions WHERE id=?").get(s.id)!;
+  const owner={token:String(ownerRow.owner_token),generation:Number(ownerRow.owner_generation)};
+  store.enqueueInput(s.id,owner,{sessionId:s.id,kind:"turn",agentName:"raw",configPath:f.configPath,clientRequestId:"blocked",input:"HOOK_BLOCKED_DO_NOT_DELIVER",mode:"queue"});
+  const blocked=store.claimQueuedInput(s.id,owner)!; store.releaseQueuedInput(s.id,owner,blocked.id,"blocked","hook refused");
+  await f.json(`/sessions/${s.id}/inputs`,"POST",{clientRequestId:"before-stop",agent:"raw",input:"IMPORTANT_BEFORE_STOP",mode:"queue"});
+  const active=await f.json<GoalState>(path); const paused=await f.json<GoalReceipt>(`${path}/commands`,"POST",{clientRequestId:"pause",expectedRevision:active.revision,command:{action:"pause"}});
+  assert.equal(store.findQueuedInput(s.id,"before-stop")?.state,"paused");
+  const resume=await f.json<GoalReceipt>(`${path}/commands`,"POST",{clientRequestId:"resume",expectedRevision:paused.revision,command:{action:"resume"}}); await f.wait(resume.operationId!);
+  for(const request of f.provider.requests.slice(1)){const text=JSON.stringify(request.body);assert.equal(text.split("IMPORTANT_BEFORE_STOP").length-1,1);assert.equal(text.includes("HOOK_BLOCKED_DO_NOT_DELIVER"),false);}
+  assert.equal(store.findQueuedInput(s.id,"before-stop")?.state,"delivered"); assert.equal(store.findQueuedInput(s.id,"blocked")?.state,"blocked");
+ }finally{await f.close();}
 });
