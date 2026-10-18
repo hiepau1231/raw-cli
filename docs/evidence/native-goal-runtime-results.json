@@ -1,0 +1,163 @@
+{
+  "runtimeHead": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c",
+  "base": "e6d6d62",
+  "date": "2026-10-18",
+  "qualification": "incomplete-standard-environment-and-CI-matrix",
+  "gates": [
+    {
+      "gate": "typecheck",
+      "command": "npm run typecheck",
+      "exit": 0,
+      "durationSeconds": 15.126,
+      "head": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c",
+      "endHead": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c"
+    },
+    {
+      "gate": "test",
+      "command": "npm test",
+      "exit": 1,
+      "durationSeconds": 342.622,
+      "head": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c",
+      "endHead": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c"
+    },
+    {
+      "gate": "overhead",
+      "command": "npm run test:overhead",
+      "exit": 0,
+      "durationSeconds": 1.227,
+      "head": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c",
+      "endHead": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c"
+    },
+    {
+      "gate": "package",
+      "command": "npm run test:package",
+      "exit": 1,
+      "durationSeconds": 81.849,
+      "head": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c",
+      "endHead": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c"
+    },
+    {
+      "command": "npm run test:web",
+      "head": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c",
+      "gate": "web",
+      "endHead": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c",
+      "durationSeconds": 1598.818,
+      "exit": 1
+    },
+    {
+      "command": "git diff --check",
+      "head": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c",
+      "gate": "diff",
+      "endHead": "b2cd2501f9818d2a7dea3e2f54eb9ca623ffa61c",
+      "durationSeconds": 0.035,
+      "exit": 0
+    }
+  ],
+  "tests": {
+    "unit": {
+      "pass": 1270,
+      "fail": 23,
+      "skipped": 20,
+      "total": 1313,
+      "allFailuresReproducedOnBaseline": true
+    },
+    "browser": {
+      "pass": 1008,
+      "fail": 41,
+      "skipped": 4,
+      "total": 1053,
+      "nativeGoalPass": 12,
+      "baselineMatchedBeforeLoadRepro": 39,
+      "additionalDurationFailureReproduced": true,
+      "streamTimeoutBaselineReproduction": "3/3 parallel original scenarios failed at streamDone/Stop count, exit 1, 35.679s",
+      "baselineFailureMatches": 41,
+      "allFailuresReproducedOnBaseline": true,
+      "durationBaselineReproduction": "original side-panel-layout file, 3 workers: 13 pass/1 fail at same 2m vs 3m assertion, exit 1, 76.060s",
+      "followup": {
+        "baselineChromium": {
+          "pass": 4,
+          "fail": 2,
+          "seconds": 62.585
+        },
+        "currentChromium": {
+          "pass": 6,
+          "fail": 0,
+          "seconds": 43.44
+        },
+        "baselineWebkit": {
+          "pass": 2,
+          "fail": 2,
+          "seconds": 73.896
+        },
+        "currentWebkit": {
+          "pass": 3,
+          "fail": 1,
+          "seconds": 66.787
+        }
+      }
+    },
+    "affected": {
+      "pass": 137,
+      "fail": 0,
+      "skipped": 0,
+      "seconds": 35.327
+    },
+    "installedGoalE2E": {
+      "passed": true,
+      "parentSeconds": 182.673,
+      "sentinelWrites": 1,
+      "startRequests": 3,
+      "recoveryRequests": 4,
+      "requestsBeforeExplicitResume": 0,
+      "artifactSha256": "f7a0e4761dccac112d681785fb65d85fb156cc4e4d6e091f22ac4d5f42e316bd"
+    }
+  },
+  "reviews": [
+    {
+      "scope": "Phase 1",
+      "session": "review-impl-20261017-001",
+      "round": 2,
+      "verdict": "APPROVE"
+    },
+    {
+      "scope": "Phases 2-3",
+      "session": "review-impl-20261017-002",
+      "round": 3,
+      "verdict": "APPROVE"
+    },
+    {
+      "scope": "Phases 4-6",
+      "session": "review-impl-20261017-003",
+      "round": 6,
+      "verdict": "APPROVE"
+    },
+    {
+      "scope": "Cumulative e6d6d62..b2cd250",
+      "session": "review-impl-20261017-004",
+      "round": 2,
+      "verdict": "APPROVE"
+    }
+  ],
+  "ci": {
+    "configured": true,
+    "executedForLocalCommits": false,
+    "os": [
+      "ubuntu-latest",
+      "macos-latest",
+      "windows-latest"
+    ],
+    "node": [
+      "22.13.0",
+      "24"
+    ]
+  },
+  "acceptance": {
+    "AC1": "proven",
+    "AC2": "proven",
+    "AC3": "proven",
+    "AC4": "proven",
+    "AC5": "proven",
+    "AC6": "proven",
+    "AC7": "incomplete-standard-environment-CI-qualification"
+  }
+}
