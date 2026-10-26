@@ -156,7 +156,6 @@ function FileView({ workspace, path, tick, onRetry }: { workspace: string; path:
         {sized && (
           <div className="files-image">
             <img data-files-image src={image.url} alt={path.split("/").pop() ?? path} onError={() => setImage({ failed: true })} />
-            <p className="files-summary" data-files-image-size>{image.bytes} bytes</p>
           </div>
         )}
       </>
@@ -201,7 +200,7 @@ function FileView({ workspace, path, tick, onRetry }: { workspace: string; path:
     <>
       <ViewerHead path={path} chips={chips} actions={actions} />
       {text.data.truncated && (
-        <p className="files-page-hint" data-files-notice>Showing the first {MAX_TEXT_BYTES / (1024 * 1024)} MiB of {text.data.bytes} bytes</p>
+        <p className="files-warning" data-files-notice>Showing the first {MAX_TEXT_BYTES / (1024 * 1024)} MiB of {text.data.bytes} bytes</p>
       )}
       {heavy && <p className="files-page-hint">Large file: shown without highlighting</p>}
       {kind === "markdown" && !heavy && mode === "preview"
@@ -224,8 +223,8 @@ export function FilesPage({ workspace, selected, files }: { workspace: string; s
     <div className="files-page">
       <h1 className="sr-only">Files</h1>
       {data.total === 0 && !selected ? (
-        <Empty title="This workspace has no files">
-          The agent sees the same view through @ references, so there is nothing here to point it at.
+        <Empty title="Nothing to open">
+          Files you add to this workspace will show up in the list.
         </Empty>
       ) : (
         <section className="files-viewer-pane" data-files-viewer aria-label={selected ? `File ${selected}` : "No file chosen"}>
@@ -274,9 +273,21 @@ export function FilesNav({ files, selected, onOpen, onChosen }: { files: FilesSt
           {matches} of {data.entries.length} {data.truncated ? "files shown" : "files"}
         </p>
       )}
-      {data.truncated && <p className="files-summary">Showing {data.entries.length} of {data.total} files</p>}
+      {data.truncated && (
+        <p className="files-warning" data-files-cut>Showing the first {data.entries.length} of {data.total} files</p>
+      )}
       {matches === 0 ? (
-        <p className="files-page-hint">{data.total === 0 ? "No files are listed in this workspace" : "No file matches the filter"}</p>
+        filtering ? (
+          <div className="files-nav-empty" data-files-nomatch>
+            <p>No file matches “{query.trim()}”</p>
+            <button type="button" className="foot-button" onClick={() => setQuery("")}>Clear filter</button>
+          </div>
+        ) : (
+          <div className="files-nav-empty" data-files-empty>
+            <p><strong>This workspace has no files</strong></p>
+            <p className="files-page-hint">The agent sees the same view through @ references, so there is nothing here to point it at.</p>
+          </div>
+        )
       ) : (
         <div className="files-tree" data-files-tree>
           <FolderRows node={shown} open={open} toggle={toggle} selected={selected} onOpen={choose} />

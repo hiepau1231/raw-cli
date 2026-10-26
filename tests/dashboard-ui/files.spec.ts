@@ -123,7 +123,11 @@ test("the tree lists the workspace, opens folders and filters by path", async ({
   await tree.locator('button[data-folder="src/deep"]').click();
   await expect(tree.locator('button[data-file="src/deep/notes.md"]')).toBeVisible();
   await filter.fill("nothing-matches-this");
-  await expect(page.getByText("No file matches the filter")).toBeVisible();
+  await expect(page.getByText("No file matches “nothing-matches-this”")).toHaveCount(1);
+  await expect(treeOf(page)).toHaveCount(0);
+  await navOf(page).getByRole("button", { name: "Clear filter", exact: true }).click();
+  await expect(filter).toHaveValue("");
+  await expect(tree).toBeVisible();
   await filter.fill("");
   await expect(tree.locator('button[data-folder="docs"]')).toBeVisible();
   await expect(page.getByText(/^1 of \d+ files$/)).toHaveCount(0);
@@ -134,7 +138,11 @@ test("an empty workspace says so, and a cut listing says how many of how many ar
   await page.route("**/api/workspaces/files?*", (route) =>
     route.fulfill({ json: { root: raw.root, entries: [], total: 0, truncated: false } }));
   await openFiles(page, raw);
-  await expect(page.getByText("This workspace has no files")).toBeVisible();
+  // The column says the workspace is empty, once; the viewer says there is nothing to open, once.
+  await expect(page.getByText("This workspace has no files")).toHaveCount(1);
+  await expect(page.locator(".context-panel").getByText("This workspace has no files")).toBeVisible();
+  await expect(page.locator("main").getByText("Nothing to open")).toHaveCount(1);
+  await expect(page.locator("main").getByText("This workspace has no files")).toHaveCount(0);
   await expect(treeOf(page)).toHaveCount(0);
 
   const entries = [0, 1, 2].map((index) => ({ path: `f${index}.ts`, name: `f${index}.ts` }));
@@ -142,8 +150,12 @@ test("an empty workspace says so, and a cut listing says how many of how many ar
   await page.route("**/api/workspaces/files?*", (route) =>
     route.fulfill({ json: { root: raw.root, entries, total: 20_005, truncated: true } }));
   await page.reload();
-  await expect(page.getByText("Showing 3 of 20005 files")).toBeVisible();
+  const cut = page.getByText("Showing the first 3 of 20005 files");
+  await expect(cut).toHaveCount(1);
+  await expect(page.locator(".context-panel").getByText("Showing the first 3 of 20005 files")).toBeVisible();
   await expect(treeOf(page).locator('button[data-file="f1.ts"]')).toBeVisible();
+  // The warning sits above the tree, in the column.
+  expect((await cut.boundingBox())!.y).toBeLessThan((await treeOf(page).boundingBox())!.y);
 });
 
 /** A one-pixel PNG, so the viewer's image branch is exercised against real bytes. */
@@ -221,8 +233,12 @@ test("Files Retry rereads a file that vanished and was recreated", async ({ page
   await treeOf(page).locator('button[data-file="retry.txt"]').click();
   await expect(page.locator("[data-files-viewer]")).toContainText("no longer exists");
   workspaceFile(raw.root, "retry.txt", "recreated");
+  const asked: string[] = [];
+  page.on("request", (request) => { if (request.url().includes("/api/workspaces/file?")) asked.push(request.url()); });
   await page.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(page.locator("[data-files-viewer]")).toContainText("recreated");
+  expect(asked, "Retry asks the host for the file again").toHaveLength(1);
+  await expect(page.locator("[data-files-viewer]").getByText(/no longer exists/)).toHaveCount(0);
 });
 
 test("an ignored file deep link opens even when no files are listed", async ({ page, raw }) => {
@@ -262,7 +278,10 @@ test("an image renders, and one whose bytes are not an image says so", async ({ 
   const image = page.locator("[data-files-viewer] img[data-files-image]");
   await expect(image).toBeVisible();
   expect(await image.evaluate((element) => (element as HTMLImageElement).naturalWidth)).toBe(1);
-  await expect(page.locator("[data-files-image-size]")).toHaveText(`${PIXEL_PNG.length} bytes`);
+  // The chips name the kind and the size once; the picture sits on a checker background.
+  await expect(page.locator(".files-viewer-chips")).toContainText("Image");
+  await expect(page.locator(".files-viewer-chips")).toContainText(`${PIXEL_PNG.length} B`);
+  expect(await image.evaluate((el) => getComputedStyle(el).backgroundImage)).toContain("conic-gradient");
 
   // A .png the browser cannot decode is explained instead of showing a broken image.
   await tree.locator('button[data-file="fake.png"]').click();
@@ -285,10 +304,14 @@ test("binary, oversized and unreadable files are explained rather than guessed",
   const tree = treeOf(page);
   const viewer = page.locator("[data-files-viewer]");
   await tree.locator('button[data-file="blob.bin"]').click();
-  await expect(page.locator("[data-files-notice]")).toContainText("binary file, 4 bytes, not shown");
+  await expect(page.locator("[data-files-notice]")).toHaveCount(1);
+  await expect(page.locator("main [data-files-notice]")).toContainText("binary file, 4 bytes, not shown");
+  await expect(page.locator(".files-viewer-chips")).toContainText("Binary");
+  await expect(page.locator(".context-panel").getByText(/binary file/)).toHaveCount(0);
 
   await tree.locator('button[data-file="big.txt"]').click();
-  await expect(page.locator("[data-files-notice]")).toContainText(/first 1 MiB of \d+ bytes/);
+  await expect(page.locator("[data-files-notice]")).toHaveCount(1);
+  await expect(page.locator("main [data-files-notice]")).toContainText(`first 1 MiB of ${1024 * 1024 + 500} bytes`);
 
   // A file the listing showed and something removed before the click: the server's message and a Retry, while the
   // tree keeps working.
@@ -296,6 +319,7 @@ test("binary, oversized and unreadable files are explained rather than guessed",
   rmSync(join(raw.root, "gone.ts"));
   await tree.locator('button[data-file="gone.ts"]').click();
   await expect(viewer).toContainText("no longer exists");
+  await expect(page.getByText(/no longer exists/)).toHaveCount(1);
   await expect(viewer.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
   await tree.locator('button[data-file="blob.bin"]').click();
   await expect(viewer).toContainText("binary file, 4 bytes, not shown");
@@ -592,4 +616,19 @@ test("the viewer has a header with chips and a code block that fills the main ar
   await viewer.getByRole("radio", { name: "Preview", exact: true }).click();
   await expect(viewer.locator(".files-markdown .code-label")).toHaveCount(1);
   await expect(viewer.locator(".files-markdown .code-gutter")).toHaveCount(0);
+});
+
+test("Clear filter keeps the open file open", async ({ page, raw }) => {
+  workspaceFile(raw.root, "src/keep.ts", "const kept = true;\n");
+  workspaceFile(raw.root, "other.ts");
+  await openFiles(page, raw);
+  await treeOf(page).locator('[data-folder="src"]').click();
+  await treeOf(page).locator('[data-file="src/keep.ts"]').click();
+  await expect(page.locator("[data-files-viewer]")).toContainText("const kept = true;");
+  await filterOf(page).fill("zzz-no-match");
+  await navOf(page).getByRole("button", { name: "Clear filter", exact: true }).click();
+  await expect(filterOf(page)).toHaveValue("");
+  await expect(page.locator("[data-files-viewer]")).toContainText("const kept = true;");
+  await expect(page).toHaveURL(/path=src%2Fkeep\.ts/);
+  await expect(treeOf(page).locator('[data-file="other.ts"]')).toBeVisible();
 });
