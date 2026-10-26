@@ -347,6 +347,8 @@ for (const width of [320, 360]) {
     const deep = "src/deeply/nested/very-long-file-name-that-keeps-going-and-going.ts";
     workspaceFile(raw.root, deep, "const deep = true;\n");
     workspaceFile(raw.root, "docs/README.md", "# Readme\n");
+    const huge = `${"x".repeat(120)}.ts`;
+    workspaceFile(raw.root, huge, "const huge = 1;\n");
     await page.setViewportSize({ width, height: 900 });
     await openFiles(page, raw);
 
@@ -377,6 +379,27 @@ for (const width of [320, 360]) {
     const viewer = page.locator("[data-files-viewer]");
     await expect(viewer).toContainText("const deep = true;");
     await expect(page.locator(".files-viewer-path")).toHaveAttribute("title", deep);
+
+    // Reopened, the drawer kept the filter and highlights the open file; choosing that same file closes it again.
+    await page.getByRole("button", { name: "Workspace menu" }).click();
+    await expect(dialog.getByRole("textbox", { name: "Filter files" })).toHaveValue("very-long-file-name");
+    await expect(dialog.locator(`button[data-file="${deep}"]`)).toHaveAttribute("aria-current", "true");
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      await axe(page);
+    }
+    await dialog.locator(`button[data-file="${deep}"]`).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(viewer).toContainText("const deep = true;");
+    // A 120-character name fits its row in the drawer, and choosing it shows it.
+    await page.getByRole("button", { name: "Workspace menu" }).click();
+    await dialog.getByRole("textbox", { name: "Filter files" }).fill("xxxxxxxx");
+    const hugeRow = dialog.locator(`button[data-file="${huge}"]`);
+    await expect(hugeRow).toBeVisible();
+    expect(await hugeRow.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), "the long row fits").toBe(true);
+    await hugeRow.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(viewer).toContainText("const huge = 1;");
     /** Nothing in the pane may stick out of it; a name that is cut with an ellipsis is meant to be wider inside. */
     const overflowing = await viewer.evaluate((element) => {
       const limit = element.getBoundingClientRect().right;
