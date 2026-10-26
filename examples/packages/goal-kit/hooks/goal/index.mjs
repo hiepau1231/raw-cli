@@ -86,6 +86,12 @@ function sessionOf(request) {
   return typeof request.session_id === "string" && request.session_id.trim() ? request.session_id : undefined;
 }
 
+function inputText(request) {
+  if (typeof request.input === "string") return request.input;
+  if (!Array.isArray(request.input)) return "";
+  return request.input.map((block) => block && typeof block === "object" && typeof block.text === "string" ? block.text : "").join("\n");
+}
+
 async function pause(cwd, session, reason, nextAction) {
   await updateState(cwd, (state) => {
     if (!state || state.status !== "active") return state;
@@ -181,6 +187,12 @@ async function sessionStart(request) {
 async function userPrompt(request) {
   const cwd = request.cwd;
   const session = sessionOf(request);
+  // /goal is a package skill prompt, not an ordinary user message. Let the model see it
+  // without first pausing the goal it is asking about.
+  if (/^\/goal(?:\s|$)/.test(inputText(request).trim())) {
+    output({ decision: "continue" });
+    return;
+  }
   let note;
   try {
     const result = await updateState(cwd, (state) => {

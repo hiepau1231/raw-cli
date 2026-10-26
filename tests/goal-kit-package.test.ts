@@ -256,6 +256,32 @@ test("goal tool pauses, resumes, blocks, abandons and clears", async () => {
   }
 });
 
+test("resume and budget changes keep the cumulative usage baseline", async () => {
+  const api = await stateApi();
+  const tool = await goalTool();
+  const { env, root } = tempStateEnv();
+  try {
+    await withStateEnv(root, env, async () => {
+      const { context } = panelContext(root);
+      await tool.handler({ action: "create", objective: "Ship", criteria: [{ label: "Tests" }],
+        maxRequests: 2, tokenBudget: 100 }, context);
+      const baseline = { requests: 0, inputTokensKnown: 10, outputTokensKnown: 5, inputCoverage: 1, outputCoverage: 1 };
+      await api.updateState(root, (state) => ({ ...state, status: "paused", reason: "user_paused",
+        baselinePending: false, usageBaseline: baseline }), env);
+      assert.equal((await tool.handler({ action: "resume" }, context)).isError, false);
+      let state = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal(state.baselinePending, false);
+      assert.deepEqual(state.usageBaseline, baseline);
+      assert.equal((await tool.handler({ action: "budget", maxRequests: 5 }, context)).isError, false);
+      state = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal(state.baselinePending, false);
+      assert.deepEqual(state.usageBaseline, baseline);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("goal tool enforces criteria, ids and terminal transitions", async () => {
   const tool = await goalTool();
   const { env, root } = tempStateEnv();

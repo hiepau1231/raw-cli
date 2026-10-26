@@ -85,8 +85,8 @@ function stopRequest(root: string, session: string, options: {
   };
 }
 
-function eventRequest(root: string, event: "SessionStart" | "UserPromptSubmit", session: string, source?: "create" | "resume"): HookRequest {
-  return { protocol_version: 2, event, cwd: root, session_id: session, ...(source ? { source } : {}), ...(event === "UserPromptSubmit" ? { input: "next" } : {}) };
+function eventRequest(root: string, event: "SessionStart" | "UserPromptSubmit", session: string, source?: "create" | "resume", input = "next"): HookRequest {
+  return { protocol_version: 2, event, cwd: root, session_id: session, ...(source ? { source } : {}), ...(event === "UserPromptSubmit" ? { input } : {}) };
 }
 
 async function invoke(request: HookRequest, env: NodeJS.ProcessEnv): Promise<HookExecution> {
@@ -198,6 +198,20 @@ test("SessionStart and UserPromptSubmit pause an active goal instead of treating
     await api.updateState(root, () => stateFixture({ ownerSessionId: "s1" }), env);
     await invoke(eventRequest(root, "UserPromptSubmit", "s2"), env);
     assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "active");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a /goal command does not pause the active goal", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture(), env);
+    assert.equal((await invoke(eventRequest(root, "UserPromptSubmit", "s1", undefined, "/goal status"), env)).decision, "continue");
+    const state = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(state.status, "active");
+    assert.equal(state.reason, undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

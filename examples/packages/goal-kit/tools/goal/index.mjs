@@ -257,7 +257,6 @@ function mutate(state, { action, value }) {
     if (next.status !== "paused" && next.status !== "blocked") throw new StateError("invalid_goal", "only a paused or blocked goal can resume");
     next.status = "active";
     delete next.reason; delete next.nextAction;
-    next.baselinePending = true;
   } else if (action === "block") {
     if (next.status !== "active") throw new StateError("invalid_goal", "only an active goal can block");
     next.status = "blocked";
@@ -279,7 +278,6 @@ function mutate(state, { action, value }) {
       else next.budget.maxRequests = value.maxRequests;
     }
     if (value.maxContinuations !== undefined) next.budget.maxContinuations = value.maxContinuations;
-    next.baselinePending = true;
   } else if (action === "clear") {
     if (next.status !== "complete" && next.status !== "abandoned") throw new StateError("goal_terminal", "abandon or complete the goal before clearing it");
     return undefined;
