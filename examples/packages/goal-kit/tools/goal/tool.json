@@ -148,7 +148,7 @@
           "label": "Clear goal",
           "scope": "panel",
           "kind": "tool",
-          "confirm": "Clear this finished goal? The audit remains in session history.",
+          "confirm": "Clear this finished goal? The state file is removed and the panel closes.",
           "arguments": { "action": "clear" }
         }
       ]

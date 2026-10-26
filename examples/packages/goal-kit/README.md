@@ -42,6 +42,7 @@ The package requires `raw.stop-continue/1` and `raw.hook/2`; a host without that
 - **One goal per workspace.** Raw package tools do not receive `session_id`, so the tool cannot key its state by session. Sessions and agents that share a workspace share one goal; the `Stop` hook records an owner session and does not continue another session's goal. A separate engine issue proposes exposing `session_id`; per-session state is a follow-up.
 - **Soft budget.** The Stop hook checks usage only at a final answer, not before every model request. A single run can overshoot a token or request threshold.
 - **No live pause/cancel.** Use the `goal pause` tool or the panel's Pause action. Ctrl-C cancels the run and the hook pauses the goal, but there is no host-level pause command.
+- **Lifecycle actions are model-facing.** The `goal` skill tells the model to pause before asking and not to resume without the user, but a package tool cannot prove whether a call came from a person or the model. Tool policy and approvals still apply; do not treat a model-initiated resume as human consent.
 - **No dashboard native controls or CLI `/goal` command.** The `goal` skill is offered by the composer as a prompt; it is not a host command.
 - **Restart is explicit.** `SessionStart` pauses an active goal; resume it explicitly before expecting more work.
 - Evidence is a recorded claim, not independent proof that a command ran. Existing tool policy and approvals are unchanged.
