@@ -353,6 +353,26 @@ test("a near-limit goal is refused before lifecycle metadata needs the reserved 
   }
 });
 
+test("a goal just under the content limit can still be paused", async () => {
+  const tool = await goalTool();
+  const { env, root } = tempStateEnv();
+  try {
+    await withStateEnv(root, env, async () => {
+      const { context } = panelContext(root);
+      const emoji = "😀";
+      const criteria = Array.from({ length: 50 }, (_, index) => ({
+        id: `c${index + 1}`, label: emoji.repeat(200), required: true, status: "pending", evidence: emoji.repeat(50),
+      }));
+      const created = await tool.handler({ action: "create", objective: "Ship", criteria }, context);
+      assert.equal(created.isError, false, toolText(created));
+      const paused = await tool.handler({ action: "pause", reason: "wait" }, context);
+      assert.equal(paused.isError, false, toolText(paused));
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("goal tool enforces criteria, ids and terminal transitions", async () => {
   const tool = await goalTool();
   const { env, root } = tempStateEnv();

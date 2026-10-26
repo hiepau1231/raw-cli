@@ -226,6 +226,39 @@ test("ownership takeover rebases session-relative usage without resetting spendi
   }
 });
 
+test("paused and blocked goals record the final run before ownership transfer", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    for (const status of ["paused", "blocked"] as const) {
+      await api.updateState(root, () => stateFixture({
+        status,
+        reason: status === "paused" ? "Need input" : "Missing key",
+        nextAction: status === "blocked" ? "Provide key" : undefined,
+        ownerSessionId: "s1",
+        budget: { maxRequests: 2, maxContinuations: 20 },
+        baselinePending: false,
+        usageBaseline: { requests: 100, inputTokensKnown: 10000, outputTokensKnown: 1000, inputCoverage: 100, outputCoverage: 100 },
+        usageCarried: { requests: 0, inputTokensKnown: 0, outputTokensKnown: 0, inputCoverage: 0, outputCoverage: 0 },
+      }), env);
+      await invoke(stopRequest(root, "s1", { status: "completed", usage: usage({ requests: 103 }) }), env);
+      let state = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal((state.usageCarried as Record<string, unknown>).requests, 3, status);
+      await invoke(eventRequest(root, "SessionStart", "s2", "resume"), env);
+      state = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal(state.ownerSessionId, "s2");
+      assert.equal((state.usageCarried as Record<string, unknown>).requests, 3);
+      assert.equal(state.baselinePending, true);
+      await api.updateState(root, (current) => ({ ...current, status: "active" }), env);
+      assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 1 }) }), env)).decision, "continue", status);
+      state = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal(state.reason, "request_budget_exhausted");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("token coverage is measured from the baseline, not the whole session", async () => {
   const api = await stateApi();
   const { root, env } = tempEnv();

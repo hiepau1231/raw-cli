@@ -143,8 +143,20 @@ export function validateState(value) {
   optionalText(value.nextAction, "nextAction", 300);
   nonNegativeInteger(value.createdAt, "createdAt");
   nonNegativeInteger(value.updatedAt, "updatedAt");
-  if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_CONTENT_BYTES) {
+  const content = {
+    schemaVersion: value.schemaVersion,
+    goalId: value.goalId,
+    objective: value.objective,
+    doneWhen: value.doneWhen,
+    criteria: value.criteria,
+    steps: value.steps,
+    budget: value.budget,
+  };
+  if (Buffer.byteLength(JSON.stringify(content), "utf8") > MAX_CONTENT_BYTES) {
     fail("state_too_large", `goal content: at most ${MAX_CONTENT_BYTES} bytes (${LIFECYCLE_HEADROOM_BYTES} bytes reserved for lifecycle metadata)`);
+  }
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_STATE_BYTES) {
+    fail("state_too_large", `goal state: at most ${MAX_STATE_BYTES} bytes`);
   }
   return value;
 }

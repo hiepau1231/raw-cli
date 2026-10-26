@@ -129,15 +129,31 @@ async function pause(cwd, session, reason, nextAction, usage) {
 async function stop(request) {
   const cwd = request.cwd;
   const session = sessionOf(request);
+  const usage = usageOf(request);
   let state;
   try { state = await readState(cwd); }
   catch { return; }
-  if (!state || state.status !== "active") return;
+  if (!state) return;
+  if (state.status === "paused" || state.status === "blocked") {
+    // The tool may have paused/blocked the goal during this run. Record the run's usage
+    // without changing lifecycle metadata; a later SessionStart rebase must not lose it.
+    if (session && state.ownerSessionId && state.ownerSessionId !== session) return;
+    try {
+      await updateState(cwd, (current) => {
+        if (!current || (current.status !== "paused" && current.status !== "blocked")) return current;
+        if (session && current.ownerSessionId && current.ownerSessionId !== session) return current;
+        recordUsage(current, usage);
+        current.updatedAt = Date.now();
+        return current;
+      });
+    } catch { /* Accounting is best-effort for an already paused goal. */ }
+    return;
+  }
+  if (state.status !== "active") return;
   if (session && state.ownerSessionId && state.ownerSessionId !== session) {
     message("This goal belongs to another session in the same workspace.");
     return;
   }
-  const usage = usageOf(request);
   if (request.run?.status !== "completed") {
     await pause(cwd, session, `run_${request.run?.status ?? "stopped"}`, "Resume the goal explicitly.", usage);
     message(`Goal paused: ${request.run?.status ?? "stopped"}.`);
