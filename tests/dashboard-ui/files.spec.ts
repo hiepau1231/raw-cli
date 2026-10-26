@@ -385,13 +385,16 @@ test("the listing is asked for only while Files is open, and the tree keeps its 
 
   await page.getByRole("link", { name: "Files", exact: true }).click();
   await expect(treeOf(page).locator('button[data-folder="src"]')).toBeVisible();
-  expect(listings, "opening Files asks once").toBeGreaterThan(0);
+  expect(listings, "opening Files asks once").toBe(1);
 
-  // Leaving Files and coming back to the same workspace keeps what the reader typed.
+  // Leaving Files and coming back to the same workspace keeps what the reader typed and the folders they opened.
+  await treeOf(page).locator('button[data-folder="src"]').click();
   await filterOf(page).fill("readme");
   await page.getByRole("link", { name: "Chat", exact: true }).click();
   await page.getByRole("link", { name: "Files", exact: true }).click();
   await expect(filterOf(page)).toHaveValue("readme");
+  await filterOf(page).fill("");
+  await expect(treeOf(page).locator('button[data-folder="src"]')).toHaveAttribute("aria-expanded", "true");
 });
 
 test("changing workspace clears the filter and the opened folders", async ({ page, raw }) => {
