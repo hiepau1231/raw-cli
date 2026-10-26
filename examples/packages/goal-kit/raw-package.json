@@ -9,8 +9,10 @@
     "skills/goal/SKILL.md",
     "tools/goal/tool.json",
     "tools/goal/index.mjs",
+    "tools/goal/state.mjs",
     "hooks/goal/hook.json",
-    "hooks/goal/index.mjs"
+    "hooks/goal/index.mjs",
+    "hooks/goal/state.mjs"
   ],
   "exports": {
     "agents": {
