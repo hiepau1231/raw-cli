@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "An opt-in goal package: a goal tool, a panel, and a Stop-hook continuation guard",
   "files": [
+    "README.md",
     "agents/coder.json",
     "prompts/coder.md",
     "skills/goal/SKILL.md",

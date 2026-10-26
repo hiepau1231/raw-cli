@@ -133,6 +133,14 @@ test("goal state rejects corrupt and oversized files", async () => {
   }
 });
 
+test("goal kit is documented and changelogged", () => {
+  const packages = readFileSync("docs/packages.md", "utf8");
+  assert.match(packages, /examples\/packages\/goal-kit\//);
+  assert.match(packages, /goal[- ]kit/i);
+  const changelog = readFileSync("CHANGELOG.md", "utf8");
+  assert.match(changelog, /goal[- ]kit|goal package/i);
+});
+
 test("goal tool and hook carry byte-identical state modules", () => {
   const tool = readFileSync(join(ROOT, "tools/goal/state.mjs"), "utf8");
   const hook = readFileSync(join(ROOT, "hooks/goal/state.mjs"), "utf8");
