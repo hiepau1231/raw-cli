@@ -297,7 +297,7 @@ test("a denial is ignored when the run did not complete", async () => {
   const f = await continuing("inf");
   const failing: ProviderAdapter = { modelConfig: { agentName: "raw", provider: "ollama", method: "openai-chat-completions", model: "fixture" },
     generate: async () => { throw new Error("provider down"); } };
-  const { result } = await runWith(f.hooks, f.cwd, failing);
+  const { result } = await runWith(f.hooks, f.cwd, failing, { maxSteps: 5 });
   assert.equal(result.status, "error");
   const stops = await f.stops();
   assert.deepEqual(stops.map((stop) => stop.run.status), ["error"]);
@@ -341,7 +341,7 @@ test("the output-limit budget restarts after a Stop continuation", async () => {
 test("a denial is ignored for a cancelled run and for the tool-step limit, each with one Stop call", async () => {
   const cancelled = await continuing("inf");
   const agent = createAgent({ provider: recording(["a"], () => { agent.abort(); }).provider, registry: new ToolRegistry(), cwd: cancelled.cwd,
-    hooks: new HookDispatcher(cancelled.hooks) });
+    hooks: new HookDispatcher(cancelled.hooks), maxSteps: 5 });
   const first = await agent.run("go");
   await agent.close();
   assert.equal(first.status, "cancelled");
@@ -384,7 +384,7 @@ test("Stop runs again for the end of a run that fails after a Stop continuation"
   let calls = 0;
   const flaky: ProviderAdapter = { modelConfig: { agentName: "raw", provider: "ollama", method: "openai-chat-completions", model: "fixture" },
     generate: async () => { if (++calls === 2) throw new Error("provider down"); return { text: "a", finishReason: "stop", toolCalls: [] }; } };
-  const { result } = await runWith(f.hooks, f.cwd, flaky);
+  const { result } = await runWith(f.hooks, f.cwd, flaky, { maxSteps: 5 });
   assert.equal(result.status, "error");
   assert.deepEqual((await f.stops()).map((stop) => stop.run.status), ["completed", "error"]);
 });
@@ -407,4 +407,26 @@ test("a gate hook that denies with an empty reason still blocks, with the defaul
   const hook = { ...f.dispatcher.selected[0]!, events: [{ name: "UserPromptSubmit" as const }] };
   assert.deepEqual(await new HookDispatcher([hook]).run("UserPromptSubmit", { cwd: f.cwd, input: "hi" }),
     { blocked: "denied", reason: "hook agent/h0 denied" });
+});
+
+// The joined text of all denials is bounded at 4096 bytes: the edges of that bound, in ASCII and in 3-byte characters.
+test("the joined Stop continuation is kept whole up to exactly 4096 bytes and cut after, on a character boundary", async () => {
+  const join = async (reasons: string[]) => {
+    const f = await stopDispatcher(reasons.map((reason) => deny(reason)));
+    return (await f.dispatcher.run("Stop", { cwd: f.cwd })).continueWith!;
+  };
+  const exact = ["a".repeat(1024), "b".repeat(1024), "c".repeat(1024), "d".repeat(1018)];
+  const whole = await join(exact);
+  assert.equal(Buffer.byteLength(whole), 4096);
+  assert.equal(whole, exact.join("\n\n"));
+  const over = await join([...exact.slice(0, 3), "d".repeat(1019)]);
+  assert.ok(Buffer.byteLength(over) <= 4096 && over.endsWith("…"), over.slice(-8));
+  assert.ok(over.startsWith("a".repeat(1024) + "\n\n" + "b"));
+  // 3-byte characters: no cut may leave half of one.
+  const euro = await join(Array(4).fill("€".repeat(341)));
+  assert.ok(Buffer.byteLength(euro) <= 4096 && euro.endsWith("…"));
+  assert.ok(!euro.includes("\uFFFD"));
+  // A later hook's reason is the first to be lost when the earlier ones fill the bound.
+  const starved = await join([...Array(4).fill("x".repeat(1024)), "LAST"]);
+  assert.ok(!starved.includes("LAST"));
 });
