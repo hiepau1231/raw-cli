@@ -179,6 +179,40 @@ test("Stop pauses on request and token budgets and on unknown usage", async () =
   }
 });
 
+test("token coverage is measured from the baseline, not the whole session", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture({
+      budget: { tokenBudget: 100, maxContinuations: 20 },
+      baselinePending: false,
+      usageBaseline: { requests: 2, inputTokensKnown: 10, outputTokensKnown: 5, inputCoverage: 1, outputCoverage: 1 },
+    }), env);
+    const result = await invoke(stopRequest(root, "s1", { usage: usage({
+      requests: 3, inputTokensKnown: 10, outputTokensKnown: 5, inputCoverage: 2, outputCoverage: 2,
+    }) }), env);
+    assert.equal(result.decision, "deny");
+    assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "active");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("SessionStart takes over an active goal from a dead owner", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture({ ownerSessionId: "s1" }), env);
+    await invoke(eventRequest(root, "SessionStart", "s2", "resume"), env);
+    const state = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(state.status, "paused");
+    assert.equal(state.reason, "interrupted");
+    assert.equal(state.ownerSessionId, "s2");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("SessionStart and UserPromptSubmit pause an active goal instead of treating it as consent", async () => {
   const api = await stateApi();
   const { root, env } = tempEnv();

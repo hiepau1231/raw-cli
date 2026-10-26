@@ -53,7 +53,10 @@ function budgetReason(state, usage) {
     return "request_budget_exhausted";
   }
   if (budget.tokenBudget !== undefined) {
-    if (usage.inputCoverage < usage.requests || usage.outputCoverage < usage.requests) return "usage_unknown";
+    const requests = Math.max(0, usage.requests - baseline.requests);
+    const inputCoverage = Math.max(0, usage.inputCoverage - baseline.inputCoverage);
+    const outputCoverage = Math.max(0, usage.outputCoverage - baseline.outputCoverage);
+    if (inputCoverage < requests || outputCoverage < requests) return "usage_unknown";
     const spent = (usage.inputTokensKnown + usage.outputTokensKnown) -
       (baseline.inputTokensKnown + baseline.outputTokensKnown);
     if (spent >= budget.tokenBudget) return "token_budget_exhausted";
@@ -170,8 +173,9 @@ async function sessionStart(request) {
   try {
     const result = await updateState(cwd, (state) => {
       if (!state || state.status !== "active") return state;
-      if (session && state.ownerSessionId && state.ownerSessionId !== session) return state;
-      if (session && !state.ownerSessionId) state.ownerSessionId = session;
+      // A new runtime attach owns the workspace goal from here. Pausing it makes a dead
+      // owner recoverable and prevents a second session from continuing it silently.
+      if (session) state.ownerSessionId = session;
       state.status = "paused";
       state.reason = "interrupted";
       state.nextAction = "Resume the goal explicitly.";

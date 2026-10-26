@@ -32,6 +32,13 @@ function optionalText(value, name, max) {
   return text(value, name, max);
 }
 
+function clearableText(value, name, max) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") return `${name} must be a string`;
+  if (!value.trim()) return undefined;
+  return text(value, name, max);
+}
+
 function clip(value, limit) {
   const scalars = [...value];
   return scalars.length <= limit ? value : `${scalars.slice(0, limit - 1).join("")}…`;
@@ -67,10 +74,10 @@ function validateItem(item, kind, mode, ids, at) {
   if (item.status !== undefined && !STATUSES.has(item.status)) return `${at}: unknown status "${String(item.status)}"`;
   if (kind === "criteria") {
     if (item.required !== undefined && typeof item.required !== "boolean") return `${at}: required must be boolean`;
-    const problem = optionalText(item.evidence, `${at}: evidence`, 300);
+    const problem = clearableText(item.evidence, `${at}: evidence`, 300);
     if (problem) return problem;
   } else {
-    const problem = optionalText(item.detail, `${at}: detail`, 200);
+    const problem = clearableText(item.detail, `${at}: detail`, 200);
     if (problem) return problem;
   }
   return undefined;
@@ -203,6 +210,10 @@ function mutate(state, { action, value }) {
   const now = Date.now();
   if (action === "create") {
     if (state) throw new StateError("goal_exists", "clear the current goal before starting another");
+    const objective = clean(value.objective);
+    const doneWhen = value.doneWhen === undefined
+      ? ([...objective].length <= 500 ? objective : (() => { throw new StateError("invalid_goal", "doneWhen is required when objective exceeds 500 characters"); })())
+      : clean(value.doneWhen);
     const rawCriteria = actionCriteria(value);
     const rawSteps = actionSteps(value);
     // Reserve every explicit id before generating any missing one, so a generated id can never
@@ -215,8 +226,8 @@ function mutate(state, { action, value }) {
       schemaVersion: 1,
       goalId: randomUUID(),
       status: "active",
-      objective: clean(value.objective),
-      doneWhen: clean(value.doneWhen ?? value.objective),
+      objective,
+      doneWhen,
       criteria,
       steps,
       budget: {
@@ -348,17 +359,26 @@ function panelDocument(state) {
   const open = state.criteria.filter((item) => item.status !== "done" && item.status !== "skipped");
   return {
     title: clip(state.objective, GOAL_CHARS),
-    subtitle: clip(state.doneWhen, DONE_WHEN_CHARS),
+    subtitle: clip(state.reason ? `${state.doneWhen} — ${state.reason}` : state.doneWhen, DONE_WHEN_CHARS),
     status: panelStatus(state),
     progress: { done: met, total: state.criteria.length },
     blocks,
     context_summary: clipBytes([
       `Goal (${state.status}): ${state.objective}`,
       `Done when: ${state.doneWhen}`,
+      ...state.reason ? [`Reason: ${state.reason}`] : [],
+      ...state.nextAction ? [`Next action: ${state.nextAction}`] : [],
       `Criteria: ${met}/${state.criteria.length} done${open.length ? `; open: ${open.map((item) => item.label).join("; ")}` : ""}`,
-      `Continuations: ${state.continuations}/${state.budget.maxContinuations}`,
+      budgetLine(state),
     ].join("\n"), CONTEXT_SUMMARY_BYTES),
   };
+}
+
+function budgetLine(state) {
+  const budget = state.budget;
+  return `Budget: continuations ${state.continuations}/${budget.maxContinuations}` +
+    (budget.maxRequests === undefined ? "" : `, requests ≤ ${budget.maxRequests}`) +
+    (budget.tokenBudget === undefined ? "" : `, tokens ≤ ${budget.tokenBudget}`);
 }
 
 function summary(state) {
@@ -366,6 +386,9 @@ function summary(state) {
   return [
     `Goal (${state.status}): ${state.objective}`,
     `Done when: ${state.doneWhen}`,
+    ...state.reason ? [`Reason: ${state.reason}`] : [],
+    ...state.nextAction ? [`Next action: ${state.nextAction}`] : [],
+    budgetLine(state),
     `Criteria (${met}/${state.criteria.length} done):`,
     ...state.criteria.map((item) => `- [${item.status === "done" ? "x" : item.status === "skipped" ? "-" : " "}] ${item.id} ${item.label}${item.evidence ? ` — ${item.evidence}` : ""}`),
     ...state.steps.length ? ["Steps:", ...state.steps.map((item) => `- [${item.status === "done" ? "x" : " "}] ${item.id} ${item.label}`)] : [],

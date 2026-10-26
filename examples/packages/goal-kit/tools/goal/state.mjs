@@ -7,16 +7,16 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, open, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 
 export const STATE_VERSION = 1;
 export const MAX_STATE_BYTES = 65536;
 export const STATE_DIR_ENV = "RAW_GOAL_STATE_DIR";
 export const LOCK_WAIT_MS = 2000;
-export const LOCK_STALE_MS = 30000;
 
 const STATUSES = new Set(["active", "paused", "blocked", "complete", "abandoned"]);
 const ITEM_STATUSES = new Set(["pending", "in_progress", "done", "blocked", "skipped"]);
@@ -33,7 +33,8 @@ export class StateError extends Error {
 const fail = (code, message) => { throw new StateError(code, message); };
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const isInteger = (value) => typeof value === "number" && Number.isSafeInteger(value);
-const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+/** One in-process queue per lock file, so synchronous SQLite waiters never block the action that holds the lock. */
+const queues = new Map();
 
 function canonicalCwd(cwd) {
   try { return realpathSync(cwd); }
@@ -58,7 +59,7 @@ export function statePath(cwd, env = process.env) {
 }
 
 function lockPath(cwd, env = process.env) {
-  return join(stateDir(env), `goal-${goalKey(cwd)}.lock`);
+  return join(stateDir(env), `goal-${goalKey(cwd)}.lock.sqlite`);
 }
 
 function text(value, name, max) {
@@ -150,27 +151,44 @@ async function ensureStateDir(env) {
 export async function withStateLock(cwd, action, env = process.env) {
   await ensureStateDir(env);
   const path = lockPath(cwd, env);
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
+  const prior = queues.get(path) ?? Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const tail = prior.catch(() => {}).then(() => gate);
+  queues.set(path, tail);
+  await prior.catch(() => {});
+  // SQLite owns the cross-process lock. BEGIN IMMEDIATE waits for another writer up to the
+  // configured busy timeout and releases the lock automatically when a process crashes; there
+  // is no stale lock file to unlink (and therefore no stat/unlink race to lose). The in-process
+  // queue keeps a synchronous SQLite waiter from blocking the action that holds the lock.
+  const db = (() => { try { return new DatabaseSync(path); } catch (error) { release(); if (queues.get(path) === tail) queues.delete(path); throw error; } })();
+  try {
+    db.exec(`PRAGMA busy_timeout = ${LOCK_WAIT_MS}`);
     try {
-      const handle = await open(path, "wx", 0o600);
-      await handle.close();
-      break;
+      db.exec("BEGIN IMMEDIATE");
     } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      try {
-        const info = await stat(path);
-        if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
-          await unlink(path);
-          continue;
-        }
-      } catch { /* The holder may have released the lock between stat and unlink. */ }
-      if (Date.now() >= deadline) fail("state_busy", "another goal update is still running");
-      await sleep(25);
+      if (error instanceof Error && /locked|busy/i.test(error.message)) {
+        fail("state_busy", "another goal update is still running");
+      }
+      throw error;
     }
+    try {
+      const result = await action();
+      try { db.exec("COMMIT"); }
+      catch (error) {
+        try { db.exec("ROLLBACK"); } catch { /* The failed commit already ended the transaction. */ }
+        throw error;
+      }
+      return result;
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* The transaction may already be closed. */ }
+      throw error;
+    }
+  } finally {
+    db.close();
+    release();
+    if (queues.get(path) === tail) queues.delete(path);
   }
-  try { return await action(); }
-  finally { await unlink(path).catch(() => {}); }
 }
 
 async function readStateUnlocked(cwd, env) {

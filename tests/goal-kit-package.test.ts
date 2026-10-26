@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { inspectPackage } from "../src/packages/inspect.js";
+import { validateDocument } from "../src/panels/validate.js";
 
 const ROOT = "examples/packages/goal-kit";
 
@@ -99,20 +101,22 @@ test("goal state serializes concurrent writers", async () => {
   }
 });
 
-test("goal state recovers a stale lock and refuses a fresh one", { timeout: 8000 }, async () => {
+test("goal state reports a busy lock instead of stealing it", { timeout: 8000 }, async () => {
   const api = await stateApi();
   const { env, root } = tempStateEnv();
   try {
-    const lock = api.stateLockPath(root, env);
     await api.updateState(root, () => stateFixture(), env);
-    writeFileSync(lock, "");
-    utimesSync(lock, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
-    await api.updateState(root, (state) => ({ ...state, objective: "recovered" }), env);
-    const read = await api.readState(root, env) as Record<string, unknown>;
-    assert.equal(read.objective, "recovered");
-    writeFileSync(lock, "");
-    await assert.rejects(api.updateState(root, (state) => ({ ...state, objective: "blocked" }), env),
-      (error: unknown) => (error as { code?: string }).code === "state_busy");
+    assert.match(api.stateLockPath(root, env), /\.lock\.sqlite$/);
+    const lock = new DatabaseSync(api.stateLockPath(root, env));
+    try {
+      lock.exec("PRAGMA busy_timeout = 0");
+      lock.exec("BEGIN IMMEDIATE");
+      await assert.rejects(api.updateState(root, (state) => ({ ...state, objective: "blocked" }), env),
+        (error: unknown) => (error as { code?: string }).code === "state_busy");
+    } finally {
+      lock.exec("ROLLBACK");
+      lock.close();
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -210,6 +214,7 @@ test("goal tool creates, updates, completes and projects a panel", async () => {
       const document = updates.at(-1)?.body.document as Record<string, unknown>;
       assert.equal(document.status, "active");
       assert.equal(document.title, "Ship the fix");
+      validateDocument(document);
       assert.deepEqual((document.blocks as Array<Record<string, unknown>>)[0]?.items, [
         { id: "c1", label: "Tests pass", status: "pending" },
       ]);
@@ -222,6 +227,7 @@ test("goal tool creates, updates, completes and projects a panel", async () => {
       assert.equal(finalState.status, "complete");
       const finalDocument = updates.at(-1)?.body.document as Record<string, unknown>;
       assert.equal(finalDocument.status, "done");
+      validateDocument(finalDocument);
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -234,7 +240,7 @@ test("goal tool pauses, resumes, blocks, abandons and clears", async () => {
   const { env, root } = tempStateEnv();
   try {
     await withStateEnv(root, env, async () => {
-      const { context } = panelContext(root);
+      const { context, updates } = panelContext(root);
       assert.equal((await tool.handler({ action: "create", objective: "Ship", criteria: [{ label: "Tests" }] }, context)).isError, false);
       assert.equal((await tool.handler({ action: "pause", reason: "Need input" }, context)).isError, false);
       assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "paused");
@@ -242,6 +248,12 @@ test("goal tool pauses, resumes, blocks, abandons and clears", async () => {
       assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "active");
       assert.equal((await tool.handler({ action: "block", reason: "Missing key", nextAction: "Provide key" }, context)).isError, false);
       assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "blocked");
+      const blockedText = toolText(await tool.handler({ action: "get" }, context));
+      assert.match(blockedText, /Missing key/);
+      assert.match(blockedText, /Provide key/);
+      const blockedDocument = updates.at(-1)?.body.document as Record<string, unknown>;
+      assert.match(String(blockedDocument.context_summary), /Missing key/);
+      assert.match(String(blockedDocument.context_summary), /Provide key/);
       assert.equal((await tool.handler({ action: "resume" }, context)).isError, false);
       assert.equal((await tool.handler({ action: "abandon" }, context)).isError, false);
       assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "abandoned");
@@ -276,6 +288,47 @@ test("resume and budget changes keep the cumulative usage baseline", async () =>
       state = await api.readState(root, env) as Record<string, unknown>;
       assert.equal(state.baselinePending, false);
       assert.deepEqual(state.usageBaseline, baseline);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a long objective without doneWhen is refused instead of corrupting state", async () => {
+  const tool = await goalTool();
+  const { env, root } = tempStateEnv();
+  try {
+    await withStateEnv(root, env, async () => {
+      const { context } = panelContext(root);
+      const long = "x".repeat(600);
+      const missing = await tool.handler({ action: "create", objective: long, criteria: [{ label: "Tests" }] }, context);
+      assert.equal(missing.code, "invalid_goal");
+      const created = await tool.handler({ action: "create", objective: long, doneWhen: "Tests pass", criteria: [{ label: "Tests" }] }, context);
+      assert.equal(created.isError, false, toolText(created));
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("goal tool can clear wrong evidence and step detail", async () => {
+  const api = await stateApi();
+  const tool = await goalTool();
+  const { env, root } = tempStateEnv();
+  try {
+    await withStateEnv(root, env, async () => {
+      const { context } = panelContext(root);
+      await tool.handler({ action: "create", objective: "Ship", criteria: [{ label: "Tests" }],
+        steps: [{ label: "Run tests" }] }, context);
+      assert.equal((await tool.handler({ action: "update",
+        criteria: [{ id: "c1", status: "done", evidence: "wrong" }],
+        steps: [{ id: "s1", detail: "wrong detail" }] }, context)).isError, false);
+      assert.equal((await tool.handler({ action: "update",
+        criteria: [{ id: "c1", evidence: "" }],
+        steps: [{ id: "s1", detail: "" }] }, context)).isError, false);
+      const state = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal((state.criteria as Array<Record<string, unknown>>)[0]?.evidence, undefined);
+      assert.equal((state.steps as Array<Record<string, unknown>>)[0]?.detail, undefined);
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
