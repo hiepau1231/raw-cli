@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import { createAgent } from "../src/agent.js";
 import { HookDispatcher } from "../src/hooks/dispatcher.js";
 import type { SelectedHook } from "../src/hooks/contract.js";
 import type { ProviderAdapter } from "../src/llm/types.js";
+import { openSessionStore } from "../src/sessions/store.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 
 async function setup(script: string) {
@@ -214,7 +216,7 @@ async function continuing(limit: string, reason = "keep going", extra: { second?
       if (request.event !== "Stop") return;
       appendFileSync(process.argv[2], JSON.stringify(request) + "\\n");
       const limit = process.argv[3] === "inf" ? Infinity : Number(process.argv[3]);
-      if (process.argv[3] !== "none" && request.run.status === "completed" && request.stop.continuations < limit)
+      if (process.argv[3] !== "none" && request.stop.continuations < limit)
         process.stdout.write(JSON.stringify({ decision: "deny", reason: process.argv[4] }));
     });`);
   const hooks: SelectedHook[] = [{ protocol_version: 2, id: "agent/continue", name: "continue", folder: cwd, command: process.execPath,
@@ -324,13 +326,57 @@ test("a failing or silent Stop hook ends the run normally, and every Stop hook r
   assert.deepEqual([run.result.status, quiet.requests.length], ["completed", 1]);
 });
 
-test("an output-limit continuation still works after a Stop continuation", async () => {
+test("the output-limit budget restarts after a Stop continuation", async () => {
   const f = await continuing("1");
-  const model = recording(["first", { text: "cut", truncated: true }, "rest"]);
+  const cut = (text: string) => ({ text, truncated: true });
+  // Five cut answers before and five after the Stop continuation: a shared budget of eight would run out in the second half.
+  const model = recording([cut("a"), cut("a"), cut("a"), cut("a"), cut("a"), "e1", cut("b"), cut("b"), cut("b"), cut("b"), cut("b"), "e2"]);
   const { result } = await runWith(f.hooks, f.cwd, model.provider);
   assert.equal(result.status, "completed");
-  assert.match(model.lastText(2), /\[Raw output limit notice\]/);
-  assert.equal(result.text, "cutrest");
+  assert.equal(model.requests.length, 12);
+  assert.equal(result.text, "bbbbbe2");
+  assert.equal((await f.stops()).length, 2);
+});
+
+test("a denial is ignored for a cancelled run and for the tool-step limit, each with one Stop call", async () => {
+  const cancelled = await continuing("inf");
+  const agent = createAgent({ provider: recording(["a"], () => { agent.abort(); }).provider, registry: new ToolRegistry(), cwd: cancelled.cwd,
+    hooks: new HookDispatcher(cancelled.hooks) });
+  const first = await agent.run("go");
+  await agent.close();
+  assert.equal(first.status, "cancelled");
+  assert.deepEqual((await cancelled.stops()).map((stop) => stop.run.status), ["cancelled"]);
+
+  const limited = await continuing("inf");
+  const toolCall: ProviderAdapter = { modelConfig: { agentName: "raw", provider: "ollama", method: "openai-chat-completions", model: "fixture" },
+    generate: async () => ({ text: "", finishReason: "tool_calls", toolCalls: [{ id: "c", name: "doit", arguments: { value: "x" } }] }) };
+  const { result } = await runWith(limited.hooks, limited.cwd, toolCall, { maxSteps: 1 });
+  assert.equal(result.status, "max_steps");
+  assert.match(result.message ?? "", /tool calls require another inference step/);
+  assert.deepEqual((await limited.stops()).map((stop) => stop.run.status), ["max_steps"]);
+});
+
+test("a Stop continuation is stored and replayed when the session is resumed", async () => {
+  const f = await continuing("1", "again please");
+  const state = mkdtempSync(join(tmpdir(), "raw-stop-resume-"));
+  const store = openSessionStore({ env: { XDG_STATE_HOME: state, XDG_CONFIG_HOME: state } });
+  const id = store.createSession({ cwd: f.cwd, title: "resume" }).id;
+  const first = recording(["a", "b"]);
+  const make = (provider: ProviderAdapter, hooks: SelectedHook[] = []) => createAgent({ provider, registry: new ToolRegistry(), cwd: f.cwd,
+    hooks: new HookDispatcher(hooks), persistence: { store, sessionId: id, surface: "cli" } });
+  try {
+    const agent = make(first.provider, f.hooks);
+    assert.equal((await agent.run("go")).text, "b");
+    await agent.close();
+    const second = recording(["c"]);
+    const resumed = make(second.provider);
+    assert.deepEqual(resumed.transcript.map((message) => message.role), ["user", "assistant", "user", "assistant"]);
+    assert.equal((resumed.transcript[2] as { content: string }).content, "[Raw hook continuation] again please");
+    assert.equal((await resumed.run("next")).text, "c");
+    await resumed.close();
+    assert.deepEqual(second.requests[0]!.map((message) => message.role), ["user", "assistant", "user", "assistant", "user"]);
+    assert.equal(second.lastText(0), "next");
+  } finally { store.close(); }
 });
 
 test("Stop runs again for the end of a run that fails after a Stop continuation", async () => {
@@ -341,4 +387,17 @@ test("Stop runs again for the end of a run that fails after a Stop continuation"
   const { result } = await runWith(f.hooks, f.cwd, flaky);
   assert.equal(result.status, "error");
   assert.deepEqual((await f.stops()).map((stop) => stop.run.status), ["completed", "error"]);
+});
+
+test("an exception from the completed-run Stop hooks ends the run as hook_event_error, with Stop not run again", async () => {
+  let stops = 0;
+  class Throwing extends HookDispatcher {
+    override async run(event: Parameters<HookDispatcher["run"]>[0]) { if (event === "Stop") { stops++; throw new Error("receipt failed"); } return {}; }
+  }
+  const dispatcher = new Throwing([]);
+  const model = recording(["a"]);
+  const agent = createAgent({ provider: model.provider, registry: new ToolRegistry(), cwd: process.cwd(), hooks: dispatcher });
+  const result = await agent.run("go");
+  await agent.close();
+  assert.deepEqual([result.status, result.code, stops, model.requests.length], ["error", "hook_event_error", 1, 1]);
 });

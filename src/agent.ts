@@ -1491,7 +1491,9 @@ export class AgentSession {
           // A Stop hook may refuse to let a finished answer end the run: its reason becomes one more host message and request.
           const completed: RunResult = { status: "completed", steps, text: continuedText };
           stopRan = true;
-          const { continueWith } = await runStopHooks(completed) ?? {};
+          let continueWith: string | undefined;
+          try { ({ continueWith } = await runStopHooks(completed) ?? {}); }
+          catch (error) { return finish({ status: "error", steps, code: "hook_event_error", message: String(error) }); }
           if (continueWith && !controller.signal.aborted) {
             if (steps >= this.options.maxSteps) return finish({ status: "max_steps", steps, code: "max_steps",
               message: "a Stop hook asked the run to continue", text: continuedText });
