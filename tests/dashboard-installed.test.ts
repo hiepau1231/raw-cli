@@ -54,7 +54,7 @@ test("packed dashboard configures, reconnects, updates a package, then installed
     await command("npm", ["install", "--omit=dev", "--prefer-offline", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund", tarball], consumer, env);
     const installed = join(consumer, "node_modules/@tlelabs/raw"), bin = join(consumer, "node_modules/.bin/raw");
     assert.equal(existsSync(join(consumer, "node_modules/vite")), false);
-    for (const file of ["docs/dashboard.md", "docs/dashboard-api.md", "docs/cli.md", "docs/architecture.md", "docs/hooks.md", "examples/hooks/guard/hook.json", "dist/dashboard/index.html"]) {
+    for (const file of ["docs/dashboard.md", "docs/dashboard-api.md", "docs/cli.md", "docs/architecture.md", "docs/hooks.md", "examples/hooks/guard/hook.json", "examples/hooks/keep-going/hook.json", "dist/dashboard/index.html"]) {
       assert.ok(existsSync(join(installed, file)), `installed artifact is missing ${file}`);
     }
     for (const skill of ["configure_raw", "create_agent", "create_skill", "create_tool", "create_hook", "add_mcp", "create_package"]) {

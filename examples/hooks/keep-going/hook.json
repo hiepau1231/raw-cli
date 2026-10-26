@@ -1,0 +1,14 @@
+{
+  "name": "keep-going",
+  "events": [
+    {
+      "name": "Stop"
+    }
+  ],
+  "command": "node",
+  "args": [
+    "./index.mjs"
+  ],
+  "timeout_ms": 5000,
+  "protocol_version": 2
+}
