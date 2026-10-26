@@ -509,3 +509,23 @@ test("tree rows line up like the other second-column lists: one left edge, inden
   const turn = (name: string) => tree.locator(`[data-folder="${name}"] .files-tree-chevron`).evaluate((el) => getComputedStyle(el).transform);
   expect(await turn("src")).not.toBe("none");
 });
+
+test("a folder's count is its files, and under a filter only the files that match", async ({ page, raw }) => {
+  workspaceFile(raw.root, "src/a.ts");
+  workspaceFile(raw.root, "src/b.ts");
+  workspaceFile(raw.root, "src/inner/c.ts");
+  workspaceFile(raw.root, "src/inner/note.md");
+  workspaceFile(raw.root, "docs/d.md");
+  await openFiles(page, raw);
+  const tree = treeOf(page);
+  const count = (folder: string) => tree.locator(`[data-folder="${folder}"] .files-tree-count`);
+  await expect(count("src")).toHaveText("4");
+  await expect(count("docs")).toHaveText("1");
+  await filterOf(page).fill(".md");
+  await expect(count("src")).toHaveText("1");
+  await expect(count("src/inner")).toHaveText("1");
+  await expect(count("docs")).toHaveText("1");
+  await filterOf(page).fill("c.ts");
+  await expect(count("src")).toHaveText("1");
+  await expect(tree.locator('[data-folder="docs"]')).toHaveCount(0);
+});
