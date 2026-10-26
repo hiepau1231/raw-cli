@@ -138,3 +138,180 @@ test("goal tool and hook carry byte-identical state modules", () => {
   const hook = readFileSync(join(ROOT, "hooks/goal/state.mjs"), "utf8");
   assert.equal(hook, tool);
 });
+
+interface ToolResult {
+  isError: boolean;
+  code?: string;
+  content: Array<{ type: string; text?: string }>;
+}
+
+interface GoalTool {
+  handler(args: Record<string, unknown>, context: Record<string, unknown>): Promise<ToolResult>;
+}
+
+async function goalTool(): Promise<GoalTool> {
+  // @ts-expect-error - the shipped package helper is plain .mjs without a declaration file
+  return await import("../examples/packages/goal-kit/tools/goal/index.mjs") as unknown as GoalTool;
+}
+
+function panelContext(root: string): { context: Record<string, unknown>; updates: Array<{ panel: string; body: Record<string, unknown> }> } {
+  const updates: Array<{ panel: string; body: Record<string, unknown> }> = [];
+  return {
+    updates,
+    context: {
+      cwd: root,
+      maxOutputBytes: 8192,
+      panels: {
+        update: async (panel: string, body: Record<string, unknown>) => {
+          updates.push({ panel, body });
+          return { revision: updates.length };
+        },
+        get: () => undefined,
+      },
+    },
+  };
+}
+
+function withStateEnv(root: string, env: NodeJS.ProcessEnv, action: () => Promise<void>): Promise<void> {
+  const previous = process.env.RAW_GOAL_STATE_DIR;
+  process.env.RAW_GOAL_STATE_DIR = env.RAW_GOAL_STATE_DIR;
+  return action().finally(() => {
+    if (previous === undefined) delete process.env.RAW_GOAL_STATE_DIR;
+    else process.env.RAW_GOAL_STATE_DIR = previous;
+  });
+}
+
+function toolText(result: ToolResult): string {
+  return result.content.map((block) => block.text ?? "").join("\n");
+}
+
+test("goal tool creates, updates, completes and projects a panel", async () => {
+  const api = await stateApi();
+  const tool = await goalTool();
+  const { env, root } = tempStateEnv();
+  try {
+    await withStateEnv(root, env, async () => {
+      const { context, updates } = panelContext(root);
+      const created = await tool.handler({ action: "create", objective: "Ship the fix", doneWhen: "Tests pass",
+        criteria: [{ id: "c1", label: "Tests pass" }] }, context);
+      assert.equal(created.isError, false, toolText(created));
+      const state = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal(state.status, "active");
+      assert.equal(state.objective, "Ship the fix");
+      assert.match(toolText(await tool.handler({ action: "get" }, context)), /Ship the fix/);
+      const document = updates.at(-1)?.body.document as Record<string, unknown>;
+      assert.equal(document.status, "active");
+      assert.equal(document.title, "Ship the fix");
+      assert.deepEqual((document.blocks as Array<Record<string, unknown>>)[0]?.items, [
+        { id: "c1", label: "Tests pass", status: "pending" },
+      ]);
+
+      const updated = await tool.handler({ action: "update", criteria: [{ id: "c1", status: "done", evidence: "npm test" }] }, context);
+      assert.equal(updated.isError, false, toolText(updated));
+      const completed = await tool.handler({ action: "complete" }, context);
+      assert.equal(completed.isError, false, toolText(completed));
+      const finalState = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal(finalState.status, "complete");
+      const finalDocument = updates.at(-1)?.body.document as Record<string, unknown>;
+      assert.equal(finalDocument.status, "done");
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("goal tool pauses, resumes, blocks, abandons and clears", async () => {
+  const api = await stateApi();
+  const tool = await goalTool();
+  const { env, root } = tempStateEnv();
+  try {
+    await withStateEnv(root, env, async () => {
+      const { context } = panelContext(root);
+      assert.equal((await tool.handler({ action: "create", objective: "Ship", criteria: [{ label: "Tests" }] }, context)).isError, false);
+      assert.equal((await tool.handler({ action: "pause", reason: "Need input" }, context)).isError, false);
+      assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "paused");
+      assert.equal((await tool.handler({ action: "resume" }, context)).isError, false);
+      assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "active");
+      assert.equal((await tool.handler({ action: "block", reason: "Missing key", nextAction: "Provide key" }, context)).isError, false);
+      assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "blocked");
+      assert.equal((await tool.handler({ action: "resume" }, context)).isError, false);
+      assert.equal((await tool.handler({ action: "abandon" }, context)).isError, false);
+      assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "abandoned");
+      assert.equal((await tool.handler({ action: "clear" }, context)).isError, false);
+      assert.equal(await api.readState(root, env), undefined);
+      const missing = await tool.handler({ action: "get" }, context);
+      assert.equal(missing.isError, true);
+      assert.equal(missing.code, "no_goal");
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("goal tool enforces criteria, ids and terminal transitions", async () => {
+  const tool = await goalTool();
+  const { env, root } = tempStateEnv();
+  try {
+    await withStateEnv(root, env, async () => {
+      const { context } = panelContext(root);
+      await tool.handler({ action: "create", objective: "Ship", criteria: [{ id: "c1", label: "Tests" }] }, context);
+      assert.equal((await tool.handler({ action: "create", objective: "Again", criteria: [{ label: "Tests" }] }, context)).code, "goal_exists");
+      assert.equal((await tool.handler({ action: "complete" }, context)).code, "criteria_incomplete");
+      assert.equal((await tool.handler({ action: "update", criteria: [{ id: "nope", status: "done", evidence: "x" }] }, context)).code, "invalid_goal");
+      assert.equal((await tool.handler({ action: "update", criteria: [{ id: "c1", status: "done", evidence: "npm test" }],
+        steps: [{ label: "a", status: "in_progress" }, { label: "b", status: "in_progress" }] }, context)).code, "invalid_goal");
+      assert.equal((await tool.handler({ action: "clear" }, context)).code, "goal_terminal");
+      assert.equal((await tool.handler({ action: "abandon" }, context)).isError, false);
+      assert.equal((await tool.handler({ action: "pause" }, context)).code, "invalid_goal");
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("goal tool reserves explicit ids before generating new ones", async () => {
+  const api = await stateApi();
+  const tool = await goalTool();
+  const { env, root } = tempStateEnv();
+  try {
+    await withStateEnv(root, env, async () => {
+      const { context } = panelContext(root);
+      const created = await tool.handler({ action: "create", objective: "Ship",
+        criteria: [{ label: "Generated" }, { id: "c1", label: "Explicit" }] }, context);
+      assert.equal(created.isError, false, toolText(created));
+      const state = await api.readState(root, env) as Record<string, unknown>;
+      assert.deepEqual((state.criteria as Array<{ id: string }>).map((item) => item.id), ["c2", "c1"]);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("goal tool enforces count limits, budget and the panel declaration", async () => {
+  const api = await stateApi();
+  const tool = await goalTool();
+  const { env, root } = tempStateEnv();
+  try {
+    await withStateEnv(root, env, async () => {
+      const { context } = panelContext(root);
+      const tooManyCriteria = Array.from({ length: 51 }, (_, index) => ({ label: `Criterion ${index}` }));
+      assert.equal((await tool.handler({ action: "create", objective: "Ship", criteria: tooManyCriteria }, context)).code, "goal_limit");
+      const tooManySteps = Array.from({ length: 31 }, (_, index) => ({ label: `Step ${index}` }));
+      assert.equal((await tool.handler({ action: "create", objective: "Ship", criteria: [{ label: "Tests" }], steps: tooManySteps }, context)).code, "goal_limit");
+      assert.equal((await tool.handler({ action: "create", objective: "Ship", criteria: [{ label: "Tests" }],
+        tokenBudget: 100, maxRequests: 2, maxContinuations: 3 }, context)).isError, false);
+      const state = await api.readState(root, env) as Record<string, unknown>;
+      assert.deepEqual(state.budget, { tokenBudget: 100, maxRequests: 2, maxContinuations: 3 });
+      assert.equal((await tool.handler({ action: "budget", tokenBudget: null, maxContinuations: 5 }, context)).isError, false);
+      const changed = await api.readState(root, env) as Record<string, unknown>;
+      assert.deepEqual(changed.budget, { maxRequests: 2, maxContinuations: 5 });
+      const manifest = JSON.parse(readFileSync(join(ROOT, "tools/goal/tool.json"), "utf8")) as Record<string, unknown>;
+      const panel = (manifest.panels as Array<Record<string, unknown>>)[0]!;
+      assert.equal(panel.id, "goal");
+      assert.equal(panel.context, "summary");
+      assert.deepEqual((panel.actions as Array<Record<string, unknown>>).map((action) => action.id), ["pause", "resume", "complete", "clear"]);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
