@@ -1,0 +1,238 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { test } from "node:test";
+import { runHook } from "../src/hooks/runner.js";
+import type { HookExecution, HookRequest, SelectedHook } from "../src/hooks/contract.js";
+
+const ROOT = "examples/packages/goal-kit";
+const HOOK_DIR = join(ROOT, "hooks/goal");
+
+interface StateApi {
+  statePath(cwd: string, env?: NodeJS.ProcessEnv): string;
+  readState(cwd: string, env?: NodeJS.ProcessEnv): Promise<Record<string, unknown> | undefined>;
+  updateState(cwd: string, mutate: (state: Record<string, unknown> | undefined) => Record<string, unknown>, env?: NodeJS.ProcessEnv): Promise<unknown>;
+}
+
+async function stateApi(): Promise<StateApi> {
+  // @ts-expect-error - the shipped package helper is plain .mjs without a declaration file
+  return await import("../examples/packages/goal-kit/tools/goal/state.mjs") as unknown as StateApi;
+}
+
+function stateFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    goalId: "00000000-0000-4000-8000-000000000001",
+    ownerSessionId: "s1",
+    status: "active",
+    objective: "Ship the fix",
+    doneWhen: "The tests pass",
+    criteria: [{ id: "c1", label: "Tests pass", required: true, status: "pending" }],
+    steps: [],
+    budget: { maxContinuations: 3 },
+    baselinePending: true,
+    usageBaseline: undefined,
+    continuations: 0,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function usage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    requests: 1,
+    inputTokensKnown: 10,
+    inputCoverage: 1,
+    outputTokensKnown: 5,
+    outputCoverage: 1,
+    cacheReadTokensKnown: 0,
+    cacheWriteTokensKnown: 0,
+    cacheReadCoverage: 0,
+    cacheWriteCoverage: 0,
+    cacheRatioCoverage: 0,
+    ...overrides,
+  };
+}
+
+function selectedHook(): SelectedHook {
+  const folder = resolve(HOOK_DIR);
+  return {
+    protocol_version: 2,
+    id: "agent/goal",
+    name: "goal",
+    folder,
+    command: process.execPath,
+    args: [join(folder, "index.mjs")],
+    timeoutMs: 5000,
+    events: [{ name: "Stop" }, { name: "SessionStart" }, { name: "UserPromptSubmit" }],
+  };
+}
+
+function stopRequest(root: string, session: string, options: {
+  status?: string;
+  continuations?: number;
+  usage?: Record<string, unknown>;
+} = {}): HookRequest {
+  return {
+    protocol_version: 2,
+    event: "Stop",
+    cwd: root,
+    session_id: session,
+    run: { status: options.status ?? "completed", steps: 1, text: "done" },
+    stop: { hook_active: false, continuations: options.continuations ?? 0, usage: (options.usage ?? usage()) as never },
+  };
+}
+
+function eventRequest(root: string, event: "SessionStart" | "UserPromptSubmit", session: string, source?: "create" | "resume"): HookRequest {
+  return { protocol_version: 2, event, cwd: root, session_id: session, ...(source ? { source } : {}), ...(event === "UserPromptSubmit" ? { input: "next" } : {}) };
+}
+
+async function invoke(request: HookRequest, env: NodeJS.ProcessEnv): Promise<HookExecution> {
+  return runHook(selectedHook(), request, { env, timeoutMs: 5000 });
+}
+
+function tempEnv(): { root: string; env: NodeJS.ProcessEnv } {
+  const root = mkdtempSync(join(tmpdir(), "raw-goal-hooks-"));
+  return { root, env: { ...process.env, RAW_GOAL_STATE_DIR: join(root, "state") } };
+}
+
+test("Stop continues an active goal and claims the session", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture({ ownerSessionId: undefined }), env);
+    const result = await invoke(stopRequest(root, "s1"), env);
+    assert.equal(result.decision, "deny");
+    assert.match(result.reason ?? "", /Ship the fix/);
+    const state = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(state.ownerSessionId, "s1");
+    assert.equal(state.continuations, 1);
+    assert.equal(state.baselinePending, false);
+    assert.deepEqual(state.usageBaseline, {
+      requests: 1, inputTokensKnown: 10, outputTokensKnown: 5, inputCoverage: 1, outputCoverage: 1,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop pauses at the continuation cap and lets closed goals end", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture({ continuations: 3, budget: { maxContinuations: 3 } }), env);
+    assert.equal((await invoke(stopRequest(root, "s1"), env)).decision, "continue");
+    const capped = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(capped.status, "paused");
+    assert.equal(capped.reason, "continuation_limit");
+
+    for (const status of ["complete", "abandoned", "paused"] as const) {
+      await api.updateState(root, () => stateFixture({ status }), env);
+      assert.equal((await invoke(stopRequest(root, "s1"), env)).decision, "continue", status);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop pauses non-completed runs and leaves another session's goal alone", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture(), env);
+    const foreign = await invoke(stopRequest(root, "s2", { status: "error" }), env);
+    assert.equal(foreign.decision, "continue");
+    assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "active");
+
+    await invoke(stopRequest(root, "s1", { status: "error" }), env);
+    const paused = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.reason, "run_error");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop pauses on request and token budgets and on unknown usage", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    const baseline = { requests: 0, inputTokensKnown: 0, outputTokensKnown: 0, inputCoverage: 0, outputCoverage: 0 };
+    await api.updateState(root, () => stateFixture({ budget: { maxRequests: 2, maxContinuations: 20 }, baselinePending: false, usageBaseline: baseline }), env);
+    await invoke(stopRequest(root, "s1", { usage: usage({ requests: 2 }) }), env);
+    let state = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(state.reason, "request_budget_exhausted");
+
+    await api.updateState(root, () => stateFixture({ budget: { tokenBudget: 10, maxContinuations: 20 }, baselinePending: false, usageBaseline: baseline }), env);
+    await invoke(stopRequest(root, "s1", { usage: usage({ requests: 2, inputCoverage: 1 }) }), env);
+    state = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(state.reason, "usage_unknown");
+
+    await api.updateState(root, () => stateFixture({ budget: { tokenBudget: 10, maxContinuations: 20 }, baselinePending: false, usageBaseline: baseline }), env);
+    await invoke(stopRequest(root, "s1", { usage: usage({ requests: 1, inputTokensKnown: 10, outputTokensKnown: 5 }) }), env);
+    state = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(state.reason, "token_budget_exhausted");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("SessionStart and UserPromptSubmit pause an active goal instead of treating it as consent", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture(), env);
+    assert.equal((await invoke(eventRequest(root, "SessionStart", "s1", "resume"), env)).decision, "continue");
+    let state = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(state.status, "paused");
+    assert.equal(state.reason, "interrupted");
+
+    await api.updateState(root, () => stateFixture(), env);
+    assert.equal((await invoke(eventRequest(root, "UserPromptSubmit", "s1"), env)).decision, "continue");
+    state = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(state.status, "paused");
+    assert.equal(state.reason, "user_message");
+
+    await api.updateState(root, () => stateFixture({ ownerSessionId: "s1" }), env);
+    await invoke(eventRequest(root, "UserPromptSubmit", "s2"), env);
+    assert.equal((await api.readState(root, env) as Record<string, unknown>).status, "active");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("corrupt state never traps a run or a prompt", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture(), env);
+    writeFileSync(api.statePath(root, env), "{not json");
+    assert.equal((await invoke(stopRequest(root, "s1"), env)).decision, "continue");
+    assert.equal((await invoke(eventRequest(root, "UserPromptSubmit", "s1"), env)).decision, "continue");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a long Stop reason stays inside the host bound and keeps the objective first", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    const criteria = Array.from({ length: 50 }, (_, index) => ({ id: `c${index + 1}`, label: `Criterion ${index + 1} `.repeat(8), required: true, status: "pending" }));
+    await api.updateState(root, () => stateFixture({ objective: `Objective ${"x".repeat(1900)}`, criteria }), env);
+    const result = await invoke(stopRequest(root, "s1"), env);
+    assert.equal(result.decision, "deny");
+    assert.ok(Buffer.byteLength(result.reason ?? "", "utf8") <= 8192);
+    assert.match(result.reason ?? "", /^Goal: Objective /);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("goal hook manifest subscribes to Stop, SessionStart and UserPromptSubmit", () => {
+  const manifest = JSON.parse(readFileSync(join(HOOK_DIR, "hook.json"), "utf8")) as { events: Array<{ name: string }>; command: string };
+  assert.deepEqual(manifest.events.map((event) => event.name), ["Stop", "SessionStart", "UserPromptSubmit"]);
+  assert.equal(manifest.command, "node");
+});
