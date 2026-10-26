@@ -667,6 +667,10 @@ test("a Markdown file's mermaid fence is a diagram in Preview, a bad fence degra
   const viewer = page.locator("[data-files-viewer]");
   // Source keeps the text of the fence; Preview draws it. Icons are SVGs too, so only the diagram's own role counts.
   await expect(viewer).toContainText("A[Browser] --> B[Host]");
+  // Every control in the header, including Source and Preview, is a 32 px target.
+  const small = await viewer.locator(".files-viewer-head").locator("button:visible").evaluateAll((items) =>
+    items.map((item) => ({ label: (item.textContent ?? "").trim(), height: item.getBoundingClientRect().height })).filter((item) => item.height < 32));
+  expect(small, "the header's controls are 32 px targets").toEqual([]);
   await viewer.getByRole("radio", { name: "Preview", exact: true }).click();
   const diagram = viewer.locator('.mermaid-viewport svg[role="img"]');
   await expect(diagram).toHaveCount(1);

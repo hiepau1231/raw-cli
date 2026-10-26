@@ -2940,8 +2940,7 @@ code.tool-summary {
   min-height: 0;
   padding: 16px;
 }
-.files-page-hint,
-.files-nav-path {
+.files-page-hint {
   margin: 0;
   color: var(--muted);
   font-size: 12.5px;
@@ -3123,6 +3122,9 @@ code.tool-summary {
   border-color: var(--border);
   color: var(--text);
   font-size: 13px;
+}
+.files-viewer-actions .segmented button {
+  min-height: 32px;
 }
 .files-viewer-actions .copy-text {
   display: inline;
