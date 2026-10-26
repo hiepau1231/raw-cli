@@ -162,3 +162,43 @@ test("interrupting a run while an observing hook works cuts the hook to the clea
   assert.equal(result.status, "cancelled");
   assert.ok(Date.now() - started < 6000, `took ${Date.now() - started}ms`);
 });
+
+async function stopDispatcher(scripts: string[]) {
+  const cwd = await mkdtemp(join(tmpdir(), "raw-hooks-stop-"));
+  const hooks: SelectedHook[] = [];
+  for (const [index, script] of scripts.entries()) {
+    const path = join(cwd, `hook${index}.mjs`);
+    await writeFile(path, `import { appendFileSync } from "node:fs";
+      appendFileSync(${JSON.stringify(join(cwd, "ran.log"))}, "${index}\\n");
+      process.stdin.resume(); process.stdin.on("end", () => { ${script} });`);
+    hooks.push({ protocol_version: 2, id: `agent/h${index}`, name: `h${index}`, folder: cwd, command: process.execPath,
+      args: [path], timeoutMs: 1000, events: [{ name: "Stop" }] });
+  }
+  return { cwd, dispatcher: new HookDispatcher(hooks), ran: async () => (await readFile(join(cwd, "ran.log"), "utf8")).trim().split("\n") };
+}
+const deny = (reason?: string) => `process.stdout.write(${JSON.stringify(JSON.stringify({ decision: "deny", ...(reason !== undefined ? { reason } : {}) }))});`;
+
+test("Stop hooks all run and their denials join into one continuation text", async () => {
+  const f = await stopDispatcher([deny("A"), "", deny("B"), "process.exit(1);"]);
+  const receipts: string[] = [];
+  const result = await f.dispatcher.run("Stop", { cwd: f.cwd }, { onReceipt: (receipt) => receipts.push(receipt.outcome) });
+  assert.deepEqual(await f.ran(), ["0", "1", "2", "3"]);
+  assert.deepEqual(receipts, ["denied", "continued", "denied", "error"]);
+  assert.deepEqual(result, { continueWith: "A\n\nB" });
+});
+
+test("a Stop run with no denial returns nothing, and a bare deny uses the default sentence", async () => {
+  const none = await stopDispatcher(["", "process.exit(1);"]);
+  assert.deepEqual(await none.dispatcher.run("Stop", { cwd: none.cwd }), {});
+  const bare = await stopDispatcher([deny()]);
+  assert.deepEqual(await bare.dispatcher.run("Stop", { cwd: bare.cwd }), { continueWith: "A Stop hook asked the run to continue." });
+});
+
+test("a joined Stop continuation over 4096 bytes is cut without splitting a character", async () => {
+  const long = "é".repeat(500);
+  const f = await stopDispatcher([deny(long), deny(long), deny(long), deny(long), deny(long)]);
+  const { continueWith } = await f.dispatcher.run("Stop", { cwd: f.cwd });
+  assert.ok(continueWith && continueWith.length > 0);
+  assert.ok(Buffer.byteLength(continueWith) <= 4096);
+  assert.ok(!continueWith.includes("�"));
+});
