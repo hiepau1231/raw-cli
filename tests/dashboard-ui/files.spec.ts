@@ -6,12 +6,15 @@ import { AxeBuilder } from "@axe-core/playwright";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import { tmpdir } from "node:os";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
 const axe = async (page: Page) =>
   expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()).violations).toEqual([]);
 const heading = (page: Page) => page.getByRole("heading", { name: "Files", exact: true });
-const treeOf = (page: Page) => page.locator("[data-files-tree]");
+/** The Files navigation that is on screen: the second column on a wide window, the menu drawer on a narrow one. */
+const navOf = (page: Page) => page.locator('nav[aria-label="Files"]:visible');
+const treeOf = (page: Page) => navOf(page).locator("[data-files-tree]");
+const filterOf = (page: Page) => navOf(page).getByRole("textbox", { name: "Filter files" });
 const made: string[] = [];
 test.afterEach(() => { for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function folder(name: string): string {
@@ -87,6 +90,9 @@ test("the tree lists the workspace, opens folders and filters by path", async ({
 
   const tree = treeOf(page);
   await expect(tree).toBeVisible();
+  // The tree is in the second column; the main area holds the viewer only.
+  await expect(page.locator(".context-panel nav[aria-label=\"Files\"] [data-files-tree]")).toBeVisible();
+  await expect(page.locator("main [data-files-tree]")).toHaveCount(0);
   // A top-level folder starts collapsed: its children are not rendered at all until it is opened.
   const src = tree.locator('button[data-folder="src"]');
   await expect(src).toHaveAttribute("aria-expanded", "false");
@@ -104,7 +110,7 @@ test("the tree lists the workspace, opens folders and filters by path", async ({
   await expect(tree.locator('button[data-file="src/deep/notes.md"]')).toHaveCount(0);
 
   // The filter keeps matching files with the folders that lead to them, really open, and counts them.
-  const filter = page.getByRole("textbox", { name: "Filter files" });
+  const filter = filterOf(page);
   await filter.fill("notes.md");
   await expect(tree.locator('button[data-file="src/deep/notes.md"]')).toBeVisible();
   await expect(tree.locator('button[data-folder="src/deep"]')).toHaveAttribute("aria-expanded", "true");
@@ -163,7 +169,7 @@ test("choosing a file shows it, keeps the choice in the address and survives a r
   await expect(page.locator("[data-files-viewer]")).toContainText("const answer = 42;");
 
   // A name with a space, a hash, a percent sign and non-ASCII characters round-trips too.
-  const filter = page.getByRole("textbox", { name: "Filter files" });
+  const filter = filterOf(page);
   await filter.fill("ghi chú");
   await treeOf(page).locator('button[data-file="tài liệu/ghi chú #1 100%.md"]').click();
   await expect(page.locator("[data-files-viewer]")).toContainText("# Ghi chú");
@@ -313,28 +319,36 @@ test("the copy buttons copy the path and the contents", async ({ page, raw, cont
 });
 
 for (const width of [320, 360]) {
-  test(`at ${width} px the page fits, keeps its values and every control is a target`, async ({ page, raw }) => {
+  test(`at ${width} px the tree is in the menu drawer, the viewer fits and every control is a target`, async ({ page, raw }) => {
     const deep = "src/deeply/nested/very-long-file-name-that-keeps-going-and-going.ts";
     workspaceFile(raw.root, deep, "const deep = true;\n");
     workspaceFile(raw.root, "docs/README.md", "# Readme\n");
     await page.setViewportSize({ width, height: 900 });
     await openFiles(page, raw);
 
-    // The panes stack: the viewer sits below the tree, and neither widens the page.
-    const treeBox = await page.locator(".files-tree-pane").boundingBox();
-    const viewerBox = await page.locator(".files-viewer-pane").boundingBox();
-    expect(viewerBox!.y, "the viewer is below the tree").toBeGreaterThanOrEqual(treeBox!.y + treeBox!.height - 1);
-    expect(treeBox!.x + treeBox!.width, "the tree pane fits").toBeLessThanOrEqual(width);
-    expect(viewerBox!.x + viewerBox!.width, "the viewer pane fits").toBeLessThanOrEqual(width);
+    // The main area is the viewer: the tree and its filter are not on the page until the menu is opened.
+    await expect(page.locator("[data-files-tree]:visible")).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no sideways scroll").toBe(true);
+    await page.getByRole("button", { name: "Workspace menu" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.locator("[data-files-tree]")).toBeVisible();
 
     // A deeply nested file: its name is cut in the tree but keeps its full value, and the row still fits.
-    await page.getByRole("textbox", { name: "Filter files" }).fill("very-long-file-name");
-    const row = treeOf(page).locator(`button[data-file="${deep}"]`);
+    await dialog.getByRole("textbox", { name: "Filter files" }).fill("very-long-file-name");
+    const row = dialog.locator(`button[data-file="${deep}"]`);
     await expect(row).toBeVisible();
     await expect(row).toHaveAttribute("title", deep);
     expect(await row.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), "the row fits").toBe(true);
+    const target = async (scope: Locator) => scope.locator("button:visible").evaluateAll((items) =>
+      items
+        .map((item) => {
+          const rect = item.getBoundingClientRect();
+          return { label: item.getAttribute("aria-label") ?? (item.textContent ?? "").trim(), width: rect.width, height: rect.height };
+        })
+        .filter((item) => item.width < 32 || item.height < 32));
+    expect(await target(dialog.locator('nav[aria-label="Files"]')), "the drawer's controls are 32 px targets").toEqual([]);
     await row.click();
+    await expect(dialog).toHaveCount(0);
 
     const viewer = page.locator("[data-files-viewer]");
     await expect(viewer).toContainText("const deep = true;");
@@ -347,16 +361,8 @@ for (const width of [320, 360]) {
         .map((node) => `${node.tagName}.${node.className}`);
     });
     expect(overflowing, "nothing in the viewer sticks out of the pane").toEqual([]);
-
-    // Every control the page shows is at least a 32 px target (the dashboard's own rule).
-    const small = await page.locator(".files-page button:visible").evaluateAll((items) =>
-      items
-        .map((item) => {
-          const rect = item.getBoundingClientRect();
-          return { label: item.getAttribute("aria-label") ?? (item.textContent ?? "").trim(), width: rect.width, height: rect.height };
-        })
-        .filter((item) => item.width < 32 || item.height < 32));
-    expect(small).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no sideways scroll").toBe(true);
+    expect(await target(page.locator(".files-page")), "the page's controls are 32 px targets").toEqual([]);
 
     for (const theme of ["dark", "light"]) {
       await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
@@ -364,3 +370,59 @@ for (const width of [320, 360]) {
     }
   });
 }
+
+test("the listing is asked for only while Files is open, and the tree keeps its filter within a workspace", async ({ page, raw }) => {
+  workspaceFile(raw.root, "src/app.ts", "const a = 1;\n");
+  workspaceFile(raw.root, "docs/readme.md", "# Readme\n");
+  let listings = 0;
+  page.on("request", (request) => { if (request.url().includes("/api/workspaces/files")) listings++; });
+  await page.goto(raw.server.launchUrl);
+  for (const name of ["Agents", "Library", "Chat"]) {
+    await page.getByRole("link", { name, exact: true }).click();
+    await page.waitForLoadState("networkidle");
+  }
+  expect(listings, "nothing asks for the listing outside Files").toBe(0);
+
+  await page.getByRole("link", { name: "Files", exact: true }).click();
+  await expect(treeOf(page).locator('button[data-folder="src"]')).toBeVisible();
+  expect(listings, "opening Files asks once").toBeGreaterThan(0);
+
+  // Leaving Files and coming back to the same workspace keeps what the reader typed.
+  await filterOf(page).fill("readme");
+  await page.getByRole("link", { name: "Chat", exact: true }).click();
+  await page.getByRole("link", { name: "Files", exact: true }).click();
+  await expect(filterOf(page)).toHaveValue("readme");
+});
+
+test("changing workspace clears the filter and the opened folders", async ({ page, raw }) => {
+  const other = folder("reset");
+  workspaceFile(raw.root, "src/app.ts", "const a = 1;\n");
+  workspaceFile(other, "src/app.ts", "const b = 2;\n");
+  await raw.json("/sessions", "POST", { cwd: other });
+  await openFiles(page, raw);
+  await treeOf(page).locator('button[data-folder="src"]').click();
+  await treeOf(page).locator('button[data-file="src/app.ts"]').click();
+  await filterOf(page).fill("app");
+
+  await page.locator(".workspace-button:visible").click();
+  await page.locator(".workspace-popover .workspace-row", { hasText: basename(other) }).locator("[data-row-main]").click();
+  await expect(page).toHaveURL(/\/chat$/);
+  await page.getByRole("link", { name: "Files", exact: true }).click();
+  await expect(filterOf(page)).toHaveValue("");
+  await expect(treeOf(page).locator('button[data-folder="src"]')).toHaveAttribute("aria-expanded", "false");
+  await expect(page).toHaveURL(/\/files$/);
+});
+
+test("the menu drawer shows the same tree state as the column", async ({ page, raw }) => {
+  workspaceFile(raw.root, "src/app.ts", "const a = 1;\n");
+  workspaceFile(raw.root, "docs/readme.md", "# Readme\n");
+  await openFiles(page, raw);
+  await filterOf(page).fill("readme");
+  await treeOf(page).locator('button[data-folder="docs"]').waitFor();
+  await page.setViewportSize({ width: 800, height: 900 });
+  await page.getByRole("button", { name: "Workspace menu" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("textbox", { name: "Filter files" })).toHaveValue("readme");
+  await expect(dialog.locator('button[data-file="docs/readme.md"]')).toBeVisible();
+  await expect(dialog.locator('button[data-file="src/app.ts"]')).toHaveCount(0);
+});

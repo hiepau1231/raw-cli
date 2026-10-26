@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -56,6 +56,7 @@ import { ComponentsPage } from "./pages/Components.js";
 import { DefinitionsPage } from "./pages/Definitions.js";
 import { SettingsPage, SettingsSearch } from "./pages/Settings.js";
 import { FilesNav, FilesPage } from "./pages/Files.js";
+import { useFilesState } from "./files/use-files-state.js";
 import { FolderBrowser } from "./workspace/FolderBrowser.js";
 import { WorkspaceSwitcher } from "./workspace/WorkspaceSwitcher.js";
 import { loadState, recordOpened, relativeTime, saveState, type WorkspaceState } from "./workspace/workspace-state.js";
@@ -188,6 +189,17 @@ export function App() {
   const drafts = useRef(new Map<string, string>());
   const page = route.split("/")[1] || "chat";
   const librarySection = page === "library" ? route.split("/")[2] || "tools" : undefined;
+  // The Files tab's file is part of its address; its navigation (second column or menu drawer) and its page share one state.
+  const filesSelected = useMemo(() => {
+    if (route !== "/files") return "";
+    const query = path.indexOf("?");
+    return new URLSearchParams(query < 0 ? "" : path.slice(query + 1)).get("path") ?? "";
+  }, [route, path]);
+  const files = useFilesState({ workspace, enabled: page === "files", selected: filesSelected });
+  const openFile = (file: string) => {
+    if (file === filesSelected) files.bump();
+    navigate(`/files?path=${encodeURIComponent(file)}`);
+  };
   const main = useRef<HTMLElement>(null);
   const drag = useRef<{ x: number; width: number } | null>(null);
   const shownPage = useRef<string | undefined>(undefined);
@@ -484,7 +496,7 @@ export function App() {
       ) : page === "library" ? (
         <LibraryNav current={librarySection} />
       ) : page === "files" ? (
-        <FilesNav workspace={workspace} />
+        <FilesNav files={files} selected={filesSelected} onOpen={openFile} onChosen={() => setDrawer(false)} />
       ) : (
         <AgentsNav bootstrap={bootstrap} current={currentAgent} />
       )}
@@ -692,7 +704,7 @@ export function App() {
                 </Empty>
               )
             ) : page === "files" ? (
-              <FilesPage workspace={workspace} />
+              <FilesPage workspace={workspace} selected={filesSelected} files={files} />
             ) : page === "settings" &&
               (route.endsWith("/appearance") || route.endsWith("/chat")) ? (
               <PreferencesPage

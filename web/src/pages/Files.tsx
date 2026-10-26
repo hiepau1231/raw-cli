@@ -1,14 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { ChevronRight, FileImage, FileText, Folder, FolderOpen, RotateCw, Search } from "lucide-react";
 import type { WorkspaceFileText } from "../../../src/dashboard/files.js";
 import { MAX_TEXT_BYTES } from "../../../src/dashboard/limits.js";
 import { api, blobDataUrl, errorText, fetchBlob } from "../api.js";
 import { keys } from "../data/keys.js";
-import { useWorkspaceFiles } from "../data/queries.js";
-import { ancestorFolders, buildTree, countFiles, fileKind, filterTree, type TreeFolder } from "../files/tree.js";
+import type { FilesState } from "../files/use-files-state.js";
+import { fileKind, type TreeFolder } from "../files/tree.js";
 import { CodeBlock, Markdown } from "../markdown.js";
-import { useRouter } from "../router.js";
 import { usePageGate } from "../states.js";
 import { CopyButton, Empty, ErrorMessage } from "../ui.js";
 
@@ -138,143 +137,80 @@ function FileView({ workspace, path, tick, onRetry }: { workspace: string; path:
 }
 
 /**
- * The Files tab: a read-only tree of the selected workspace with a filter and the file it opens. The listing is the
- * same git-aware view the agent's `@` references use, so the two never disagree.
+ * The Files tab's page: the file the address names, read-only, in the whole main area. The tree lives in the second
+ * column (`FilesNav`), and both read the one state `App` owns. The listing is the same git-aware view the agent's `@`
+ * references use, so the two never disagree.
  */
-export function FilesPage({ workspace }: { workspace: string }) {
-  const { path, navigate } = useRouter();
-  const selected = useMemo(() => {
-    const query = path.indexOf("?");
-    return new URLSearchParams(query < 0 ? "" : path.slice(query + 1)).get("path") ?? "";
-  }, [path]);
-  const { data, error, mutate } = useWorkspaceFiles(workspace);
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
-  const [tick, setTick] = useState(0);
-  const previousWorkspace = useRef(workspace);
-  const resettingWorkspace = useRef(false);
-  const reload = async () => {
-    setTick((value) => value + 1);
-    if (!workspace) return;
-    try {
-      await mutate(api(keys.workspaceFiles(workspace, true)), { revalidate: false });
-    } catch {
-      // SWR stores the failure on the current key; the page gate/viewer renders it on the next pass.
-    }
-  };
+export function FilesPage({ workspace, selected, files }: { workspace: string; selected: string; files: FilesState }) {
+  const { data, error, tick, reload } = files;
   const gate = usePageGate({ ready: !!data, error, onRetry: () => void reload(), label: "Loading files" });
-  const tree = useMemo(() => buildTree((data?.entries ?? []).map((entry) => entry.path)), [data]);
-  const shown = useMemo(() => filterTree(tree, query), [tree, query]);
-  const filtering = query.trim() !== "";
-  const matches = countFiles(shown);
-  const toggle = (folder: string) => setOpen((old) => {
-    const next = new Set(old);
-    if (!next.delete(folder)) next.add(folder);
-    return next;
-  });
-  const openFile = (file: string) => {
-    if (file === selected) setTick((value) => value + 1);
-    navigate(`/files?path=${encodeURIComponent(file)}`);
-  };
-  useEffect(() => {
-    const previous = previousWorkspace.current;
-    previousWorkspace.current = workspace;
-    if (!previous || !workspace || previous === workspace) return;
-    resettingWorkspace.current = true;
-    setQuery("");
-    setOpen(new Set());
-    setTick(0);
-    if (selected) navigate("/files");
-    else resettingWorkspace.current = false;
-  }, [workspace, navigate, selected]);
-  // The file in the address opens the folders leading to it, without closing what the reader opened.
-  useEffect(() => {
-    if (resettingWorkspace.current) {
-      resettingWorkspace.current = false;
-      return;
-    }
-    if (!selected) return;
-    const ancestors = ancestorFolders(selected);
-    if (!ancestors.length) return;
-    setOpen((old) => new Set([...old, ...ancestors]));
-  }, [selected]);
-  // A filter really opens the folders that lead to its matches, rather than claiming to: the disclosure buttons
-  // keep telling the truth about what a click would do.
-  useEffect(() => {
-    if (!filtering) return;
-    const folders: string[] = [];
-    const walk = (node: TreeFolder) => {
-      for (const child of node.folders) { folders.push(child.path); walk(child); }
-    };
-    walk(shown);
-    if (!folders.length) return;
-    setOpen((old) => (folders.some((folder) => !old.has(folder)) ? new Set([...old, ...folders]) : old));
-  }, [shown, filtering]);
   if (gate || !data) return gate;
-  const listing = data;
   return (
     <div className="files-page">
-      <header className="page-header">
-        <h1>Files</h1>
-        <span className="workspace-path" title={workspace}>{workspace}</span>
-        <button type="button" className="foot-button" onClick={() => void reload()} title="Read the listing and the open file again">
-          <RotateCw size={14} aria-hidden="true" />
-          Reload
-        </button>
-      </header>
-      {listing.total === 0 && !selected ? (
+      <h1 className="sr-only">Files</h1>
+      {data.total === 0 && !selected ? (
         <Empty title="This workspace has no files">
           The agent sees the same view through @ references, so there is nothing here to point it at.
         </Empty>
       ) : (
-        <div className="files-panes">
-          <div className="files-pane files-tree-pane">
-            <label className="search-input files-filter">
-              <Search size={14} aria-hidden="true" />
-              <input aria-label="Filter files" placeholder="Filter by path…" value={query} onChange={(event) => setQuery(event.target.value)} />
-            </label>
-            {filtering && (
-              <p className="files-summary">
-                {matches} of {listing.entries.length} {listing.truncated ? "files shown" : "files"}
-              </p>
-            )}
-            {listing.truncated && <p className="files-summary">Showing {listing.entries.length} of {listing.total} files</p>}
-            {matches === 0 ? (
-              <p className="files-page-hint">{listing.total === 0 ? "No files are listed in this workspace" : "No file matches the filter"}</p>
-            ) : (
-              <div className="files-tree" data-files-tree>
-                <FolderRows node={shown} open={open} toggle={toggle} selected={selected} onOpen={openFile} />
+        <section className="files-pane files-viewer-pane" data-files-viewer aria-label={selected ? `File ${selected}` : "No file chosen"}>
+          {selected ? (
+            <>
+              <div className="files-viewer-head">
+                <span className="files-viewer-name" title={selected}>{selected.split("/").pop()}</span>
+                <span className="files-viewer-path" title={selected}>{selected}</span>
+                <CopyButton value={selected} label="Copy path" />
               </div>
-            )}
-          </div>
-          <section className="files-pane files-viewer-pane" data-files-viewer aria-label={selected ? `File ${selected}` : "No file chosen"}>
-            {selected ? (
-              <>
-                <div className="files-viewer-head">
-                  <span className="files-viewer-name" title={selected}>{selected.split("/").pop()}</span>
-                  <span className="files-viewer-path" title={selected}>{selected}</span>
-                  <CopyButton value={selected} label="Copy path" />
-                </div>
-                <FileView key={`${workspace}:${selected}`} workspace={workspace} path={selected} tick={tick} onRetry={() => void reload()} />
-              </>
-            ) : (
-              <p className="files-page-hint">Choose a file to read it here.</p>
-            )}
-          </section>
-        </div>
+              <FileView key={`${workspace}:${selected}`} workspace={workspace} path={selected} tick={tick} onRetry={() => void reload()} />
+            </>
+          ) : (
+            <p className="files-page-hint">Choose a file to read it here.</p>
+          )}
+        </section>
       )}
     </div>
   );
 }
 
-/** The context panel's Files section: which workspace the tab is showing. */
-export function FilesNav({ workspace }: { workspace: string }) {
+/**
+ * The second column of the Files tab: the filter, Reload and the tree, in the same place the chat's session list and
+ * the agents occupy. On a narrow window the same node is the menu drawer, so `onChosen` closes it after a choice.
+ */
+export function FilesNav({ files, selected, onOpen, onChosen }: { files: FilesState; selected: string; onOpen: (path: string) => void; onChosen: () => void }) {
+  const { data, error, shown, matches, filtering, query, setQuery, open, toggle, reload } = files;
+  if (!data) {
+    return (
+      <nav aria-label="Files" className="context-nav">
+        <div className="group-label">Files</div>
+        {error ? <ErrorMessage>{errorText(error)}</ErrorMessage> : <p className="files-page-hint">Loading…</p>}
+      </nav>
+    );
+  }
+  const choose = (path: string) => { onOpen(path); onChosen(); };
   return (
     <nav aria-label="Files" className="context-nav">
       <div className="group-label">Files</div>
-      <p className="files-nav-path" title={workspace}>
-        {workspace}
-      </p>
+      <button type="button" className="foot-button" onClick={() => void reload()} title="Read the listing and the open file again">
+        <RotateCw size={14} aria-hidden="true" />
+        Reload
+      </button>
+      <label className="search-input files-filter">
+        <Search size={14} aria-hidden="true" />
+        <input aria-label="Filter files" placeholder="Filter by path…" value={query} onChange={(event) => setQuery(event.target.value)} />
+      </label>
+      {filtering && (
+        <p className="files-summary">
+          {matches} of {data.entries.length} {data.truncated ? "files shown" : "files"}
+        </p>
+      )}
+      {data.truncated && <p className="files-summary">Showing {data.entries.length} of {data.total} files</p>}
+      {matches === 0 ? (
+        <p className="files-page-hint">{data.total === 0 ? "No files are listed in this workspace" : "No file matches the filter"}</p>
+      ) : (
+        <div className="files-tree" data-files-tree>
+          <FolderRows node={shown} open={open} toggle={toggle} selected={selected} onOpen={choose} />
+        </div>
+      )}
     </nav>
   );
 }
