@@ -43,3 +43,8 @@ test("exported agent hook runs after pack/install without the author source", as
   assert.equal(result.message, "installed hook ran");
   assert.match(await readFile(join(packageRoot, "agents", "writer.json"), "utf8"), /#hooks\/audit/);
 });
+
+test("the host advertises the Stop-continue capability", async () => {
+  const { hostCapabilities } = await import("../src/packages/contract.js");
+  assert.ok(hostCapabilities.has("raw.stop-continue/1"));
+});

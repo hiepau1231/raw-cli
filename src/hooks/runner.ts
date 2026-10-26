@@ -97,8 +97,8 @@ export async function runHook(hook: SelectedHook, request: HookRequest,
     }
   }
   if (Object.keys(value).some((key) => !["decision", "reason", "message"].includes(key))) fail("invalid_output");
-  if (value.decision !== undefined && (!gate || (value.decision !== "continue" && value.decision !== "deny"))) fail("invalid_output");
-  if (value.reason !== undefined && (typeof value.reason !== "string" || Buffer.byteLength(value.reason) > 1024)) fail("invalid_output");
+  if (value.decision !== undefined && (!(gate || request.event === "Stop") || (value.decision !== "continue" && value.decision !== "deny"))) fail("invalid_output");
+  if (value.reason !== undefined && (typeof value.reason !== "string" || (request.event !== "Stop" && Buffer.byteLength(value.reason) > 1024))) fail("invalid_output");
   if (value.message !== undefined && (typeof value.message !== "string" || Buffer.byteLength(value.message) > 512)) fail("invalid_output");
   const decision = code === 2 || value.decision === "deny" ? "deny" : "continue";
   return { decision, ...(typeof value.reason === "string" ? { reason: value.reason } : {}),

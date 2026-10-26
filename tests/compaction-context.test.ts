@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { createAgent, type AgentOptions } from "../src/agent.js";
+import { HookDispatcher } from "../src/hooks/dispatcher.js";
 import { effectiveInputBudget } from "../src/llm/context.js";
 import { effectiveOutputTokens } from "../src/llm/output.js";
 import { collectFacts, COMPACT_SYSTEM_PROMPT, cutUserInput, LEGACY_LEDGER_NOTE, LEGACY_NOTE_SOURCE, renderLedger, RESUME_TEXT, SUMMARY_CUT_NOTICE, summarizeTranscript, textTokens, WORKING_STATE_BYTES } from "../src/compact.js";
@@ -676,6 +677,32 @@ test("R3: typed inputs that look like host notes stay in the ledger", async () =
     const ledger = ledgerOf(agent.transcript);
     const order = sequences(store, id);
     for (const input of inputs) assert.ok(ledger.includes(`[user, history #${order.get(input)}]\n${input}`), input);
+  } finally { await agent.close(); store.close(); }
+});
+
+test("R3b: a Stop-hook continuation is a host note: older inputs keep their history rows and its text stays out of the ledger", async () => {
+  const { root, store, id } = sessionStore();
+  const input = distinct("typed");
+  const hookPath = join(root, "deny-once.mjs");
+  writeFileSync(hookPath, `import { existsSync, writeFileSync } from "node:fs";
+    process.stdin.resume(); process.stdin.on("end", () => {
+      const flag = process.argv[2];
+      if (existsSync(flag)) return;
+      writeFileSync(flag, "1");
+      process.stdout.write(JSON.stringify({ decision: "deny", reason: "keep going" }));
+    });`);
+  const hook = { protocol_version: 2 as const, id: "agent/once", name: "once", folder: root, command: process.execPath,
+    args: [hookPath, join(root, "flag")], timeoutMs: 2000, events: [{ name: "Stop" as const }] };
+  const { provider } = scripted({}, [stop(`one ${noise(2000)}`), stop(`two ${noise(2000)}`)]);
+  const agent = persisted(store, id, root, provider, { registry: createTestToolRegistry(), hooks: new HookDispatcher([hook]) });
+  try {
+    assert.equal((await agent.run(input)).status, "completed");
+    assert.ok(JSON.stringify(agent.transcript).includes("[Raw hook continuation] keep going"));
+    assert.equal((await agent.compact({ keepRecentTurns: 0, keepRecentTokens: 1 })).status, "compacted");
+    const ledger = ledgerOf(agent.transcript);
+    const order = sequences(store, id);
+    assert.ok(ledger.includes(`[user, history #${order.get(input)}]\n${input}`), "the typed input keeps its history row");
+    assert.ok(!ledger.includes("Raw hook continuation"), ledger);
   } finally { await agent.close(); store.close(); }
 });
 

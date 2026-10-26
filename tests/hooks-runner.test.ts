@@ -81,3 +81,26 @@ test("on Windows a cancelled hook takes its detached grandchild with it", { skip
   await assert.rejects(running, /aborted/);
   assert.deepEqual(await waitForNoMarked(marker), []);
 });
+
+const stopRequest = { protocol_version: 2 as const, event: "Stop" as const, cwd: process.cwd() };
+async function stopFixture(source: string): Promise<SelectedHook> {
+  const hook = await fixture(source);
+  return { ...hook, events: [{ name: "Stop" }] };
+}
+const printing = (value: unknown) => `process.stdin.resume(); process.stdin.on('end', () => process.stdout.write(${JSON.stringify(JSON.stringify(value))}));`;
+
+test("a Stop hook may answer deny with a reason; the other notification events and exit 2 still may not", async () => {
+  const deny = await runHook(await stopFixture(printing({ decision: "deny", reason: "keep going — ünï" })), stopRequest);
+  assert.deepEqual([deny.decision, deny.reason], ["deny", "keep going — ünï"]);
+  assert.equal((await runHook(await stopFixture(printing({ decision: "continue" })), stopRequest)).decision, "continue");
+  assert.equal((await runHook(await stopFixture(printing({ message: "hi" })), stopRequest)).decision, "continue");
+  await assert.rejects(runHook(await stopFixture(printing({ decision: "maybe" })), stopRequest), /invalid_output/);
+  // A Stop reason is not held to the gates' 1024 bytes: a long goal text must not end the run as invalid output.
+  assert.equal((await runHook(await stopFixture(printing({ decision: "deny", reason: "x".repeat(50_000) })), stopRequest)).reason?.length, 50_000);
+  await assert.rejects(runHook(await stopFixture(printing({ decision: "deny", reason: "x".repeat(1025) })), request), /invalid_output/);
+  await assert.rejects(runHook(await stopFixture(printing({ decision: "deny", reason: 5 })), stopRequest), /invalid_output/);
+  await assert.rejects(runHook(await stopFixture("process.stdin.resume(); process.stdin.on('end', () => { process.stdout.write('{\"decision\":\"deny\"}'); process.exitCode = 2; });"), stopRequest), /exit/);
+  for (const event of ["SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd"] as const) {
+    await assert.rejects(runHook(await stopFixture(printing({ decision: "deny" })), { ...stopRequest, event }), /invalid_output/, event);
+  }
+});

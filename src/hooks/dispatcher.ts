@@ -2,6 +2,7 @@ import { HookError, type HookEventName, type HookRequest, type SelectedHook } fr
 import { matchesHookSubscription } from "./manifest.js";
 import { runHook } from "./runner.js";
 import { bindWhenToSchema, compileWhen } from "../tools/policy.js";
+import { truncateBytes } from "../panels/render.js";
 import type { ToolDefinition, ToolRegistry } from "../tools/registry.js";
 
 export interface HookReceipt {
@@ -12,7 +13,19 @@ export interface HookReceipt {
   message?: string;
   code?: string;
 }
-export interface HookDispatchResult { blocked?: "denied" | "error"; reason?: string }
+/** `continueWith`: the joined reasons of the `Stop` hooks that asked the run to continue. */
+export interface HookDispatchResult { blocked?: "denied" | "error"; reason?: string; continueWith?: string }
+/** Host text added to the context on every continuation: the size raw already allows for panel reminders (`PANEL_LIMITS.reminderTotalBytes`), close to the 10,000 characters Claude Code lets one hook string inject. */
+const STOP_CONTINUE_MAX_BYTES = 8 * 1024;
+const STOP_CONTINUE_DEFAULT = "A Stop hook asked the run to continue.";
+
+/** The joined reasons, kept whole up to the bound; beyond it the text is cut on a character boundary and says how much was cut. */
+function boundedContinuation(text: string): string {
+  const bytes = Buffer.byteLength(text);
+  if (bytes <= STOP_CONTINUE_MAX_BYTES) return text;
+  const marker = ` [Stop hook reasons cut: ${bytes} → ${STOP_CONTINUE_MAX_BYTES} bytes]`;
+  return truncateBytes(text, STOP_CONTINUE_MAX_BYTES - Buffer.byteLength(marker)) + marker;
+}
 
 export class HookDispatcher {
   constructor(readonly selected: readonly SelectedHook[], private readonly env?: NodeJS.ProcessEnv) {}
@@ -38,6 +51,7 @@ export class HookDispatcher {
       hurry?: { signal: AbortSignal; graceMs: number } } = {}): Promise<HookDispatchResult> {
     const gate = event === "UserPromptSubmit" || event === "PreToolUse";
     let deadline = options.deadline;
+    const continuations: string[] = [];
     for (const hook of this.selected) {
       if (gate && hook.events.some(item => item.when?.source === "effects"
         && matchesHookSubscription({ name: item.name, ...(item.match ? { match: item.match } : {}) }, event, request.tool?.identity))
@@ -58,15 +72,16 @@ export class HookDispatcher {
         });
         receipt = { id: hook.id, event, outcome: response.decision === "deny" ? "denied" : "continued",
           durationMs: response.durationMs, ...(response.message ? { message: response.message } : {}) };
-        if (response.decision === "deny") denial = response.reason ?? `hook ${hook.id} denied`;
+        if (response.decision === "deny") denial = response.reason || (event === "Stop" ? STOP_CONTINUE_DEFAULT : `hook ${hook.id} denied`);
       } catch (error) {
         const code = error instanceof HookError ? error.code : "hook_callback";
         receipt = { id: hook.id, event, outcome: "error", durationMs: Math.round(performance.now() - started), code };
       }
       options.onReceipt?.(receipt);
       if (receipt.outcome === "error" && gate) return { blocked: "error", reason: `hook ${hook.id} failed: ${receipt.code}` };
-      if (denial) return gate ? { blocked: "denied", reason: denial } : {};
+      if (denial && event === "Stop") continuations.push(denial);
+      else if (denial) return gate ? { blocked: "denied", reason: denial } : {};
     }
-    return {};
+    return continuations.length ? { continueWith: boundedContinuation([...new Set(continuations)].join("\n\n")) } : {};
   }
 }

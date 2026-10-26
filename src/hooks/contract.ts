@@ -1,3 +1,4 @@
+import type { UsageSummary } from "../llm/cache.js";
 import type { ToolPolicyWhen } from "../tools/policy.js";
 
 export const hookEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
@@ -30,6 +31,8 @@ export interface HookRequest {
   tool?: { identity: string; name: string; source?: "model" | "user_action"; arguments: Record<string, unknown>; raw_arguments?: Record<string, unknown>;
     effects?: Record<string, unknown>; result?: unknown };
   run?: unknown;
+  /** `Stop` only: whether a Stop hook already continued this turn, how many times, and the session's cumulative usage. */
+  stop?: { hook_active: boolean; continuations: number; usage: UsageSummary };
 }
 export interface HookExecution { decision: "continue" | "deny"; reason?: string; message?: string; durationMs: number }
 

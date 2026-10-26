@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- A `UserPromptSubmit` or `PreToolUse` hook that denied with an empty `reason`
+  (`{"decision":"deny","reason":""}`) was treated as allowing the call. It now
+  blocks, with the default reason `hook ID denied`.
+- A `Stop` hook can now keep a run going: when the run ended with a final
+  answer it may print `{"decision":"deny","reason":"..."}`, and Raw adds the
+  reason as a `[Raw hook continuation]` message and asks the model again. It is
+  the one generic piece a package needs to build goal-style "work until done"
+  behaviour itself; Raw has no goal feature. A hook that fails never traps the
+  run, `maxSteps` still bounds it, and `Stop` requests now carry `stop`
+  (`hook_active`, `continuations`, `usage`). Packages can require the
+  `raw.stop-continue/1` capability. See [hooks](docs/hooks.md) and the
+  `examples/hooks/keep-going/` example.
 - The dashboard has a **Files** tab beside Chat, Agents and Library: a read-only
   tree of the selected workspace (the same git-aware view the agent's `@`
   references use) in the second column, with a filter and per-folder counts,
