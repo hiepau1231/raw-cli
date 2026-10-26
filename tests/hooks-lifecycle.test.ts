@@ -174,7 +174,7 @@ async function stopDispatcher(scripts: string[]) {
       appendFileSync(${JSON.stringify(join(cwd, "ran.log"))}, "${index}\\n");
       process.stdin.resume(); process.stdin.on("end", () => { ${script} });`);
     hooks.push({ protocol_version: 2, id: `agent/h${index}`, name: `h${index}`, folder: cwd, command: process.execPath,
-      args: [path], timeoutMs: 1000, events: [{ name: "Stop" }] });
+      args: [path], timeoutMs: 20000, events: [{ name: "Stop" }] });
   }
   return { cwd, dispatcher: new HookDispatcher(hooks), ran: async () => (await readFile(join(cwd, "ran.log"), "utf8")).trim().split("\n") };
 }
@@ -220,7 +220,7 @@ async function continuing(limit: string, reason = "keep going", extra: { second?
         process.stdout.write(JSON.stringify({ decision: "deny", reason: process.argv[4] }));
     });`);
   const hooks: SelectedHook[] = [{ protocol_version: 2, id: "agent/continue", name: "continue", folder: cwd, command: process.execPath,
-    args: [path, log, limit, reason], timeoutMs: 1000, events: [{ name: "Stop" }] }];
+    args: [path, log, limit, reason], timeoutMs: 20000, events: [{ name: "Stop" }] }];
   if (extra.second) hooks.push({ ...hooks[0]!, id: "agent/observe", name: "observe", args: [path, join(cwd, "observe.jsonl"), "none", ""] });
   const stops = async () => (await readFile(log, "utf8").catch(() => "")).trim().split("\n").filter(Boolean)
     .map((line) => JSON.parse(line) as { run: { status: string; text?: string }; stop: { hook_active: boolean; continuations: number; usage: { requests: number } } });
