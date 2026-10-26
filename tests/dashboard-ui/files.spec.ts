@@ -245,10 +245,10 @@ test("markdown renders as source and as a preview", async ({ page, raw }) => {
 
   const viewer = page.locator("[data-files-viewer]");
   await expect(viewer).toContainText("# Title");
-  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await page.getByRole("radio", { name: "Preview", exact: true }).click();
   await expect(viewer.getByRole("heading", { name: "Title" })).toBeVisible();
   await expect(viewer).not.toContainText("Some **bold** text.");
-  await page.getByRole("button", { name: "Source", exact: true }).click();
+  await page.getByRole("radio", { name: "Source", exact: true }).click();
   await expect(viewer).toContainText("Some **bold** text.");
 });
 
@@ -528,4 +528,68 @@ test("a folder's count is its files, and under a filter only the files that matc
   await filterOf(page).fill("c.ts");
   await expect(count("src")).toHaveText("1");
   await expect(tree.locator('[data-folder="docs"]')).toHaveCount(0);
+});
+
+test("the viewer has a header with chips and a code block that fills the main area and scrolls inside itself", async ({ page, raw }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const title = `${"long-title-".repeat(14)}.ts`;
+  expect(title.length).toBeGreaterThan(150);
+  workspaceFile(raw.root, "five.ts", "a\nb\nc\nd\ne\n");
+  workspaceFile(raw.root, "big.ts", Array.from({ length: 3000 }, (_, i) => `const v${i} = ${i};`).join("\n"));
+  workspaceFile(raw.root, title, "x\n");
+  workspaceFile(raw.root, "chat.md", "# T\n\n```ts\nconst a = 1;\n```\n");
+  await openFiles(page, raw);
+  const viewer = page.locator("[data-files-viewer]");
+  const blockFills = async () => {
+    const block = await viewer.locator(".code-block").boundingBox();
+    const main = await page.locator("main").boundingBox();
+    expect(main!.y + main!.height - (block!.y + block!.height), "the block reaches the bottom of the main area").toBeLessThanOrEqual(24);
+    expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight), "the page does not grow").toBe(true);
+    expect(await page.locator("main").evaluate((el) => el.scrollHeight <= el.clientHeight + 1), "main does not scroll").toBe(true);
+  };
+
+  await treeOf(page).locator('[data-file="five.ts"]').click();
+  await expect(viewer.getByRole("heading", { name: "five.ts" })).toBeVisible();
+  const chips = viewer.locator(".files-viewer-chips");
+  await expect(chips).toContainText("TS");
+  await expect(chips).toContainText("10 B");
+  await expect(chips).toContainText("5 lines");
+  await blockFills();
+  // One Copy for contents, no code header of its own, and a gutter that is neither read out nor selectable.
+  await expect(viewer.getByRole("button", { name: "Copy contents" })).toHaveCount(1);
+  await expect(viewer.getByRole("button", { name: "Copy code" })).toHaveCount(0);
+  await expect(viewer.locator(".code-label")).toHaveCount(0);
+  const gutter = viewer.locator(".code-gutter");
+  await expect(gutter).toHaveAttribute("aria-hidden", "true");
+  expect(await gutter.evaluate((el) => getComputedStyle(el).userSelect)).toBe("none");
+  expect(await gutter.evaluate((el) => el.textContent)).toBe("1\n2\n3\n4\n5");
+  await expect(viewer.locator(".code-block code")).toContainText("e");
+  // Line N of the code is on the row of number N: the two columns start together and are as tall as each other.
+  const rows = async () => viewer.evaluate((el) => {
+    const g = el.querySelector(".code-gutter")!.getBoundingClientRect();
+    const c = el.querySelector(".code-block code")!.getBoundingClientRect();
+    return { top: Math.abs(g.top - c.top), height: Math.abs(g.height - c.height) };
+  });
+  expect((await rows()).top).toBeLessThanOrEqual(1);
+  expect((await rows()).height).toBeLessThanOrEqual(2);
+
+  await treeOf(page).locator('[data-file="big.ts"]').click();
+  await expect(viewer.locator(".code-gutter")).toContainText("3000");
+  await blockFills();
+  expect((await rows()).top).toBeLessThanOrEqual(1);
+  expect((await rows()).height).toBeLessThanOrEqual(2);
+  await expect(chips).toContainText("3000 lines");
+  expect(await viewer.locator(".code-block pre").evaluate((el) => el.scrollHeight > el.clientHeight * 5)).toBe(true);
+
+  await treeOf(page).locator(`[data-file="${title}"]`).click();
+  const name = viewer.getByRole("heading", { name: title });
+  await expect(name).toBeVisible();
+  expect(await name.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  expect((await name.boundingBox())!.width).toBeLessThan(900);
+
+  // Chat's code blocks are unchanged: a fenced block in the preview keeps its label and has no gutter.
+  await treeOf(page).locator('[data-file="chat.md"]').click();
+  await viewer.getByRole("radio", { name: "Preview", exact: true }).click();
+  await expect(viewer.locator(".files-markdown .code-label")).toHaveCount(1);
+  await expect(viewer.locator(".files-markdown .code-gutter")).toHaveCount(0);
 });

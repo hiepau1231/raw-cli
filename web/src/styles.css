@@ -2936,6 +2936,8 @@ code.tool-summary {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  height: 100%;
+  min-height: 0;
   padding: 16px;
 }
 .files-page-hint,
@@ -3050,89 +3052,101 @@ code.tool-summary {
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
-.files-panes {
-  display: grid;
-  grid-template-columns: minmax(200px, 320px) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-  min-width: 0;
-}
-.files-pane {
-  min-width: 0;
-}
 .files-viewer-pane {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 10px;
-  min-height: 240px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--panel);
+  min-width: 0;
+  min-height: 0;
 }
 .files-viewer-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 8px 16px;
   min-width: 0;
 }
-.files-viewer-head button {
-  flex: none;
-  min-height: 32px;
+.files-viewer-title {
+  flex: 1 1 260px;
+  min-width: 0;
 }
 .files-viewer-name {
-  flex: 1 1 auto;
-  min-width: 0;
+  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 550;
+  font-size: 16px;
+  font-weight: 600;
 }
 .files-viewer-path {
-  flex: 1;
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
+  font-family: var(--font-mono);
   font-size: 12px;
 }
-.files-modes {
+.files-viewer-chips,
+.files-viewer-actions {
   display: flex;
-  gap: 6px;
-}
-.files-view-tools {
-  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
-.files-view-tools button {
-  flex: none;
+.files-viewer-actions .files-copy {
+  gap: 6px;
   min-height: 32px;
+  padding: 4px 10px;
+  border-color: var(--border);
+  color: var(--text);
+  font-size: 13px;
 }
-.files-modes .foot-button {
-  min-height: 32px;
+.files-viewer-actions .copy-text {
+  display: inline;
+}
+/* The code fills what is left of the main area and scrolls inside itself, so the page never grows with the file. */
+.files-viewer-pane > .code-block {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 120px;
+  margin: 0;
+}
+.files-viewer-pane > .code-block pre {
+  flex: 1;
+  min-height: 0;
+}
+/* The gutter and the code are side by side, so line N of one is on the same row as line N of the other. */
+.code-numbered pre {
+  display: flex;
+  padding-left: 0;
+}
+.code-numbered code {
+  flex: 0 0 auto;
+}
+.code-gutter {
+  position: sticky;
+  left: 0;
+  flex: none;
+  min-width: 3.5em;
+  margin-right: 16px;
+  padding: 0 12px 0 8px;
+  background: var(--code);
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .files-image img {
   max-width: 100%;
   height: auto;
   border-radius: 8px;
   background: var(--code);
-}
-.files-plain {
-  max-height: 60vh;
-  margin: 0;
-  padding: 10px 12px;
-  overflow: auto;
-  border-radius: 8px;
-  background: var(--code);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-variant-ligatures: none;
-  line-height: 1.6;
-  white-space: pre;
 }
 .files-markdown {
   min-width: 0;
@@ -3143,11 +3157,6 @@ code.tool-summary {
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
-}
-@media (max-width: 899px) {
-  .files-panes {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 

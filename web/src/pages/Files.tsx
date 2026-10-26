@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import useSWR from "swr";
 import { ChevronRight, FileImage, FileText, Folder, FolderOpen, RotateCw, Search } from "lucide-react";
 import type { WorkspaceFileText } from "../../../src/dashboard/files.js";
@@ -6,6 +6,7 @@ import { MAX_TEXT_BYTES } from "../../../src/dashboard/limits.js";
 import { api, blobDataUrl, errorText, fetchBlob } from "../api.js";
 import { keys } from "../data/keys.js";
 import type { FilesState } from "../files/use-files-state.js";
+import { formatBytes, lineCount } from "../files/format.js";
 import { countFiles, fileKind, type TreeFolder } from "../files/tree.js";
 import { CodeBlock, Markdown } from "../markdown.js";
 import { usePageGate } from "../states.js";
@@ -67,6 +68,60 @@ function FolderRows({ node, open, toggle, selected, onOpen }: {
 /** Above this, the text is shown without syntax highlighting: a megabyte through the highlighter blocks the page. */
 const HEAVY_TEXT = 200_000;
 
+const KIND_LABEL = { markdown: "Markdown", image: "Image", text: "Text" } as const;
+
+/** The viewer's header: the file's name and path, what it is, and what can be done with it. */
+function ViewerHead({ path, chips, actions }: { path: string; chips: string[]; actions?: ReactNode }) {
+  return (
+    <header className="files-viewer-head">
+      <div className="files-viewer-title">
+        <h2 className="files-viewer-name" title={path.split("/").pop()}>{path.split("/").pop()}</h2>
+        <div className="files-viewer-path" title={path}>{path}</div>
+      </div>
+      <div className="files-viewer-chips">
+        {chips.map((chip) => <span key={chip} className="badge">{chip}</span>)}
+      </div>
+      <div className="files-viewer-actions">
+        {actions}
+        <CopyButton value={path} label="Copy path" text="Copy path" className="files-copy" />
+      </div>
+    </header>
+  );
+}
+
+/** Source | Preview, a radio group so arrow keys move between the two choices. */
+function ViewMode({ mode, onChange }: { mode: "source" | "preview"; onChange: (mode: "source" | "preview") => void }) {
+  const options = [{ value: "source", label: "Source" }, { value: "preview", label: "Preview" }] as const;
+  return (
+    <div
+      className="segmented"
+      role="radiogroup"
+      aria-label="Markdown view"
+      onKeyDown={(event) => {
+        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        const next = mode === "source" ? "preview" : "source";
+        onChange(next);
+        event.currentTarget.querySelector<HTMLButtonElement>(`[data-value="${next}"]`)?.focus();
+      }}
+    >
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          data-value={option.value}
+          aria-checked={mode === option.value}
+          tabIndex={mode === option.value ? 0 : -1}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** The file itself: text or code, Markdown as source or preview, a raster image, or the reason it is not shown. */
 function FileView({ workspace, path, tick, onRetry }: { workspace: string; path: string; tick: number; onRetry: () => void }) {
   const kind = fileKind(path);
@@ -92,50 +147,68 @@ function FileView({ workspace, path, tick, onRetry }: { workspace: string; path:
   }, [workspace, path, kind, tick]);
 
   if (kind === "image") {
-    if (!image) return <p className="files-page-hint">Loading…</p>;
-    if ("failed" in image) return <p className="files-page-hint" data-files-notice>This image cannot be shown.</p>;
+    const sized = image && !("failed" in image);
     return (
-      <div className="files-image">
-        <img data-files-image src={image.url} alt={path.split("/").pop() ?? path} onError={() => setImage({ failed: true })} />
-        <p className="files-summary" data-files-image-size>{image.bytes} bytes</p>
-      </div>
+      <>
+        <ViewerHead path={path} chips={[KIND_LABEL.image, ...(sized ? [formatBytes(image.bytes)] : [])]} />
+        {!image && <p className="files-page-hint">Loading…</p>}
+        {image && "failed" in image && <p className="files-page-hint" data-files-notice>This image cannot be shown.</p>}
+        {sized && (
+          <div className="files-image">
+            <img data-files-image src={image.url} alt={path.split("/").pop() ?? path} onError={() => setImage({ failed: true })} />
+            <p className="files-summary" data-files-image-size>{image.bytes} bytes</p>
+          </div>
+        )}
+      </>
     );
   }
   if (text.error) return (
-    <div className="files-view-message">
-      <ErrorMessage>{errorText(text.error)}</ErrorMessage>
-      <button type="button" className="foot-button" onClick={onRetry}>Retry</button>
-    </div>
-  );
-  if (!text.data) return <p className="files-page-hint">Loading…</p>;
-  if ("binary" in text.data) return <p className="files-page-hint" data-files-notice>binary file, {text.data.bytes} bytes, not shown</p>;
-  const cut = text.data.truncated
-    ? <p className="files-page-hint" data-files-notice>Showing the first {MAX_TEXT_BYTES / (1024 * 1024)} MiB of {text.data.bytes} bytes</p>
-    : null;
-  const heavy = text.data.text.length > HEAVY_TEXT;
-  const body = heavy
-    ? <pre className="files-plain" tabIndex={0}>{text.data.text}</pre>
-    : <CodeBlock code={text.data.text} language={kind === "markdown" ? "md" : languageOf(path)} />;
-  const tools = (
-    <div className="files-view-tools">
-      <CopyButton value={text.data.text} label="Copy contents" />
-      {heavy && <span className="files-page-hint">Large file: shown without highlighting</span>}
-      {kind === "markdown" && !heavy && (
-        <div className="files-modes" role="group" aria-label="Markdown view">
-          <button type="button" className="foot-button" aria-pressed={mode === "source"} onClick={() => setMode("source")}>Source</button>
-          <button type="button" className="foot-button" aria-pressed={mode === "preview"} onClick={() => setMode("preview")}>Preview</button>
-        </div>
-      )}
-    </div>
-  );
-  if (kind === "markdown" && !heavy) return (
     <>
-      {cut}
-      {tools}
-      {mode === "preview" ? <div className="files-markdown"><Markdown>{text.data.text}</Markdown></div> : <CodeBlock code={text.data.text} language="md" />}
+      <ViewerHead path={path} chips={[KIND_LABEL[kind]]} />
+      <div className="files-view-message">
+        <ErrorMessage>{errorText(text.error)}</ErrorMessage>
+        <button type="button" className="foot-button" onClick={onRetry}>Retry</button>
+      </div>
     </>
   );
-  return <>{cut}{tools}{body}</>;
+  if (!text.data) return (
+    <>
+      <ViewerHead path={path} chips={[KIND_LABEL[kind]]} />
+      <p className="files-page-hint">Loading…</p>
+    </>
+  );
+  if ("binary" in text.data) return (
+    <>
+      <ViewerHead path={path} chips={["Binary", formatBytes(text.data.bytes)]} />
+      <p className="files-page-hint" data-files-notice>binary file, {text.data.bytes} bytes, not shown</p>
+    </>
+  );
+  const shown = text.data.text;
+  const language = languageOf(path);
+  const heavy = shown.length > HEAVY_TEXT;
+  const chips = [
+    kind === "markdown" ? KIND_LABEL.markdown : language === "text" ? KIND_LABEL.text : language.toUpperCase(),
+    formatBytes(text.data.bytes),
+    `${lineCount(shown)} ${lineCount(shown) === 1 ? "line" : "lines"}`,
+  ];
+  const actions = (
+    <>
+      {kind === "markdown" && !heavy && <ViewMode mode={mode} onChange={setMode} />}
+      <CopyButton value={shown} label="Copy contents" text="Copy contents" className="files-copy" />
+    </>
+  );
+  return (
+    <>
+      <ViewerHead path={path} chips={chips} actions={actions} />
+      {text.data.truncated && (
+        <p className="files-page-hint" data-files-notice>Showing the first {MAX_TEXT_BYTES / (1024 * 1024)} MiB of {text.data.bytes} bytes</p>
+      )}
+      {heavy && <p className="files-page-hint">Large file: shown without highlighting</p>}
+      {kind === "markdown" && !heavy && mode === "preview"
+        ? <div className="files-markdown"><Markdown>{shown}</Markdown></div>
+        : <CodeBlock code={shown} language={heavy ? "text" : kind === "markdown" ? "md" : language} lineNumbers bare />}
+    </>
+  );
 }
 
 /**
@@ -155,14 +228,9 @@ export function FilesPage({ workspace, selected, files }: { workspace: string; s
           The agent sees the same view through @ references, so there is nothing here to point it at.
         </Empty>
       ) : (
-        <section className="files-pane files-viewer-pane" data-files-viewer aria-label={selected ? `File ${selected}` : "No file chosen"}>
+        <section className="files-viewer-pane" data-files-viewer aria-label={selected ? `File ${selected}` : "No file chosen"}>
           {selected ? (
             <>
-              <div className="files-viewer-head">
-                <span className="files-viewer-name" title={selected}>{selected.split("/").pop()}</span>
-                <span className="files-viewer-path" title={selected}>{selected}</span>
-                <CopyButton value={selected} label="Copy path" />
-              </div>
               <FileView key={`${workspace}:${selected}`} workspace={workspace} path={selected} tick={tick} onRetry={() => void reload()} />
             </>
           ) : (

@@ -2,6 +2,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { common, createLowlight } from "lowlight";
 import { createContext, isValidElement, memo, useContext, useMemo, type ReactNode } from "react";
+import { lineCount } from "./files/format.js";
 import { CopyButton } from "./ui.js";
 import { MermaidDiagram } from "./diagrams/MermaidDiagram.js";
 import { isClosedMermaidFence } from "./diagrams/policy.js";
@@ -39,9 +40,15 @@ export function highlightLine(language: string, text: string): ReactNode {
 export function CodeBlock({
   code,
   language = "text",
+  lineNumbers = false,
+  bare = false,
 }: {
   code: string;
   language?: string;
+  /** A gutter of line numbers that is neither read out, selected nor copied. */
+  lineNumbers?: boolean;
+  /** No header with the language and its own Copy, for a caller that shows those itself. */
+  bare?: boolean;
 }) {
   const highlighted = useMemo(() => {
     if (highlighter.registered(language))
@@ -52,13 +59,20 @@ export function CodeBlock({
       } catch {}
     return code;
   }, [code, language]);
+  const gutter = useMemo(
+    () => (lineNumbers ? Array.from({ length: lineCount(code) }, (_, index) => index + 1).join("\n") : ""),
+    [code, lineNumbers],
+  );
   return (
-    <div className="code-block">
-      <div className="code-label">
-        <span>{language}</span>
-        <CopyButton value={code} label="Copy code" text="Copy" className="code-copy" />
-      </div>
+    <div className={lineNumbers ? "code-block code-numbered" : "code-block"}>
+      {!bare && (
+        <div className="code-label">
+          <span>{language}</span>
+          <CopyButton value={code} label="Copy code" text="Copy" className="code-copy" />
+        </div>
+      )}
       <pre tabIndex={0}>
+        {lineNumbers && <span className="code-gutter" aria-hidden="true">{gutter}</span>}
         <code>{highlighted}</code>
       </pre>
     </div>
