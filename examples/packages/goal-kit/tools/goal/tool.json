@@ -1,0 +1,16 @@
+{
+  "api_version": 2,
+  "id": "goal",
+  "version": "1.0.0",
+  "name": "goal",
+  "description": "Track one goal with acceptance criteria, evidence and a bounded continuation budget.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "entry": "./index.mjs",
+  "condition_sources": [
+    "arguments"
+  ]
+}
