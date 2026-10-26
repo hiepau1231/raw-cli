@@ -202,3 +202,143 @@ test("a joined Stop continuation over 4096 bytes is cut without splitting a char
   assert.ok(Buffer.byteLength(continueWith) <= 4096);
   assert.ok(!continueWith.includes("�"));
 });
+
+// A Stop hook that logs its request and denies while `stop.continuations` is below `limit` ("inf" never stops denying).
+async function continuing(limit: string, reason = "keep going", extra: { second?: boolean } = {}) {
+  const cwd = await mkdtemp(join(tmpdir(), "raw-hooks-continue-"));
+  const log = join(cwd, "stop.jsonl");
+  const path = join(cwd, "hook.mjs");
+  await writeFile(path, `import { appendFileSync } from "node:fs";
+    let input = ""; process.stdin.on("data", c => input += c); process.stdin.on("end", () => {
+      const request = JSON.parse(input);
+      if (request.event !== "Stop") return;
+      appendFileSync(process.argv[2], JSON.stringify(request) + "\\n");
+      const limit = process.argv[3] === "inf" ? Infinity : Number(process.argv[3]);
+      if (process.argv[3] !== "none" && request.run.status === "completed" && request.stop.continuations < limit)
+        process.stdout.write(JSON.stringify({ decision: "deny", reason: process.argv[4] }));
+    });`);
+  const hooks: SelectedHook[] = [{ protocol_version: 2, id: "agent/continue", name: "continue", folder: cwd, command: process.execPath,
+    args: [path, log, limit, reason], timeoutMs: 1000, events: [{ name: "Stop" }] }];
+  if (extra.second) hooks.push({ ...hooks[0]!, id: "agent/observe", name: "observe", args: [path, join(cwd, "observe.jsonl"), "none", ""] });
+  const stops = async () => (await readFile(log, "utf8").catch(() => "")).trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as { run: { status: string; text?: string }; stop: { hook_active: boolean; continuations: number; usage: { requests: number } } });
+  return { cwd, hooks, stops, observed: async () => (await readFile(join(cwd, "observe.jsonl"), "utf8").catch(() => "")).trim().split("\n").filter(Boolean).length };
+}
+
+function recording(texts: Array<string | { text: string; truncated?: boolean }>, onCall?: (index: number) => Promise<void> | void) {
+  const requests: Array<Array<{ role: string; content?: unknown }>> = [];
+  const provider: ProviderAdapter = { modelConfig: { agentName: "raw", provider: "ollama", method: "openai-chat-completions", model: "fixture" },
+    generate: async (request) => {
+      requests.push(structuredClone(request.messages) as never);
+      await onCall?.(requests.length);
+      const item = texts[requests.length - 1] ?? "end";
+      const { text, truncated } = typeof item === "string" ? { text: item, truncated: false } : { truncated: false, ...item };
+      return { text, finishReason: truncated ? "length" : "stop", toolCalls: [], ...(truncated ? { truncated: true } : {}) };
+    } };
+  const lastRoles = () => requests.map((messages) => messages.at(-1)?.role);
+  const lastText = (index: number) => String(requests[index]!.at(-1)?.content);
+  return { provider, requests, lastRoles, lastText };
+}
+
+async function runWith(hooks: SelectedHook[], cwd: string, provider: ProviderAdapter, options: { maxSteps?: number } = {}) {
+  const agent = createAgent({ provider, registry: new ToolRegistry(), cwd, hooks: new HookDispatcher(hooks), ...options });
+  const events: Array<{ type: string; result?: { status: string } }> = [];
+  const result = await agent.run("go", (event) => { events.push(event as never); });
+  await agent.close();
+  return { result, events };
+}
+
+test("a denying Stop hook makes the agent ask again with a host user message, and sees how many times it did", async () => {
+  for (const reason of ["keep going", "tiếp tục — ünï", "x"]) {
+    const f = await continuing("2", reason);
+    const model = recording(["a", "b", "c"]);
+    const { result, events } = await runWith(f.hooks, f.cwd, model.provider);
+    assert.equal(result.status, "completed");
+    assert.equal(result.text, "c");
+    assert.equal(model.requests.length, 3);
+    assert.deepEqual(model.lastRoles(), ["user", "user", "user"]);
+    assert.equal(model.lastText(1), `[Raw hook continuation] ${reason}`);
+    assert.equal(model.lastText(2), `[Raw hook continuation] ${reason}`);
+    const stops = await f.stops();
+    assert.deepEqual(stops.map((stop) => stop.stop.continuations), [0, 1, 2]);
+    assert.deepEqual(stops.map((stop) => stop.stop.hook_active), [false, true, true]);
+    assert.deepEqual(stops.map((stop) => stop.stop.usage.requests), [1, 2, 3]);
+    assert.equal(events.filter((event) => event.type === "run_end").length, 1);
+  }
+});
+
+test("a Stop hook that never denies runs once per run and changes nothing", async () => {
+  const f = await continuing("none");
+  const model = recording(["only"]);
+  const { result } = await runWith(f.hooks, f.cwd, model.provider);
+  assert.deepEqual([result.status, result.text, model.requests.length], ["completed", "only", 1]);
+  const stops = await f.stops();
+  assert.equal(stops.length, 1);
+  assert.deepEqual(stops[0]!.run, { status: "completed", steps: 1, text: "only" });
+  assert.equal(stops[0]!.stop.continuations, 0);
+});
+
+test("with no step left a denying Stop hook ends the run max_steps, not completed, and Stop is not run again", async () => {
+  const f = await continuing("inf");
+  const model = recording(["a", "b", "c", "d"]);
+  const { result } = await runWith(f.hooks, f.cwd, model.provider, { maxSteps: 3 });
+  assert.equal(result.status, "max_steps");
+  assert.equal(result.code, "max_steps");
+  assert.match(result.message ?? "", /Stop hook asked the run to continue/);
+  assert.equal(result.text, "c");
+  assert.equal(model.requests.length, 3);
+  assert.equal((await f.stops()).length, 3);
+  assert.deepEqual(model.lastRoles(), ["user", "user", "user"]);
+});
+
+test("a denial is ignored when the run did not complete", async () => {
+  const f = await continuing("inf");
+  const failing: ProviderAdapter = { modelConfig: { agentName: "raw", provider: "ollama", method: "openai-chat-completions", model: "fixture" },
+    generate: async () => { throw new Error("provider down"); } };
+  const { result } = await runWith(f.hooks, f.cwd, failing);
+  assert.equal(result.status, "error");
+  const stops = await f.stops();
+  assert.deepEqual(stops.map((stop) => stop.run.status), ["error"]);
+});
+
+test("an interruption while a Stop hook runs leaves the run completed, with one Stop call and the denial ignored", async () => {
+  const f = await continuing("inf");
+  const cwd = f.cwd;
+  const model = recording(["a", "b"]);
+  const agent = createAgent({ provider: model.provider, registry: new ToolRegistry(), cwd, hooks: new HookDispatcher(f.hooks) });
+  const result = await agent.run("go", (event) => { if (event.type === "hook_event") agent.abort(); });
+  await agent.close();
+  assert.equal(result.status, "completed");
+  assert.equal(model.requests.length, 1);
+  assert.equal((await f.stops()).length, 1);
+});
+
+test("a failing or silent Stop hook ends the run normally, and every Stop hook runs on each continuation", async () => {
+  const f = await continuing("1", "again", { second: true });
+  const model = recording(["a", "b"]);
+  const { result } = await runWith(f.hooks, f.cwd, model.provider);
+  assert.deepEqual([result.status, model.requests.length, await f.observed()], ["completed", 2, 2]);
+  const broken = await stopDispatcher(["process.exit(1);"]);
+  const quiet = recording(["x"]);
+  const run = await runWith([...(broken.dispatcher.selected)], broken.cwd, quiet.provider);
+  assert.deepEqual([run.result.status, quiet.requests.length], ["completed", 1]);
+});
+
+test("an output-limit continuation still works after a Stop continuation", async () => {
+  const f = await continuing("1");
+  const model = recording(["first", { text: "cut", truncated: true }, "rest"]);
+  const { result } = await runWith(f.hooks, f.cwd, model.provider);
+  assert.equal(result.status, "completed");
+  assert.match(model.lastText(2), /\[Raw output limit notice\]/);
+  assert.equal(result.text, "cutrest");
+});
+
+test("Stop runs again for the end of a run that fails after a Stop continuation", async () => {
+  const f = await continuing("inf");
+  let calls = 0;
+  const flaky: ProviderAdapter = { modelConfig: { agentName: "raw", provider: "ollama", method: "openai-chat-completions", model: "fixture" },
+    generate: async () => { if (++calls === 2) throw new Error("provider down"); return { text: "a", finishReason: "stop", toolCalls: [] }; } };
+  const { result } = await runWith(f.hooks, f.cwd, flaky);
+  assert.equal(result.status, "error");
+  assert.deepEqual((await f.stops()).map((stop) => stop.run.status), ["completed", "error"]);
+});

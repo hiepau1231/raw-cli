@@ -153,6 +153,8 @@ const HOOK_TEARDOWN_MS = 2000;
 
 /** Consecutive cut-off answers continued before the run ends with what it has; bounds a model that never finishes. */
 const MAX_OUTPUT_CONTINUATIONS = 8;
+/** What a Stop hook's denial becomes in the transcript: a host user message, so the model can tell it is not the user. */
+const STOP_CONTINUATION_PREFIX = "[Raw hook continuation] ";
 const OUTPUT_LIMIT_NOTICE = "[Raw output limit notice] Your previous response was cut off at the output token limit. Continue exactly where it stopped, without repeating what you already wrote.";
 
 export class AgentSession {
@@ -489,7 +491,7 @@ export class AgentSession {
     }
 
     // Typed inputs, newest first, matched to their history rows; an unmatched message with a host note's form is the host's.
-    const hostNote = (content: string) => content === OUTPUT_LIMIT_NOTICE || content.startsWith("[Raw skill reload notice]")
+    const hostNote = (content: string) => content === OUTPUT_LIMIT_NOTICE || content.startsWith(STOP_CONTINUATION_PREFIX) || content.startsWith("[Raw skill reload notice]")
       || content.startsWith(CHECKPOINT_MARKER) || content.startsWith(SUMMARY_MESSAGE_PREFIX) || isPanelReminder(content);
     const users = source.flatMap((message, index) => index >= start && message.role === "user" ? [index] : []);
     let rows = this.persistence ? this.persistence.store.recentUserInputs(this.persistence.sessionId, users.length) : [];
@@ -1136,6 +1138,9 @@ export class AgentSession {
     let steps = 0;
     let continuations = 0;
     let continuedText = "";
+    // Stop hooks that already asked this call to go on, and whether the Stop hooks of the run's end already ran.
+    let stopContinuations = 0;
+    let stopRan = false;
     let observerError: Error | undefined;
     let ended = false;
     let terminalDeadline: number | undefined;
@@ -1216,16 +1221,18 @@ export class AgentSession {
         emit({ type: "queued_input", id: queued.id, state: "delivered" });
       }
     };
+    const runStopHooks = (result: RunResult) => this.options.hooks?.run("Stop", { ...hookRequest(), run: result,
+      stop: { hook_active: stopContinuations > 0, continuations: stopContinuations, usage: this.stats() } },
+      { hurry: { signal: controller.signal, graceMs: HOOK_TEARDOWN_MS },
+        ...(terminalDeadline !== undefined || result.status === "cancelled" ? { deadline: terminalDeadline ?? Date.now() + HOOK_TEARDOWN_MS } : {}),
+        onReceipt: (receipt) => this.hookReceipt(receipt, emit) });
     const finish = async (result: RunResult): Promise<RunResult> => {
       if (!ended) {
         ended = true;
         this.panels.setListener(undefined);
         let finalResult = result;
         try {
-          await this.options.hooks?.run("Stop", { ...hookRequest(), run: result },
-            { hurry: { signal: controller.signal, graceMs: HOOK_TEARDOWN_MS },
-              ...(terminalDeadline !== undefined || result.status === "cancelled" ? { deadline: terminalDeadline ?? Date.now() + HOOK_TEARDOWN_MS } : {}),
-              onReceipt: (receipt) => this.hookReceipt(receipt, emit) });
+          if (!stopRan) await runStopHooks(result);
         } catch (error) {
           finalResult = { status: "error", steps, code: "hook_event_error", message: String(error) };
         }
@@ -1481,7 +1488,22 @@ export class AgentSession {
             await deliverQueued();
             continue;
           }
-          return finish({ status: "completed", steps, text: continuedText });
+          // A Stop hook may refuse to let a finished answer end the run: its reason becomes one more host message and request.
+          const completed: RunResult = { status: "completed", steps, text: continuedText };
+          stopRan = true;
+          const { continueWith } = await runStopHooks(completed) ?? {};
+          if (continueWith && !controller.signal.aborted) {
+            if (steps >= this.options.maxSteps) return finish({ status: "max_steps", steps, code: "max_steps",
+              message: "a Stop hook asked the run to continue", text: continuedText });
+            stopContinuations++;
+            stopRan = false;
+            continuations = 0;
+            continuedText = "";
+            this.commitMessage({ role: "user", content: STOP_CONTINUATION_PREFIX + continueWith });
+            await deliverQueued();
+            continue;
+          }
+          return finish(completed);
         }
         continuations = 0;
         continuedText = "";
