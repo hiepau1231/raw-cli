@@ -179,6 +179,53 @@ test("Stop pauses on request and token budgets and on unknown usage", async () =
   }
 });
 
+test("SessionStart transfers ownership of paused and blocked goals", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    for (const status of ["paused", "blocked"] as const) {
+      await api.updateState(root, () => stateFixture({ status, reason: status === "paused" ? "Need input" : "Missing key",
+        nextAction: status === "blocked" ? "Provide key" : undefined, ownerSessionId: "s1" }), env);
+      await invoke(eventRequest(root, "SessionStart", "s2", "resume"), env);
+      let state = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal(state.status, status);
+      assert.equal(state.ownerSessionId, "s2");
+      assert.equal(state.reason, status === "paused" ? "Need input" : "Missing key");
+      await api.updateState(root, (current) => ({ ...current, status: "active" }), env);
+      assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 1 }) }), env)).decision, "deny", status);
+      state = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal(state.continuations, 1);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ownership takeover rebases session-relative usage without resetting spending", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture({
+      budget: { maxRequests: 2, maxContinuations: 20 },
+      baselinePending: false,
+      usageBaseline: { requests: 100, inputTokensKnown: 10000, outputTokensKnown: 1000, inputCoverage: 100, outputCoverage: 100 },
+    }), env);
+    await invoke(eventRequest(root, "SessionStart", "s2", "resume"), env);
+    let state = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(state.baselinePending, true);
+    assert.equal(state.usageBaseline, undefined);
+    await api.updateState(root, (current) => ({ ...current, status: "active" }), env);
+    assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 1 }) }), env)).decision, "deny");
+    assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 2 }) }), env)).decision, "deny");
+    assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 3 }) }), env)).decision, "continue");
+    state = await api.readState(root, env) as Record<string, unknown>;
+    assert.equal(state.status, "paused");
+    assert.equal(state.reason, "request_budget_exhausted");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("token coverage is measured from the baseline, not the whole session", async () => {
   const api = await stateApi();
   const { root, env } = tempEnv();

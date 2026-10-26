@@ -236,6 +236,7 @@ function mutate(state, { action, value }) {
         maxContinuations: value.maxContinuations ?? 20,
       },
       baselinePending: true,
+      usageCarried: { requests: 0, inputTokensKnown: 0, outputTokensKnown: 0, inputCoverage: 0, outputCoverage: 0 },
       continuations: 0,
       createdAt: now,
       updatedAt: now,

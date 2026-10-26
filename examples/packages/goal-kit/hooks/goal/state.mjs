@@ -15,6 +15,8 @@ import { realpathSync } from "node:fs";
 
 export const STATE_VERSION = 1;
 export const MAX_STATE_BYTES = 65536;
+export const LIFECYCLE_HEADROOM_BYTES = 8192;
+export const MAX_CONTENT_BYTES = MAX_STATE_BYTES - LIFECYCLE_HEADROOM_BYTES;
 export const STATE_DIR_ENV = "RAW_GOAL_STATE_DIR";
 export const LOCK_WAIT_MS = 2000;
 
@@ -129,14 +131,20 @@ export function validateState(value) {
       nonNegativeInteger(value.usageBaseline[name], `usageBaseline.${name}`);
     }
   }
+  if (value.usageCarried !== undefined) {
+    if (!isObject(value.usageCarried)) fail("state_corrupt", "usageCarried must be an object");
+    for (const name of ["requests", "inputTokensKnown", "outputTokensKnown", "inputCoverage", "outputCoverage"]) {
+      nonNegativeInteger(value.usageCarried[name], `usageCarried.${name}`);
+    }
+  }
   if (typeof value.baselinePending !== "boolean") fail("state_corrupt", "baselinePending must be boolean");
   nonNegativeInteger(value.continuations, "continuations");
   optionalText(value.reason, "reason", 300);
   optionalText(value.nextAction, "nextAction", 300);
   nonNegativeInteger(value.createdAt, "createdAt");
   nonNegativeInteger(value.updatedAt, "updatedAt");
-  if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_STATE_BYTES) {
-    fail("state_too_large", `goal state: at most ${MAX_STATE_BYTES} bytes`);
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_CONTENT_BYTES) {
+    fail("state_too_large", `goal content: at most ${MAX_CONTENT_BYTES} bytes (${LIFECYCLE_HEADROOM_BYTES} bytes reserved for lifecycle metadata)`);
   }
   return value;
 }

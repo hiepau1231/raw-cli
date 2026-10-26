@@ -335,6 +335,24 @@ test("goal tool can clear wrong evidence and step detail", async () => {
   }
 });
 
+test("a near-limit goal is refused before lifecycle metadata needs the reserved headroom", async () => {
+  const tool = await goalTool();
+  const { env, root } = tempStateEnv();
+  try {
+    await withStateEnv(root, env, async () => {
+      const { context } = panelContext(root);
+      const emoji = "😀";
+      const criteria = Array.from({ length: 50 }, (_, index) => ({
+        id: `c${index + 1}`, label: emoji.repeat(200), required: true, status: "pending", evidence: emoji.repeat(300),
+      }));
+      const result = await tool.handler({ action: "create", objective: "Ship", criteria }, context);
+      assert.equal(result.code, "state_too_large");
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("goal tool enforces criteria, ids and terminal transitions", async () => {
   const tool = await goalTool();
   const { env, root } = tempStateEnv();

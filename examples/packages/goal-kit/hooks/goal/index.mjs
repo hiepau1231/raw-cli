@@ -46,22 +46,40 @@ function usageOf(request) {
   };
 }
 
+const zeroUsage = () => ({ requests: 0, inputTokensKnown: 0, outputTokensKnown: 0, inputCoverage: 0, outputCoverage: 0 });
+
+function totalUsage(state, usage) {
+  const baseline = state.usageBaseline ?? zeroUsage();
+  const carried = state.usageCarried ?? zeroUsage();
+  const delta = (name) => Math.max(0, usage[name] - baseline[name]);
+  return {
+    requests: carried.requests + delta("requests"),
+    inputTokensKnown: carried.inputTokensKnown + delta("inputTokensKnown"),
+    outputTokensKnown: carried.outputTokensKnown + delta("outputTokensKnown"),
+    inputCoverage: carried.inputCoverage + delta("inputCoverage"),
+    outputCoverage: carried.outputCoverage + delta("outputCoverage"),
+  };
+}
+
 function budgetReason(state, usage) {
   const budget = state.budget ?? {};
-  const baseline = state.usageBaseline ?? { requests: 0, inputTokensKnown: 0, outputTokensKnown: 0, inputCoverage: 0, outputCoverage: 0 };
-  if (budget.maxRequests !== undefined && usage.requests - baseline.requests >= budget.maxRequests) {
+  const total = totalUsage(state, usage);
+  if (budget.maxRequests !== undefined && total.requests >= budget.maxRequests) {
     return "request_budget_exhausted";
   }
   if (budget.tokenBudget !== undefined) {
-    const requests = Math.max(0, usage.requests - baseline.requests);
-    const inputCoverage = Math.max(0, usage.inputCoverage - baseline.inputCoverage);
-    const outputCoverage = Math.max(0, usage.outputCoverage - baseline.outputCoverage);
-    if (inputCoverage < requests || outputCoverage < requests) return "usage_unknown";
-    const spent = (usage.inputTokensKnown + usage.outputTokensKnown) -
-      (baseline.inputTokensKnown + baseline.outputTokensKnown);
-    if (spent >= budget.tokenBudget) return "token_budget_exhausted";
+    if (total.inputCoverage < total.requests || total.outputCoverage < total.requests) return "usage_unknown";
+    if (total.inputTokensKnown + total.outputTokensKnown >= budget.tokenBudget) return "token_budget_exhausted";
   }
   return undefined;
+}
+
+/** Record everything observed so far, then make the current session counters the new delta base. */
+function recordUsage(state, usage) {
+  if (!state.usageBaseline || state.baselinePending) state.usageBaseline = { ...usage };
+  state.usageCarried = totalUsage(state, usage);
+  state.usageBaseline = { ...usage };
+  state.baselinePending = false;
 }
 
 function reasonFor(state) {
@@ -95,10 +113,11 @@ function inputText(request) {
   return request.input.map((block) => block && typeof block === "object" && typeof block.text === "string" ? block.text : "").join("\n");
 }
 
-async function pause(cwd, session, reason, nextAction) {
+async function pause(cwd, session, reason, nextAction, usage) {
   await updateState(cwd, (state) => {
     if (!state || state.status !== "active") return state;
     if (session && state.ownerSessionId && state.ownerSessionId !== session) return state;
+    if (usage) recordUsage(state, usage);
     state.status = "paused";
     state.reason = reason;
     state.nextAction = nextAction;
@@ -118,23 +137,24 @@ async function stop(request) {
     message("This goal belongs to another session in the same workspace.");
     return;
   }
+  const usage = usageOf(request);
   if (request.run?.status !== "completed") {
-    await pause(cwd, session, `run_${request.run?.status ?? "stopped"}`, "Resume the goal explicitly.");
+    await pause(cwd, session, `run_${request.run?.status ?? "stopped"}`, "Resume the goal explicitly.", usage);
     message(`Goal paused: ${request.run?.status ?? "stopped"}.`);
     return;
   }
-  const usage = usageOf(request);
   let result;
   try {
     result = await updateState(cwd, (current) => {
       if (!current || current.status !== "active") return current;
       if (session && current.ownerSessionId && current.ownerSessionId !== session) return current;
       if (session && !current.ownerSessionId) current.ownerSessionId = session;
-      if (current.baselinePending) {
+      if (!current.usageBaseline || current.baselinePending) {
         current.usageBaseline = { ...usage };
         current.baselinePending = false;
       }
-      if (!current.usageBaseline) current.usageBaseline = { requests: 0, inputTokensKnown: 0, outputTokensKnown: 0, inputCoverage: 0, outputCoverage: 0 };
+      const budget = budgetReason(current, usage);
+      recordUsage(current, usage);
       if (current.continuations >= current.budget.maxContinuations) {
         current.status = "paused";
         current.reason = "continuation_limit";
@@ -142,7 +162,6 @@ async function stop(request) {
         current.updatedAt = Date.now();
         return current;
       }
-      const budget = budgetReason(current, usage);
       if (budget) {
         current.status = "paused";
         current.reason = budget;
@@ -172,14 +191,23 @@ async function sessionStart(request) {
   const session = sessionOf(request);
   try {
     const result = await updateState(cwd, (state) => {
-      if (!state || state.status !== "active") return state;
-      // A new runtime attach owns the workspace goal from here. Pausing it makes a dead
-      // owner recoverable and prevents a second session from continuing it silently.
-      if (session) state.ownerSessionId = session;
-      state.status = "paused";
-      state.reason = "interrupted";
-      state.nextAction = "Resume the goal explicitly.";
-      state.updatedAt = Date.now();
+      if (!state || (state.status !== "active" && state.status !== "paused" && state.status !== "blocked")) return state;
+      const changedOwner = !!session && state.ownerSessionId !== session;
+      if (changedOwner) {
+        // A new runtime attach owns the workspace goal from here. Rebase session-relative
+        // usage on the next Stop; usageCarried keeps the spending already recorded.
+        state.ownerSessionId = session;
+        state.usageBaseline = undefined;
+        state.baselinePending = true;
+      }
+      if (state.status === "active") {
+        state.status = "paused";
+        state.reason = "interrupted";
+        state.nextAction = "Resume the goal explicitly.";
+        state.updatedAt = Date.now();
+      } else if (changedOwner) {
+        state.updatedAt = Date.now();
+      }
       return state;
     });
     if (result?.status === "paused" && result.reason === "interrupted") {

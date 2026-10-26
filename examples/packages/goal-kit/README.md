@@ -29,7 +29,7 @@ The package writes one JSON state file outside the repository:
 - otherwise `%LOCALAPPDATA%\raw-goal` on Windows, or `$XDG_STATE_HOME/raw-goal` (falling back to `~/.local/state/raw-goal`);
 - file name `goal-<sha256(workspace)>.json`.
 
-Limits: 64 KiB state, 50 criteria, 30 steps, 200-character labels, 300-character evidence, one `in_progress` step. The Stop reason is bounded to 8 KiB, with the objective and first criteria first.
+Limits: 64 KiB state file with 56 KiB of content (8 KiB reserved for ownership, usage and lifecycle metadata), 50 criteria, 30 steps, 200-character labels, 300-character evidence, one `in_progress` step. The Stop reason is bounded to 8 KiB, with the objective and first criteria first.
 
 ## How continuation works
 
