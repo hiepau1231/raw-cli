@@ -15,13 +15,16 @@ import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-prov
 import { startMcpHttp } from "./fixtures/mcp-http.js";
 import { processesWithMarker, waitForNoMarked } from "./fixtures/windows-processes.js";
 
+// Starting a stdio fixture means a cold Node start plus the SDK import; a success returns at once, so the bound only matters on a loaded Windows runner.
+const CONNECT_MS = 30_000;
+
 const stdio = (label: string, count = 2) => ({ command: process.execPath, args: ["--import", "tsx", "tests/fixtures/mcp-stdio.ts"],
   env: { MCP_LABEL: label, MCP_COUNT: String(count) }, tools: ["selected"] });
 
 test("agent deny removes selected MCP tool from exposed set and direct dispatch", async () => {
   const registry = createTestToolRegistry([{ match: "mcp/fixture/selected", effect: "deny" }]);
   const connection = await connectMcpServers({ servers: { fixture: stdio("fixture") }, registry,
-    cwd: process.cwd(), timeoutMs: 3000 });
+    cwd: process.cwd(), timeoutMs: CONNECT_MS });
   try {
     assert.equal(connection.exposed.length, 0);
     assert.equal(connection.catalog.length, 2);
@@ -39,7 +42,7 @@ test("T-07 review: selected MCP alias collision with pre-registered tool fails s
   registry.register({ name: alias, description: "pre-existing", inputSchema: { type: "object" },
     handler: async () => ({ isError: false, content: [{ type: "text", text: "wrong-handler" }] }) });
   await assert.rejects(connectMcpServers({ servers: { fixture: stdio("fixture") }, registry,
-    cwd: process.cwd(), timeoutMs: 3000 }), /duplicate MCP alias/);
+    cwd: process.cwd(), timeoutMs: CONNECT_MS }), /duplicate MCP alias/);
 });
 
 test("T-06a: all official SDK transports paginate and selected page-two tools reach provider follow-up", async () => {
@@ -51,7 +54,7 @@ test("T-06a: all official SDK transports paginate and selected page-two tools re
   ];
   try {
     for (const { name, server } of specs) {
-      const connection = await connectMcpServers({ servers: { [name]: server }, cwd: process.cwd(), timeoutMs: 3000 });
+      const connection = await connectMcpServers({ servers: { [name]: server }, cwd: process.cwd(), timeoutMs: CONNECT_MS });
       try {
         assert.equal(connection.discovered.length, 2);
         assert.equal(connection.exposed.length, 1);
@@ -75,7 +78,7 @@ test("T-06a: all official SDK transports paginate and selected page-two tools re
 });
 
 test("T-06b: 100 discovered tools expose only selected names, route same names to distinct servers and enforce schema", async () => {
-  const connection = await connectMcpServers({ servers: { zed: stdio("Z", 100), alpha: stdio("A", 2) }, cwd: process.cwd(), timeoutMs: 3000 });
+  const connection = await connectMcpServers({ servers: { zed: stdio("Z", 100), alpha: stdio("A", 2) }, cwd: process.cwd(), timeoutMs: CONNECT_MS });
   try {
     assert.equal(connection.discovered.length, 102);
     assert.equal(connection.exposed.length, 2);
@@ -92,13 +95,13 @@ test("T-06b: 100 discovered tools expose only selected names, route same names t
     const hidden = await connection.registry.dispatch("hidden_0", { value: "v" }, { cwd: process.cwd(), maxOutputBytes: 8192, autoApprove: true });
     assert.equal(hidden.code, "tool_not_exposed");
   } finally { await connection.close(); }
-  await assert.rejects(connectMcpServers({ servers: { one: { ...stdio("x"), tools: ["missing"] } }, cwd: process.cwd(), timeoutMs: 3000 }), /unknown|missing/);
+  await assert.rejects(connectMcpServers({ servers: { one: { ...stdio("x"), tools: ["missing"] } }, cwd: process.cwd(), timeoutMs: CONNECT_MS }), /unknown|missing/);
 });
 
 test("MCP tools declaring JSON Schema draft-07 are exposed and validated", async () => {
   const fixture = stdio("draft7");
   const connection = await connectMcpServers({ servers: { draft7: { ...fixture, env: { ...fixture.env, MCP_MODE: "draft7-schema" } } },
-    cwd: process.cwd(), timeoutMs: 3000 });
+    cwd: process.cwd(), timeoutMs: CONNECT_MS });
   try {
     assert.equal(connection.exposed.length, 1);
     const alias = connection.exposed[0]!.alias;
@@ -111,7 +114,7 @@ test("MCP tools declaring JSON Schema draft-07 are exposed and validated", async
 test("MCP tools declaring Rust-style numeric formats (uint32/uint8) are exposed and validated", async () => {
   const fixture = stdio("numeric");
   const connection = await connectMcpServers({ servers: { numeric: { ...fixture, env: { ...fixture.env, MCP_MODE: "numeric-formats-schema" } } },
-    cwd: process.cwd(), timeoutMs: 3000 });
+    cwd: process.cwd(), timeoutMs: CONNECT_MS });
   try {
     assert.equal(connection.exposed.length, 1);
     const alias = connection.exposed[0]!.alias;
@@ -127,7 +130,7 @@ test("T-06b: all-selection, long-prefix collisions and shuffled discovery remain
     [`${long}A`]: { ...stdio("A"), env: { MCP_REVERSE: "1" }, tools: "*" as const },
     [`${long}B`]: { ...stdio("B"), tools: ["selected"] },
   };
-  const connection = await connectMcpServers({ servers, cwd: process.cwd(), timeoutMs: 3000 });
+  const connection = await connectMcpServers({ servers, cwd: process.cwd(), timeoutMs: CONNECT_MS });
   try {
     assert.equal(connection.exposed.length, 3);
     assert.equal(new Set(connection.exposed.map((item) => item.alias)).size, 3);
@@ -152,7 +155,7 @@ test("T-06b/c: unselected config starts nothing, explicit empty selection discov
   assert.deepEqual(config.mcpServers.shared?.tools, ["selected"]);
   if (!config.mcpServers.shared || !("command" in config.mcpServers.shared)) throw new Error("expected stdio config");
   assert.equal(config.mcpServers.shared?.env?.MCP_LABEL, "project");
-  const connection = await connectMcpServers({ servers: Object.fromEntries(Object.entries(config.mcpServers).map(([name, spec]) => [name, { ...spec, tools: [] }])), cwd: process.cwd(), timeoutMs: 3000 });
+  const connection = await connectMcpServers({ servers: Object.fromEntries(Object.entries(config.mcpServers).map(([name, spec]) => [name, { ...spec, tools: [] }])), cwd: process.cwd(), timeoutMs: CONNECT_MS });
   try { assert.equal(connection.discovered.length, 4); assert.equal(connection.exposed.length, 0); assert.equal(connection.registry.definitions().length, 0); }
   finally { await connection.close(); }
   const pidFile = join(root, "good.pid");
@@ -167,7 +170,7 @@ test("T-06b/c: unselected config starts nothing, explicit empty selection discov
 });
 
 test("T-06c: abort during a slow MCP call settles linked result and ignores late remote completion", async () => {
-  const connection = await connectMcpServers({ servers: { slow: stdio("slow") }, cwd: process.cwd(), timeoutMs: 3000 });
+  const connection = await connectMcpServers({ servers: { slow: stdio("slow") }, cwd: process.cwd(), timeoutMs: CONNECT_MS });
   const alias = connection.exposed[0]!.alias;
   let calls = 0;
   const provider = { modelConfig: { agentName: "fake", provider: "ollama" as const, method: "openai-chat-completions" as const, model: "fixture" },
@@ -226,7 +229,7 @@ test("T-06c: SDK tool request deadline returns an explicit error and leaves conn
 
 test("T-06b: asynchronous JSON Schema is rejected before an invalid argument can execute", async () => {
   await assert.rejects(connectMcpServers({ servers: { asyncTool: { ...stdio("async"), env: { MCP_MODE: "async-schema" } } },
-    cwd: process.cwd(), timeoutMs: 3000 }), /async|unsupported/i);
+    cwd: process.cwd(), timeoutMs: CONNECT_MS }), /async|unsupported/i);
 });
 
 test("T-06d: both HTTP transports reject oversized discovery and invocation messages", async () => {
@@ -234,11 +237,11 @@ test("T-06d: both HTTP transports reject oversized discovery and invocation mess
     const oversizedCatalog = await startMcpHttp(transport, "large", "large-discovery");
     try {
       await assert.rejects(connectMcpServers({ servers: { large: { url: oversizedCatalog.url, transport, tools: ["selected"] } },
-        timeoutMs: 3000 }), /large|size|limit|failed/i);
+        timeoutMs: CONNECT_MS }), /large|size|limit|failed/i);
     } finally { await oversizedCatalog.close(); }
     const oversizedCall = await startMcpHttp(transport, "large", "large-result");
     try {
-      const connection = await connectMcpServers({ servers: { large: { url: oversizedCall.url, transport, tools: ["selected"] } }, timeoutMs: 3000 });
+      const connection = await connectMcpServers({ servers: { large: { url: oversizedCall.url, transport, tools: ["selected"] } }, timeoutMs: CONNECT_MS });
       try {
         const result = await connection.registry.dispatch(connection.exposed[0]!.alias, { value: "huge" },
           { cwd: process.cwd(), maxOutputBytes: 8192, autoApprove: true });
@@ -254,13 +257,13 @@ test("T-06c: echoed HTTP credentials stay out of startup errors and tool results
   const startup = await startMcpHttp("streamable-http", "secret", "echo-initialize");
   try {
     await assert.rejects(connectMcpServers({ servers: { secret: { url: `${startup.url}?token=${secretQuery}`,
-      transport: "streamable-http", headers: { Authorization: secretHeader }, tools: ["selected"] } }, timeoutMs: 3000 }),
+      transport: "streamable-http", headers: { Authorization: secretHeader }, tools: ["selected"] } }, timeoutMs: CONNECT_MS }),
     (error: Error) => !error.message.includes(secretHeader) && !error.message.includes(secretQuery));
   } finally { await startup.close(); }
   const invocation = await startMcpHttp("streamable-http", "secret", "echo-error");
   try {
     const connection = await connectMcpServers({ servers: { secret: { url: `${invocation.url}?token=${secretQuery}`,
-      transport: "streamable-http", headers: { Authorization: secretHeader }, tools: ["selected"] } }, timeoutMs: 3000 });
+      transport: "streamable-http", headers: { Authorization: secretHeader }, tools: ["selected"] } }, timeoutMs: CONNECT_MS });
     try {
       const result = await connection.registry.dispatch(connection.exposed[0]!.alias, { value: "hello" },
         { cwd: process.cwd(), maxOutputBytes: 8192, autoApprove: true });
@@ -273,7 +276,7 @@ test("T-06c: echoed HTTP credentials stay out of startup errors and tool results
 test("T-06c: dropped HTTP event streams do not trigger hidden reconnect attempts", async () => {
   for (const transport of ["sse", "streamable-http"] as const) {
     const fixture = await startMcpHttp(transport, "disconnect");
-    const connection = await connectMcpServers({ servers: { disconnect: { url: fixture.url, transport, tools: [] } }, timeoutMs: 3000 });
+    const connection = await connectMcpServers({ servers: { disconnect: { url: fixture.url, transport, tools: [] } }, timeoutMs: CONNECT_MS });
     try {
       assert.ok(fixture.getRequests >= 1);
       await fixture.dropStreams();
@@ -337,7 +340,7 @@ test("T-06d: CR-only SSE event boundaries permit two individually bounded discov
     return new Response(null, { status: 202 });
   }) as typeof fetch;
   try {
-    const connection = await connectMcpServers({ servers: { events: { url: "https://fixture.invalid/sse", transport: "sse" } }, timeoutMs: 3000 });
+    const connection = await connectMcpServers({ servers: { events: { url: "https://fixture.invalid/sse", transport: "sse" } }, timeoutMs: CONNECT_MS });
     try { assert.deepEqual(connection.discovered.map((item) => item.name), ["first", "second"]); }
     finally { await connection.close(); }
   } finally { globalThis.fetch = original; }
@@ -347,7 +350,7 @@ test("panels: MCP _meta[raw/panel] reaches the registry as a panel block and con
   const registry = createTestToolRegistry();
   const spec = { ...stdio("fixture"), panels: [{ tool: "selected", id: "plan", title: "Plan", icon: "list-checks" as const, open: "never" as const,
     context: "none" as const, acp_plan: false, actions: [] }] };
-  const connection = await connectMcpServers({ servers: { fixture: spec }, registry, cwd: process.cwd(), timeoutMs: 3000 });
+  const connection = await connectMcpServers({ servers: { fixture: spec }, registry, cwd: process.cwd(), timeoutMs: CONNECT_MS });
   try {
     const alias = connection.catalog.find((item) => item.originalName === "selected")!.alias;
     const owner = registry.panelDeclarations(alias)!;
@@ -362,7 +365,7 @@ test("panels: MCP _meta[raw/panel] reaches the registry as a panel block and con
     assert.equal((collected[0] as { panel: string }).panel, "plan");
   } finally { await connection.close(); }
   const plain = createTestToolRegistry();
-  const second = await connectMcpServers({ servers: { fixture: stdio("fixture") }, registry: plain, cwd: process.cwd(), timeoutMs: 3000 });
+  const second = await connectMcpServers({ servers: { fixture: stdio("fixture") }, registry: plain, cwd: process.cwd(), timeoutMs: CONNECT_MS });
   try {
     const alias = second.catalog.find((item) => item.originalName === "selected")!.alias;
     assert.equal(plain.panelDeclarations(alias)?.implicit, true, "no config panels means an implicit declaration");
@@ -377,7 +380,7 @@ test("degraded startup skips unavailable servers and selected tools while the re
     b_async: { ...stdio("async"), env: { MCP_LABEL: "async", MCP_COUNT: "2", MCP_MODE: "async-schema" } },
     c_http: { url: http.url, transport: "streamable-http", tools: ["selected"] },
     z_crash: { ...stdio("crash"), env: { MCP_LABEL: "crash", MCP_COUNT: "2", MCP_MODE: "crash" } },
-  }, cwd: process.cwd(), timeoutMs: 3000, onSkip: (message) => warnings.push(message) });
+  }, cwd: process.cwd(), timeoutMs: CONNECT_MS, onSkip: (message) => warnings.push(message) });
   try {
     assert.deepEqual(connection.exposed.map((item) => item.server), ["a_good"]);
     assert.deepEqual(warnings.length, 4);
@@ -416,7 +419,7 @@ test("createRuntimeTools drops unavailable MCP selections with warnings instead 
 test("an abort during the last skipped server's cleanup still fails startup", async () => {
   const controller = new AbortController();
   await assert.rejects(connectMcpServers({ servers: { z_crash: { ...stdio("crash"), env: { MCP_LABEL: "crash", MCP_COUNT: "2", MCP_MODE: "crash" } } },
-    cwd: process.cwd(), timeoutMs: 3000, signal: controller.signal, onSkip: () => controller.abort() }), /aborted/);
+    cwd: process.cwd(), timeoutMs: CONNECT_MS, signal: controller.signal, onSkip: () => controller.abort() }), /aborted/);
 });
 
 test("an MCP tool whose schema cannot bind a selected hook condition is skipped, not registered", async () => {
@@ -470,7 +473,7 @@ for (const jobbed of [true, false]) {
         for (const ignoreEof of jobbed ? [false, true] : [true]) {
           const marker = `marker-${randomUUID()}`;
           const connection = await connectMcpServers({ servers: { argv: { command: server, args, tools: "*",
-            env: { MCP_MARKER: marker, ...(ignoreEof ? { MCP_IGNORE_EOF: "1" } : {}) } } }, cwd: process.cwd(), timeoutMs: 30000 });
+            env: { MCP_MARKER: marker, ...(ignoreEof ? { MCP_IGNORE_EOF: "1" } : {}) } } }, cwd: process.cwd(), timeoutMs: CONNECT_MS });
           try {
             const result = await connection.registry.dispatch(connection.exposed[0]!.alias, {}, { cwd: process.cwd(), maxOutputBytes: 8192, autoApprove: true });
             assert.equal(result.isError, false, JSON.stringify(result));
@@ -496,7 +499,7 @@ test("on Windows without the launcher a .cmd server runs through the system cmd.
     await withoutJobLauncher(async () => {
       for (const comspec of [join(dir, "cmd.exe"), undefined]) {
         if (comspec === undefined) delete process.env.ComSpec; else process.env.ComSpec = comspec;
-        const connection = await connectMcpServers({ servers: { argv: { command: server, args: ["a b"], tools: "*" } }, cwd: dir, timeoutMs: 30000 });
+        const connection = await connectMcpServers({ servers: { argv: { command: server, args: ["a b"], tools: "*" } }, cwd: dir, timeoutMs: CONNECT_MS });
         try {
           const result = await connection.registry.dispatch(connection.exposed[0]!.alias, {}, { cwd: dir, maxOutputBytes: 8192, autoApprove: true });
           assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), ["a b"], `ComSpec ${comspec ?? "unset"}`);
@@ -514,7 +517,7 @@ test("on Windows a server command found only in the cwd is skipped with a warnin
     const warnings: string[] = [];
     const connection = await connectMcpServers({ servers: { planted: { command: "raw-mcp-planted", tools: "*" },
       good: { command: process.execPath, args: [resolve("tests/fixtures/mcp-argv.mjs")], tools: "*" } },
-    cwd: dir, timeoutMs: 30000, onSkip: (message) => warnings.push(message) });
+    cwd: dir, timeoutMs: CONNECT_MS, onSkip: (message) => warnings.push(message) });
     try {
       assert.deepEqual(connection.exposed.map((tool) => tool.server), ["good"]);
       assert.equal(warnings.length, 1);

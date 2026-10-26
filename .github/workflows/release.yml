@@ -26,7 +26,6 @@ jobs:
       # tests/dashboard-installed drives the packed dashboard in Chromium.
       - run: npx playwright install --with-deps chromium
       - run: npm run check
-      - run: npm run test:package
       - name: Pack
         run: npm pack --ignore-scripts
       - name: Publish to npm

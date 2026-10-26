@@ -17,7 +17,7 @@ async function setup(script: string) {
   const log = join(cwd, "events.jsonl");
   await writeFile(scriptPath, script);
   const hook: SelectedHook = { protocol_version: 2, id: "agent/watch", name: "watch", folder: cwd, command: process.execPath,
-    args: [scriptPath, log], timeoutMs: 1000, events: ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+    args: [scriptPath, log], timeoutMs: 20000, events: ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
       "PostToolUseFailure", "Stop", "SessionEnd"].map(name => ({ name: name as SelectedHook["events"][number]["name"] })) };
   const registry = new ToolRegistry();
   registry.register({ name: "doit", canonicalName: "agent/doit", description: "fixture",

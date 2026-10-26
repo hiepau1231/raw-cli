@@ -6,10 +6,13 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/pr
 import { tmpdir, release } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { chromium, expect } from "@playwright/test";
+import { chromium, expect as baseExpect } from "@playwright/test";
 import { openAiDone, openAiFrame, startMockProvider } from "./fixtures/mock-provider.js";
 import { makePng } from "./fixtures/images.js";
 import { launch, posixOnly } from "./fixtures/platform.js";
+
+// Assertions do not use page.setDefaultTimeout: their own default is 5 s, too tight for a turn that spawns hooks on a loaded Windows runner.
+const expect = baseExpect.configure({ timeout: 30_000 });
 
 // test:package runs four packed installs at once; on a Windows runner one npm install can take minutes.
 async function command(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
