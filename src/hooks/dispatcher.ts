@@ -15,8 +15,17 @@ export interface HookReceipt {
 }
 /** `continueWith`: the joined reasons of the `Stop` hooks that asked the run to continue. */
 export interface HookDispatchResult { blocked?: "denied" | "error"; reason?: string; continueWith?: string }
-const STOP_CONTINUE_MAX_BYTES = 4096;
+/** Host text added to the context on every continuation: the size raw already allows for panel reminders (`PANEL_LIMITS.reminderTotalBytes`), close to the 10,000 characters Claude Code lets one hook string inject. */
+const STOP_CONTINUE_MAX_BYTES = 8 * 1024;
 const STOP_CONTINUE_DEFAULT = "A Stop hook asked the run to continue.";
+
+/** The joined reasons, kept whole up to the bound; beyond it the text is cut on a character boundary and says how much was cut. */
+function boundedContinuation(text: string): string {
+  const bytes = Buffer.byteLength(text);
+  if (bytes <= STOP_CONTINUE_MAX_BYTES) return text;
+  const marker = ` [Stop hook reasons cut: ${bytes} → ${STOP_CONTINUE_MAX_BYTES} bytes]`;
+  return truncateBytes(text, STOP_CONTINUE_MAX_BYTES - Buffer.byteLength(marker)) + marker;
+}
 
 export class HookDispatcher {
   constructor(readonly selected: readonly SelectedHook[], private readonly env?: NodeJS.ProcessEnv) {}
@@ -73,6 +82,6 @@ export class HookDispatcher {
       if (denial && event === "Stop") continuations.push(denial);
       else if (denial) return gate ? { blocked: "denied", reason: denial } : {};
     }
-    return continuations.length ? { continueWith: truncateBytes(continuations.join("\n\n"), STOP_CONTINUE_MAX_BYTES) } : {};
+    return continuations.length ? { continueWith: boundedContinuation([...new Set(continuations)].join("\n\n")) } : {};
   }
 }

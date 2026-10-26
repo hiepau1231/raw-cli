@@ -196,15 +196,6 @@ test("a Stop run with no denial returns nothing, and a bare deny uses the defaul
   assert.deepEqual(await bare.dispatcher.run("Stop", { cwd: bare.cwd }), { continueWith: "A Stop hook asked the run to continue." });
 });
 
-test("a joined Stop continuation over 4096 bytes is cut without splitting a character", async () => {
-  const long = "é".repeat(500);
-  const f = await stopDispatcher([deny(long), deny(long), deny(long), deny(long), deny(long)]);
-  const { continueWith } = await f.dispatcher.run("Stop", { cwd: f.cwd });
-  assert.ok(continueWith && continueWith.length > 0);
-  assert.ok(Buffer.byteLength(continueWith) <= 4096);
-  assert.ok(!continueWith.includes("�"));
-});
-
 // A Stop hook that logs its request and denies while `stop.continuations` is below `limit` ("inf" never stops denying).
 async function continuing(limit: string, reason = "keep going", extra: { second?: boolean } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), "raw-hooks-continue-"));
@@ -409,24 +400,29 @@ test("a gate hook that denies with an empty reason still blocks, with the defaul
     { blocked: "denied", reason: "hook agent/h0 denied" });
 });
 
-// The joined text of all denials is bounded at 4096 bytes: the edges of that bound, in ASCII and in 3-byte characters.
-test("the joined Stop continuation is kept whole up to exactly 4096 bytes and cut after, on a character boundary", async () => {
+// The joined text of all denials is bounded at 8 KiB (the size raw allows for panel reminders): its edges, in ASCII and in 3-byte characters.
+test("a Stop reason longer than 1024 bytes is kept; the joined text is whole up to exactly 8192 bytes and cut after with a marker", async () => {
   const join = async (reasons: string[]) => {
     const f = await stopDispatcher(reasons.map((reason) => deny(reason)));
     return (await f.dispatcher.run("Stop", { cwd: f.cwd })).continueWith!;
   };
-  const exact = ["a".repeat(1024), "b".repeat(1024), "c".repeat(1024), "d".repeat(1018)];
+  const long = "g".repeat(3000);
+  assert.equal(await join([long]), long);
+  const exact = ["a".repeat(2048), "b".repeat(2048), "c".repeat(2048), "d".repeat(2042)];
   const whole = await join(exact);
-  assert.equal(Buffer.byteLength(whole), 4096);
+  assert.equal(Buffer.byteLength(whole), 8192);
   assert.equal(whole, exact.join("\n\n"));
-  const over = await join([...exact.slice(0, 3), "d".repeat(1019)]);
-  assert.ok(Buffer.byteLength(over) <= 4096 && over.endsWith("…"), over.slice(-8));
-  assert.ok(over.startsWith("a".repeat(1024) + "\n\n" + "b"));
+  const over = await join([...exact.slice(0, 3), "d".repeat(2043)]);
+  assert.ok(Buffer.byteLength(over) <= 8192, String(Buffer.byteLength(over)));
+  assert.match(over, / \[Stop hook reasons cut: 8193 → 8192 bytes\]$/);
+  assert.ok(over.startsWith("a".repeat(2048) + "\n\n" + "b"));
   // 3-byte characters: no cut may leave half of one.
-  const euro = await join(Array(4).fill("€".repeat(341)));
-  assert.ok(Buffer.byteLength(euro) <= 4096 && euro.endsWith("…"));
-  assert.ok(!euro.includes("\uFFFD"));
-  // A later hook's reason is the first to be lost when the earlier ones fill the bound.
-  const starved = await join([...Array(4).fill("x".repeat(1024)), "LAST"]);
-  assert.ok(!starved.includes("LAST"));
+  const euro = await join(["1", "2", "3"].map((tag) => tag + "€".repeat(1000)));
+  assert.ok(Buffer.byteLength(euro) <= 8192 && /cut: \d+ → 8192 bytes\]$/.test(euro));
+  assert.ok(!euro.includes("�"));
+  // Later reasons are the first to be lost when earlier ones fill the bound, and the marker says so.
+  const starved = await join([...["w", "x", "y", "z"].map((tag) => tag.repeat(2100)), "LAST"]);
+  assert.ok(!starved.includes("LAST") && /cut: \d+ → 8192 bytes\]$/.test(starved));
+  // Identical reasons are told to the model once.
+  assert.equal(await join(["same", "same", "other"]), "same\n\nother");
 });
