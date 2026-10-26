@@ -401,3 +401,10 @@ test("an exception from the completed-run Stop hooks ends the run as hook_event_
   await agent.close();
   assert.deepEqual([result.status, result.code, stops, model.requests.length], ["error", "hook_event_error", 1, 1]);
 });
+
+test("a gate hook that denies with an empty reason still blocks, with the default reason", async () => {
+  const f = await stopDispatcher([deny("")]);
+  const hook = { ...f.dispatcher.selected[0]!, events: [{ name: "UserPromptSubmit" as const }] };
+  assert.deepEqual(await new HookDispatcher([hook]).run("UserPromptSubmit", { cwd: f.cwd, input: "hi" }),
+    { blocked: "denied", reason: "hook agent/h0 denied" });
+});

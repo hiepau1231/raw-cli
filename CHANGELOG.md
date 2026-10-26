@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- A `UserPromptSubmit` or `PreToolUse` hook that denied with an empty `reason`
+  (`{"decision":"deny","reason":""}`) was treated as allowing the call. It now
+  blocks, with the default reason `hook ID denied`.
 - A `Stop` hook can now keep a run going: when the run ended with a final
   answer it may print `{"decision":"deny","reason":"..."}`, and Raw adds the
   reason as a `[Raw hook continuation]` message and asks the model again. It is

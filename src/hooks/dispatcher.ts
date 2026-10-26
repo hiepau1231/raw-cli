@@ -63,7 +63,7 @@ export class HookDispatcher {
         });
         receipt = { id: hook.id, event, outcome: response.decision === "deny" ? "denied" : "continued",
           durationMs: response.durationMs, ...(response.message ? { message: response.message } : {}) };
-        if (response.decision === "deny") denial = event === "Stop" ? response.reason || STOP_CONTINUE_DEFAULT : response.reason ?? `hook ${hook.id} denied`;
+        if (response.decision === "deny") denial = response.reason || (event === "Stop" ? STOP_CONTINUE_DEFAULT : `hook ${hook.id} denied`);
       } catch (error) {
         const code = error instanceof HookError ? error.code : "hook_callback";
         receipt = { id: hook.id, event, outcome: "error", durationMs: Math.round(performance.now() - started), code };
