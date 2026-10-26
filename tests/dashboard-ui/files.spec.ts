@@ -655,3 +655,43 @@ test("Clear filter keeps the open file open", async ({ page, raw }) => {
   await expect(page).toHaveURL(/path=src%2Fkeep\.ts/);
   await expect(treeOf(page).locator('[data-file="other.ts"]')).toBeVisible();
 });
+
+test("a Markdown file's mermaid fence is a diagram in Preview, a bad fence degrades, and the page keeps working", async ({ page, raw }) => {
+  workspaceFile(raw.root, "docs/arch.md", [
+    "# Arch", "", "```mermaid", "graph LR", "  A[Browser] --> B[Host] --> C[Workspace]", "```", "",
+    "```mermaid", "graph LR", "  A -->", "```", "", "after the diagrams", "",
+  ].join("\n"));
+  await openFiles(page, raw);
+  await treeOf(page).locator('[data-folder="docs"]').click();
+  await treeOf(page).locator('[data-file="docs/arch.md"]').click();
+  const viewer = page.locator("[data-files-viewer]");
+  // Source keeps the text of the fence; Preview draws it. Icons are SVGs too, so only the diagram's own role counts.
+  await expect(viewer).toContainText("A[Browser] --> B[Host]");
+  await viewer.getByRole("radio", { name: "Preview", exact: true }).click();
+  const diagram = viewer.locator('.mermaid-viewport svg[role="img"]');
+  await expect(diagram).toHaveCount(1);
+  await expect(diagram).toBeVisible();
+  expect(await diagram.textContent()).toContain("Browser");
+  await expect(viewer.locator(".mermaid-error")).toContainText("Diagram unavailable");
+  await expect(viewer).toContainText("after the diagrams");
+  // The invalid fence did not take the page down: the tree still answers.
+  await treeOf(page).locator('[data-folder="docs"]').click();
+  await expect(treeOf(page).locator('[data-file="docs/arch.md"]')).toHaveCount(0);
+  await viewer.getByRole("radio", { name: "Source", exact: true }).click();
+  await expect(viewer).toContainText("A[Browser] --> B[Host]");
+});
+
+test("an html and an svg file are shown as text, never rendered", async ({ page, raw }) => {
+  workspaceFile(raw.root, "page.html", "<h1>Hello</h1><script>window.__ran = true</script>\n");
+  workspaceFile(raw.root, "logo.svg", '<svg xmlns="http://www.w3.org/2000/svg" role="img" onload="window.__ran = true"><circle r="4"/></svg>\n');
+  await openFiles(page, raw);
+  const viewer = page.locator("[data-files-viewer]");
+  for (const [name, text] of [["page.html", "<h1>Hello</h1>"], ["logo.svg", "<circle r=\"4\"/>"]] as const) {
+    await treeOf(page).locator(`[data-file="${name}"]`).click();
+    await expect(viewer.locator(".code-block code")).toContainText(text);
+    await expect(viewer.locator("iframe, img, object, embed")).toHaveCount(0);
+    await expect(viewer.locator('svg[role="img"]')).toHaveCount(0);
+    await expect(viewer.getByRole("radio", { name: "Preview" })).toHaveCount(0);
+  }
+  expect(await page.evaluate(() => (window as unknown as { __ran?: boolean }).__ran)).toBeUndefined();
+});

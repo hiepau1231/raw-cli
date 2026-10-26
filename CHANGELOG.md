@@ -8,10 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 - The dashboard has a **Files** tab beside Chat, Agents and Library: a read-only
   tree of the selected workspace (the same git-aware view the agent's `@`
-  references use) with a filter, and a viewer for code, Markdown (Source and
-  Preview) and raster images. It never writes, a path that leaves the workspace
-  stays unreachable, and the open file lives in the address so a reload keeps
-  the place.
+  references use) in the second column, with a filter and per-folder counts,
+  and a viewer that fills the main area for code (with line numbers), Markdown
+  (Source and Preview, with Mermaid diagrams) and raster images. HTML and SVG
+  files are shown as text, never rendered. It never writes, a path that leaves
+  the workspace stays unreachable, and the open file lives in the address so a
+  reload keeps the place. On narrow windows the tree is in the menu drawer.
 - Files reads and browser caches now follow the selected workspace. Reload
   immediately refreshes both the listing and open text or image, Retry
   rereads failed files, and direct reads refuse `.git` / `node_modules`
