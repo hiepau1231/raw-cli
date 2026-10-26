@@ -161,8 +161,9 @@ export async function withStateLock(cwd, action, env = process.env) {
   // configured busy timeout and releases the lock automatically when a process crashes; there
   // is no stale lock file to unlink (and therefore no stat/unlink race to lose). The in-process
   // queue keeps a synchronous SQLite waiter from blocking the action that holds the lock.
-  const db = (() => { try { return new DatabaseSync(path); } catch (error) { release(); if (queues.get(path) === tail) queues.delete(path); throw error; } })();
+  let db;
   try {
+    db = new DatabaseSync(path);
     db.exec(`PRAGMA busy_timeout = ${LOCK_WAIT_MS}`);
     try {
       db.exec("BEGIN IMMEDIATE");
@@ -185,9 +186,11 @@ export async function withStateLock(cwd, action, env = process.env) {
       throw error;
     }
   } finally {
-    db.close();
-    release();
-    if (queues.get(path) === tail) queues.delete(path);
+    try { db?.close(); }
+    finally {
+      release();
+      if (queues.get(path) === tail) queues.delete(path);
+    }
   }
 }
 
