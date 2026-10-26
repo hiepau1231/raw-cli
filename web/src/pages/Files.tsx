@@ -6,7 +6,7 @@ import { MAX_TEXT_BYTES } from "../../../src/dashboard/limits.js";
 import { api, blobDataUrl, errorText, fetchBlob } from "../api.js";
 import { keys } from "../data/keys.js";
 import type { FilesState } from "../files/use-files-state.js";
-import { fileKind, type TreeFolder } from "../files/tree.js";
+import { countFiles, fileKind, type TreeFolder } from "../files/tree.js";
 import { CodeBlock, Markdown } from "../markdown.js";
 import { usePageGate } from "../states.js";
 import { CopyButton, Empty, ErrorMessage } from "../ui.js";
@@ -35,6 +35,7 @@ function FolderRows({ node, open, toggle, selected, onOpen }: {
               <ChevronRight size={14} aria-hidden="true" className="files-tree-chevron" />
               <Glyph size={14} aria-hidden="true" />
               <span className="files-tree-name">{folder.name}</span>
+              <span className="files-tree-count">{countFiles(folder)}</span>
             </button>
             {expanded && <FolderRows node={folder} open={open} toggle={toggle} selected={selected} onOpen={onOpen} />}
           </li>
@@ -52,6 +53,7 @@ function FolderRows({ node, open, toggle, selected, onOpen }: {
               aria-current={file.path === selected ? "true" : undefined}
               onClick={() => onOpen(file.path)}
             >
+              <span className="files-tree-gap" aria-hidden="true" />
               <Glyph size={14} aria-hidden="true" />
               <span className="files-tree-name">{file.name}</span>
             </button>
@@ -189,11 +191,12 @@ export function FilesNav({ files, selected, onOpen, onChosen }: { files: FilesSt
   const choose = (path: string) => { onOpen(path); onChosen(); };
   return (
     <nav aria-label="Files" className="context-nav">
-      <div className="group-label">Files</div>
-      <button type="button" className="foot-button" onClick={() => void reload()} title="Read the listing and the open file again">
-        <RotateCw size={14} aria-hidden="true" />
-        Reload
-      </button>
+      <div className="files-nav-head">
+        <span className="group-label">Files · {data.total}</span>
+        <button type="button" className="files-reload" aria-label="Reload" onClick={() => void reload()} title="Read the listing and the open file again">
+          <RotateCw size={14} aria-hidden="true" />
+        </button>
+      </div>
       <label className="search-input files-filter">
         <Search size={14} aria-hidden="true" />
         <input aria-label="Filter files" placeholder="Filter by path…" value={query} onChange={(event) => setQuery(event.target.value)} />

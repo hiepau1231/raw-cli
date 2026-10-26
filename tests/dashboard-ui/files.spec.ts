@@ -429,3 +429,83 @@ test("the menu drawer shows the same tree state as the column", async ({ page, r
   await expect(dialog.locator('button[data-file="docs/readme.md"]')).toBeVisible();
   await expect(dialog.locator('button[data-file="src/app.ts"]')).toHaveCount(0);
 });
+
+test("tree rows line up like the other second-column lists: one left edge, indent per level, a raised selection", async ({ page, raw }) => {
+  const long = `${"very-long-file-name-".repeat(6)}end.ts`;
+  expect(long.length).toBeGreaterThan(120);
+  workspaceFile(raw.root, "alpha.ts");
+  workspaceFile(raw.root, "beta.ts");
+  workspaceFile(raw.root, "src/one.ts");
+  workspaceFile(raw.root, "src/two.ts");
+  workspaceFile(raw.root, `src/${long}`);
+  workspaceFile(raw.root, "l1/l2/l3/l4/l5/l6/bottom.ts");
+  workspaceFile(raw.root, "my docs/notes #1 100%.md");
+  workspaceFile(raw.root, "tài-liệu/đọc-tôi.md");
+  await openFiles(page, raw);
+  const tree = treeOf(page);
+  await expect(tree.locator("[data-folder]").first()).toBeVisible();
+  const column = page.locator(".context-panel");
+  const widthBefore = (await column.boundingBox())!.width;
+
+  const left = async (selector: string) => tree.locator(selector).locator(".files-tree-name").evaluate((el) => el.getBoundingClientRect().left);
+  // Siblings share one left edge: names are not centred or pushed by their icons' differences.
+  expect(await left('[data-file="alpha.ts"]')).toBeCloseTo(await left('[data-file="beta.ts"]'), 0);
+
+  await tree.locator('[data-folder="src"]').click();
+  await expect(tree.locator('[data-file="src/one.ts"]')).toBeVisible();
+  const top = await left('[data-folder="src"]');
+  const child = await left('[data-file="src/one.ts"]');
+  expect(child - top, "a child is indented under its folder").toBeGreaterThanOrEqual(10);
+  expect(await left('[data-file="src/one.ts"]')).toBeCloseTo(await left('[data-file="src/two.ts"]'), 0);
+
+  // Six levels deep: each level indents further and the deepest row still lies inside the column.
+  let previous = await left('[data-folder="l1"]');
+  let path = "l1";
+  for (const level of ["l2", "l3", "l4", "l5", "l6"]) {
+    await tree.locator(`[data-folder="${path}"]`).click();
+    path = `${path}/${level}`;
+    const x = await left(`[data-folder="${path}"]`);
+    expect(x, `${path} is indented past its parent`).toBeGreaterThan(previous);
+    previous = x;
+  }
+  await tree.locator(`[data-folder="${path}"]`).click();
+  await expect(tree.locator(`[data-file="${path}/bottom.ts"]`)).toBeVisible();
+  const box = await tree.locator(`[data-file="${path}/bottom.ts"]`).boundingBox();
+  const colBox = await column.boundingBox();
+  expect(box!.x + box!.width).toBeLessThanOrEqual(colBox!.x + colBox!.width + 1);
+
+  // A 120+ character name is cut with an ellipsis and a full-name title; it never widens the column or the tree.
+  const longRow = tree.locator(`[data-file="src/${long}"]`);
+  await expect(longRow).toHaveAttribute("title", `src/${long}`);
+  expect((await column.boundingBox())!.width).toBeCloseTo(widthBefore, 0);
+  expect(await tree.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  expect(await longRow.locator(".files-tree-name").evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+
+  // Names with spaces, #, % and diacritics are shown as written and open their file.
+  await tree.locator('[data-folder="my docs"]').click();
+  await expect(tree.locator('[data-file="my docs/notes #1 100%.md"] .files-tree-name')).toHaveText("notes #1 100%.md");
+  await tree.locator('[data-folder="tài-liệu"]').click();
+  await tree.locator('[data-file="tài-liệu/đọc-tôi.md"]').click();
+  await expect(page).toHaveURL(/path=t%C3%A0i-li%E1%BB%87u%2F%C4%91%E1%BB%8Dc-t%C3%B4i\.md|path=t.*i-li.*u\/.*c-t.*i\.md/);
+
+  // A folder shows how many files it holds, at the right edge of its row.
+  const count = tree.locator('[data-folder="src"] .files-tree-count');
+  await expect(count).toHaveText("3");
+  const row = await tree.locator('[data-folder="src"]').boundingBox();
+  const countBox = await count.boundingBox();
+  expect(row!.x + row!.width - (countBox!.x + countBox!.width)).toBeLessThanOrEqual(16);
+
+  // The chosen file is a raised card, distinct from a plain row, and carries aria-current.
+  const selected = tree.locator('[data-file="tài-liệu/đọc-tôi.md"]');
+  await expect(selected).toHaveAttribute("aria-current", "true");
+  const paint = (locator: Locator) => locator.evaluate((el) => { const s = getComputedStyle(el); return { bg: s.backgroundColor, shadow: s.boxShadow }; });
+  const picked = await paint(selected);
+  const plain = await paint(tree.locator('[data-file="alpha.ts"]'));
+  expect(picked.bg).not.toBe(plain.bg);
+  expect(picked.shadow).not.toBe("none");
+  expect(plain.shadow).toBe("none");
+
+  // The chevron turns when a folder is open.
+  const turn = (name: string) => tree.locator(`[data-folder="${name}"] .files-tree-chevron`).evaluate((el) => getComputedStyle(el).transform);
+  expect(await turn("src")).not.toBe("none");
+});
