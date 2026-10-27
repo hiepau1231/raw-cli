@@ -12,6 +12,9 @@ const ROOT = "examples/packages/goal-kit";
 interface StateApi {
   STATE_VERSION: number;
   MAX_STATE_BYTES: number;
+  MAX_CONTENT_BYTES: number;
+  MAX_SEEN_SESSIONS: number;
+  validateState(value: unknown): unknown;
   stateDir(env?: NodeJS.ProcessEnv): string;
   statePath(cwd: string, env?: NodeJS.ProcessEnv): string;
   stateLockPath(cwd: string, env?: NodeJS.ProcessEnv): string;
@@ -371,6 +374,43 @@ test("a goal just under the content limit can still be paused", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("the reserved headroom, not only the 64 KiB file limit, bounds the goal content", async () => {
+  const api = await stateApi();
+  const emoji = "😀";
+  const withEvidence = (scalars: number) => ({
+    ...stateFixture(),
+    criteria: Array.from({ length: 50 }, (_, index) => ({
+      id: `c${index + 1}`, label: emoji.repeat(200), required: true, status: "pending", evidence: emoji.repeat(scalars),
+    })),
+  });
+  const contentBytes = (value: Record<string, unknown>) => {
+    const { schemaVersion, goalId, objective, doneWhen, criteria, steps, budget } = value;
+    return Buffer.byteLength(JSON.stringify({ schemaVersion, goalId, objective, doneWhen, criteria, steps, budget }), "utf8");
+  };
+  // Content between the reserve line and the file limit: only the reservation can reject it.
+  const inBand = withEvidence(100);
+  const bandBytes = contentBytes(inBand);
+  assert.ok(bandBytes > api.MAX_CONTENT_BYTES && bandBytes < api.MAX_STATE_BYTES - 1024, `band fixture is ${bandBytes} bytes`);
+  assert.ok(Buffer.byteLength(JSON.stringify(inBand), "utf8") <= api.MAX_STATE_BYTES);
+  assert.throws(() => api.validateState(inBand), (error: { code?: string; message?: string }) =>
+    error.code === "state_too_large" && /goal content/.test(error.message ?? ""));
+  // Just under the reserve line, a goal still takes every lifecycle field at its maximum.
+  const underBytes = contentBytes(withEvidence(67));
+  assert.ok(underBytes <= api.MAX_CONTENT_BYTES && underBytes > api.MAX_CONTENT_BYTES - 4096, `under fixture is ${underBytes} bytes`);
+  const lifecycle = {
+    ...withEvidence(67), status: "blocked", reason: "r".repeat(300), nextAction: "n".repeat(300), ownerSessionId: "o".repeat(128),
+    usageBaseline: { requests: 9e15, inputTokensKnown: 9e15, outputTokensKnown: 9e15, inputCoverage: 9e15, outputCoverage: 9e15 },
+    usageCarried: { requests: 9e15, inputTokensKnown: 9e15, outputTokensKnown: 9e15, inputCoverage: 9e15, outputCoverage: 9e15 },
+    baselinePending: true, continuations: 9e15, createdAt: 9e15, updatedAt: 9e15,
+    usageSeen: Object.fromEntries(Array.from({ length: api.MAX_SEEN_SESSIONS }, (_, index) => [
+      `${index}`.padEnd(128, "s"),
+      { requests: 9e15, inputTokensKnown: 9e15, outputTokensKnown: 9e15, inputCoverage: 9e15, outputCoverage: 9e15 },
+    ])),
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify(lifecycle), "utf8") <= api.MAX_STATE_BYTES);
+  assert.doesNotThrow(() => api.validateState(lifecycle));
 });
 
 test("goal tool enforces criteria, ids and terminal transitions", async () => {

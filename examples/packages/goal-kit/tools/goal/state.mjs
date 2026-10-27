@@ -19,6 +19,8 @@ export const LIFECYCLE_HEADROOM_BYTES = 8192;
 export const MAX_CONTENT_BYTES = MAX_STATE_BYTES - LIFECYCLE_HEADROOM_BYTES;
 export const STATE_DIR_ENV = "RAW_GOAL_STATE_DIR";
 export const LOCK_WAIT_MS = 2000;
+/** How many earlier owners keep their usage watermark, so a session that returns is not charged twice. */
+export const MAX_SEEN_SESSIONS = 16;
 
 const STATUSES = new Set(["active", "paused", "blocked", "complete", "abandoned"]);
 const ITEM_STATUSES = new Set(["pending", "in_progress", "done", "blocked", "skipped"]);
@@ -135,6 +137,19 @@ export function validateState(value) {
     if (!isObject(value.usageCarried)) fail("state_corrupt", "usageCarried must be an object");
     for (const name of ["requests", "inputTokensKnown", "outputTokensKnown", "inputCoverage", "outputCoverage"]) {
       nonNegativeInteger(value.usageCarried[name], `usageCarried.${name}`);
+    }
+  }
+  if (value.usageSeen !== undefined) {
+    if (!isObject(value.usageSeen)) fail("state_corrupt", "usageSeen must be an object");
+    const sessions = Object.keys(value.usageSeen);
+    if (sessions.length > MAX_SEEN_SESSIONS) fail("state_corrupt", `usageSeen must hold at most ${MAX_SEEN_SESSIONS} sessions`);
+    for (const session of sessions) {
+      text(session, "usageSeen session id", 128);
+      const seen = value.usageSeen[session];
+      if (!isObject(seen)) fail("state_corrupt", "usageSeen entry must be an object");
+      for (const name of ["requests", "inputTokensKnown", "outputTokensKnown", "inputCoverage", "outputCoverage"]) {
+        nonNegativeInteger(seen[name], `usageSeen.${name}`);
+      }
     }
   }
   if (typeof value.baselinePending !== "boolean") fail("state_corrupt", "baselinePending must be boolean");

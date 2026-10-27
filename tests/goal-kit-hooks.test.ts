@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { runHook } from "../src/hooks/runner.js";
+import { skillInstruction } from "../web/src/composer/commands.js";
 import type { HookExecution, HookRequest, SelectedHook } from "../src/hooks/contract.js";
 
 const ROOT = "examples/packages/goal-kit";
@@ -13,6 +14,7 @@ interface StateApi {
   statePath(cwd: string, env?: NodeJS.ProcessEnv): string;
   readState(cwd: string, env?: NodeJS.ProcessEnv): Promise<Record<string, unknown> | undefined>;
   updateState(cwd: string, mutate: (state: Record<string, unknown> | undefined) => Record<string, unknown>, env?: NodeJS.ProcessEnv): Promise<unknown>;
+  deleteState(cwd: string, env?: NodeJS.ProcessEnv): Promise<void>;
 }
 
 async function stateApi(): Promise<StateApi> {
@@ -118,6 +120,34 @@ test("Stop continues an active goal and claims the session", async () => {
   }
 });
 
+test("the first Stop counts what the session already spent against an explicit budget", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    const cases = [
+      { budget: { maxRequests: 1, maxContinuations: 20 }, reason: "request_budget_exhausted" },
+      { budget: { tokenBudget: 10, maxContinuations: 20 }, reason: "token_budget_exhausted" },
+    ];
+    for (const { budget, reason } of cases) {
+      await api.updateState(root, () => stateFixture({ budget }), env);
+      const result = await invoke(stopRequest(root, "s1", { usage: usage({
+        requests: 5, inputTokensKnown: 50, outputTokensKnown: 25, inputCoverage: 5, outputCoverage: 5,
+      }) }), env);
+      assert.notEqual(result.decision, "deny", reason);
+      const state = await api.readState(root, env) as Record<string, unknown>;
+      assert.equal(state.status, "paused", reason);
+      assert.equal(state.reason, reason);
+      assert.equal((state.usageCarried as Record<string, unknown>).requests, 5, reason);
+      await api.deleteState(root, env);
+    }
+    // Within budget the same first Stop still continues.
+    await api.updateState(root, () => stateFixture({ budget: { maxRequests: 10, tokenBudget: 1000, maxContinuations: 20 } }), env);
+    assert.equal((await invoke(stopRequest(root, "s1", { usage: usage({ requests: 5, inputCoverage: 5, outputCoverage: 5 }) }), env)).decision, "deny");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Stop pauses at the continuation cap and lets closed goals end", async () => {
   const api = await stateApi();
   const { root, env } = tempEnv();
@@ -215,12 +245,58 @@ test("ownership takeover rebases session-relative usage without resetting spendi
     assert.equal(state.baselinePending, true);
     assert.equal(state.usageBaseline, undefined);
     await api.updateState(root, (current) => ({ ...current, status: "active" }), env);
+    // The new session counts from its own start: its first final answer already spent one request.
     assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 1 }) }), env)).decision, "deny");
-    assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 2 }) }), env)).decision, "deny");
-    assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 3 }) }), env)).decision, "continue");
+    assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 2 }) }), env)).decision, "continue");
     state = await api.readState(root, env) as Record<string, unknown>;
     assert.equal(state.status, "paused");
     assert.equal(state.reason, "request_budget_exhausted");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a session that takes the goal back is not charged for what it already spent", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture({ budget: { maxRequests: 12, maxContinuations: 20 } }), env);
+    const resume = async (session: string) => {
+      await invoke(eventRequest(root, "SessionStart", session, "resume"), env);
+      await api.updateState(root, (current) => ({ ...current, status: "active" }), env);
+    };
+    const carried = async () => ((await api.readState(root, env))?.usageCarried as Record<string, number>).requests;
+    assert.equal((await invoke(stopRequest(root, "s1", { usage: usage({ requests: 6 }) }), env)).decision, "deny");
+    await resume("s2");
+    assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 2 }) }), env)).decision, "deny");
+    assert.equal(await carried(), 8);
+    // s1 returns: its session counter kept growing from 6, so only the new request counts.
+    await resume("s1");
+    assert.equal((await invoke(stopRequest(root, "s1", { usage: usage({ requests: 7 }) }), env)).decision, "deny");
+    assert.equal(await carried(), 9);
+    await resume("s2");
+    assert.equal((await invoke(stopRequest(root, "s2", { usage: usage({ requests: 4 }) }), env)).decision, "deny");
+    // s2 had reported 2 before; its counter is now 4, so two more requests count.
+    assert.equal(await carried(), 11);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("only the most recent owners keep a usage watermark", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    await api.updateState(root, () => stateFixture({ budget: { maxContinuations: 100 } }), env);
+    for (let index = 1; index <= 20; index++) {
+      await invoke(eventRequest(root, "SessionStart", `s${index}`, "resume"), env);
+      await api.updateState(root, (current) => ({ ...current, status: "active" }), env);
+      await invoke(stopRequest(root, `s${index}`, { usage: usage({ requests: 1 }) }), env);
+    }
+    const state = await api.readState(root, env) as Record<string, unknown>;
+    const seen = Object.keys(state.usageSeen as Record<string, unknown>);
+    assert.equal(seen.length, 16);
+    assert.ok(!seen.includes("s20") && seen.includes("s19") && !seen.includes("s3") && seen.includes("s4"), seen.join(","));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -326,6 +402,29 @@ test("a /goal command does not pause the active goal", async () => {
     const state = await api.readState(root, env) as Record<string, unknown>;
     assert.equal(state.status, "active");
     assert.equal(state.reason, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the prompt the composer inserts for the goal skill does not pause the goal, near misses do", async () => {
+  const api = await stateApi();
+  const { root, env } = tempEnv();
+  try {
+    const composer = skillInstruction("goal");
+    const exempt: Array<string | Array<{ type: string; text: string }>> = [
+      `${composer}status`, composer, `  ${composer}\nstatus`, [{ type: "text", text: `${composer}status` }],
+    ];
+    const ordinary = [`${skillInstruction("goals")}status`, "/goals status", "please use the skill \"goal\" for this task. status", "next"];
+    for (const [inputs, paused] of [[exempt, false], [ordinary, true]] as const) {
+      for (const input of inputs) {
+        await api.updateState(root, () => stateFixture(), env);
+        const result = await runHook(selectedHook(), { protocol_version: 2, event: "UserPromptSubmit", cwd: root, session_id: "s1", input } as HookRequest, { env, timeoutMs: 5000 });
+        assert.equal(result.decision, "continue");
+        const state = await api.readState(root, env) as Record<string, unknown>;
+        assert.equal(state.status, paused ? "paused" : "active", JSON.stringify(input));
+      }
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

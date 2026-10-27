@@ -10,9 +10,12 @@
  * state file ends the run (or lets the prompt through) instead of trapping it.
  */
 
-import { readState, updateState } from "./state.mjs";
+import { MAX_SEEN_SESSIONS, readState, updateState } from "./state.mjs";
 
 const MAX_REASON_BYTES = 8 * 1024;
+// `/goal ...` typed literally, or the prompt the dashboard composer inserts when the goal skill is
+// chosen (`skillInstruction` in web/src/composer/commands.ts). Neither is an ordinary user message.
+const GOAL_COMMAND = /^(?:\/goal|Use the skill "goal" for this task\.)(?:\s|$)/;
 const DEFAULT_REASON = "Continue toward the goal.";
 
 function output(value) {
@@ -74,9 +77,13 @@ function budgetReason(state, usage) {
   return undefined;
 }
 
-/** Record everything observed so far, then make the current session counters the new delta base. */
+/**
+ * Record everything observed so far, then make the current session counters the new delta base.
+ * A pending baseline is zero: the tool cannot see usage when it creates the goal, so the first
+ * Stop counts the whole owning session rather than silently dropping what was already spent.
+ */
 function recordUsage(state, usage) {
-  if (!state.usageBaseline || state.baselinePending) state.usageBaseline = { ...usage };
+  if (!state.usageBaseline || state.baselinePending) state.usageBaseline = zeroUsage();
   state.usageCarried = totalUsage(state, usage);
   state.usageBaseline = { ...usage };
   state.baselinePending = false;
@@ -111,6 +118,29 @@ function inputText(request) {
   if (typeof request.input === "string") return request.input;
   if (!Array.isArray(request.input)) return "";
   return request.input.map((block) => block && typeof block === "object" && typeof block.text === "string" ? block.text : "").join("\n");
+}
+
+/**
+ * Hand the goal to another session. The usage of a session is cumulative, so each owner keeps the
+ * watermark it last reported: a session that has never counted toward this goal starts at zero, and
+ * one that returns continues from where it stopped instead of being charged twice.
+ */
+function handOver(state, session) {
+  const seen = { ...state.usageSeen };
+  const previous = state.ownerSessionId;
+  if (previous && state.usageBaseline && !state.baselinePending) {
+    delete seen[previous];
+    seen[previous] = state.usageBaseline;
+  }
+  const known = seen[session];
+  delete seen[session];
+  const extra = Object.keys(seen).length - MAX_SEEN_SESSIONS;
+  for (const key of Object.keys(seen).slice(0, Math.max(0, extra))) delete seen[key];
+  if (Object.keys(seen).length) state.usageSeen = seen;
+  else delete state.usageSeen;
+  state.ownerSessionId = session;
+  state.usageBaseline = known;
+  state.baselinePending = !known;
 }
 
 async function pause(cwd, session, reason, nextAction, usage) {
@@ -166,7 +196,7 @@ async function stop(request) {
       if (session && current.ownerSessionId && current.ownerSessionId !== session) return current;
       if (session && !current.ownerSessionId) current.ownerSessionId = session;
       if (!current.usageBaseline || current.baselinePending) {
-        current.usageBaseline = { ...usage };
+        current.usageBaseline = zeroUsage();
         current.baselinePending = false;
       }
       const budget = budgetReason(current, usage);
@@ -210,11 +240,9 @@ async function sessionStart(request) {
       if (!state || (state.status !== "active" && state.status !== "paused" && state.status !== "blocked")) return state;
       const changedOwner = !!session && state.ownerSessionId !== session;
       if (changedOwner) {
-        // A new runtime attach owns the workspace goal from here. Rebase session-relative
-        // usage on the next Stop; usageCarried keeps the spending already recorded.
-        state.ownerSessionId = session;
-        state.usageBaseline = undefined;
-        state.baselinePending = true;
+        // A new runtime attach owns the workspace goal from here. usageCarried keeps the
+        // spending already recorded; the new owner counts from its own watermark.
+        handOver(state, session);
       }
       if (state.status === "active") {
         state.status = "paused";
@@ -235,9 +263,9 @@ async function sessionStart(request) {
 async function userPrompt(request) {
   const cwd = request.cwd;
   const session = sessionOf(request);
-  // /goal is a package skill prompt, not an ordinary user message. Let the model see it
+  // A goal command is a package skill prompt, not an ordinary user message. Let the model see it
   // without first pausing the goal it is asking about.
-  if (/^\/goal(?:\s|$)/.test(inputText(request).trim())) {
+  if (GOAL_COMMAND.test(inputText(request).trim())) {
     output({ decision: "continue" });
     return;
   }
